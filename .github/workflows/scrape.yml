@@ -1,0 +1,66 @@
+name: scrape
+
+# The scheduled trigger only ticks. What actually runs, how often, and for which
+# source is decided by the `schedules` table, so a frequency change is an UPDATE
+# rather than a commit to this file.
+#
+# The cron trigger is intentionally commented out until the pipeline works
+# end to end. A schedule that fails every few minutes produces noise, and against
+# a live site it also risks a rate limit for no benefit. Until then, use
+# workflow_dispatch.
+#
+#   gh workflow run scrape.yml -f command=tick
+#   gh workflow run scrape.yml -f command=hot -f source=openrent
+#
+# Note: both `schedule` and `workflow_dispatch` only take effect from the
+# repository's default branch.
+
+on:
+  # schedule:
+  #   - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      command:
+        description: "tick runs what is due; hot/sweep/drain run immediately"
+        type: choice
+        options: [tick, hot, sweep, drain, schedules]
+        default: tick
+      source:
+        description: "limit to one source key (optional)"
+        required: false
+        default: ""
+      dry_run:
+        description: "no writes outside the run log"
+        type: boolean
+        default: false
+
+concurrency:
+  group: scrape
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync --frozen --no-dev
+
+      - name: Run worker
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_OPS_CHAT: ${{ secrets.TELEGRAM_OPS_CHAT }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ARGS="${{ inputs.command || 'tick' }}"
+          if [ -n "${{ inputs.source }}" ]; then ARGS="$ARGS --source ${{ inputs.source }}"; fi
+          if [ "${{ inputs.dry_run }}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          if [ "${{ github.event_name }}" = "schedule" ]; then ARGS="$ARGS --trigger schedule"; fi
+          uv run python -m worker $ARGS

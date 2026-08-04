@@ -9,64 +9,70 @@ Full design: `london-rent-alerts-spec.md`.
 
 ## Status
 
-Early scaffold. Implemented so far:
-
 | Component | State |
 |---|---|
-| Reachability probe (`scripts/probe.py`, `.github/workflows/probe.yml`) | ready to run |
-| Database schema (`db/migrations/0001_init.sql`) | ready to apply |
+| Reachability probe (`scripts/probe.py`) | ready — **not yet run** |
+| Database schema (`db/migrations/0001_init.sql`) | ready — **not yet applied** |
 | Stage contracts (`worker/contracts/`) | complete |
-| Fetch client, extraction engine, pipeline, notifiers, web app | not started |
-
-## First step: run the probe
-
-The probe answers the question that gates everything else — whether the target
-site responds to the machine the worker will run on, and which client profile it
-accepts. Run it before writing any pipeline code.
-
-On a GitHub Actions runner (the intended POC host):
-
-```
-Actions → probe → Run workflow
-```
-
-Locally, for comparison:
-
-```bash
-pip install curl-cffi requests
-python scripts/probe.py
-```
-
-Read the `detail` row first: that is the page the extractor parses. A local 200
-paired with a runner 403 means the runner IP is the problem rather than the
-client, which changes where the worker should be hosted — see the execution
-portability section of the spec.
+| Run logging, scheduling, CLI (`worker/obs`, `worker/db`, `worker/__main__`) | complete |
+| District scope + postcode parsing (`worker/normalize/geo.py`) | complete, tested |
+| Location seed (`scripts/seed_locations.py`) | complete |
+| Pipeline stages | placeholders — each is filled by one plan step |
+| Fetch client, extraction, notifiers, web app | not started |
 
 ## Setup
 
 Requires Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync                                   # install dependencies
-cp .env.example .env                      # then fill in the values
+uv sync                                    # install dependencies
+cp .env.example .env                       # then fill in DATABASE_URL
 psql "$DATABASE_URL" -f db/migrations/0001_init.sql
+python scripts/seed_locations.py --enable SE16,SE8,E14
 ```
 
 The repository is public. Secrets belong in `.env` locally and in GitHub Secrets
 in CI; never in code, and never in a log line.
 
-## Operating the worker
+## Running the worker
 
-Scheduling lives in the database, not in cron. The cron trigger only ticks; the
-`schedules` table decides what is due, per job and per source. Changing a
-frequency is an update, with no commit and no deploy:
+There are three ways to trigger a job, and they exist for different purposes.
+
+**Locally, during development.** Fastest loop, and `--dry-run` writes nothing
+beyond the run log:
+
+```bash
+python -m worker hot --source openrent --dry-run
+python -m worker schedules              # show what is due and when
+```
+
+**On a runner, manually.** This is what verifies the real network path and
+environment, which a local run cannot:
+
+```bash
+gh workflow run scrape.yml -f command=hot -f source=openrent
+gh run watch
+```
+
+**On a schedule.** The cron trigger in `.github/workflows/scrape.yml` is
+commented out on purpose until the pipeline works end to end: a schedule that
+fails every few minutes produces noise, and against a live site it also risks a
+rate limit for nothing. Uncomment it when the manual run is green.
+
+Both `schedule` and `workflow_dispatch` only take effect from the repository's
+default branch, currently `develop`.
+
+### Frequency is data, not cron
+
+The cron trigger only ticks. The `schedules` table decides what is due, per job
+and per source, so a frequency change needs no commit and no deploy:
 
 ```sql
 UPDATE schedules SET interval_seconds = 300
  WHERE job = 'hot' AND source_key = 'openrent';
 ```
 
-Request pacing within a run is separate, and also per source:
+Request pacing within a single run is a separate knob, also per source:
 
 ```sql
 UPDATE sources
@@ -74,11 +80,47 @@ UPDATE sources
  WHERE key = 'openrent';
 ```
 
+### Coverage scope is data too
+
+`locations` holds all zone 1–3 districts as reference data. Which of them a
+source actually watches is `source_locations.enabled`. The seed enables three
+and leaves the rest in place but disabled.
+
+Widen coverage without a deploy:
+
+```sql
+UPDATE source_locations SET enabled = true
+ WHERE source_key = 'openrent'
+   AND location_id IN (SELECT id FROM locations WHERE code IN ('E1', 'SE1', 'SE17'));
+```
+
+Check the current scope:
+
+```sql
+SELECT l.code, l.tfl_zone_min, l.tfl_zone_max, sl.enabled
+  FROM source_locations sl JOIN locations l ON l.id = sl.location_id
+ WHERE sl.source_key = 'openrent' AND sl.enabled
+ ORDER BY l.code;
+```
+
+The scope is applied before any listing is fetched: a listing URL carries its
+outward code, so out-of-scope listings are discarded during discovery rather
+than downloaded and filtered afterwards. Matching is anchored, so a scope of
+`E1` does not admit `E14` or `E17`. A URL whose slug carries no outward code is
+kept rather than dropped, so a slug format change costs extra fetches instead of
+silently losing listings — and the postcode on the page, not the URL, is treated
+as authoritative once extracted.
+
 ## Layout
 
 ```
 scripts/probe.py            reachability probe
+scripts/seed_locations.py   districts and coverage scope
 db/migrations/              schema
 worker/contracts/           data passed between stages; imports nothing else
-.github/workflows/          probe (scrape and keepalive to follow)
+worker/obs/                 run, stage, and event logging
+worker/normalize/           units, dates, postcodes
+worker/pipeline/            stage orchestration
+worker/__main__.py          CLI entry point
+.github/workflows/          probe, scrape
 ```
