@@ -16,6 +16,7 @@ Full design: `london-rent-alerts-spec.md`.
 | Stage contracts (`worker/contracts/`) | complete |
 | Run logging, scheduling, CLI (`worker/obs`, `worker/db`, `worker/__main__`) | complete |
 | District scope + postcode parsing (`worker/normalize/geo.py`) | complete, tested |
+| robots.txt matching (`worker/fetch/robots.py`) | complete, tested |
 | Location seed (`scripts/seed_locations.py`) | complete |
 | Pipeline stages | placeholders — each is filled by one plan step |
 | Fetch client, extraction, notifiers, web app | not started |
@@ -37,6 +38,18 @@ in CI; never in code, and never in a log line.
 ## Running the worker
 
 There are three ways to trigger a job, and they exist for different purposes.
+
+**Check a source first.** The probe reports two independent things per site —
+whether the page is served to this machine, and whether robots.txt permits
+fetching it. A disallowed path is skipped rather than fetched.
+
+```bash
+python scripts/probe.py                       # openrent, rightmove, zoopla
+python scripts/probe.py --site openrent --save tests/fixtures
+```
+
+Reachability is not permission, and neither is terms of service: see the legal
+section of the spec before adopting a source.
 
 **Locally, during development.** Fastest loop, and `--dry-run` writes nothing
 beyond the run log:
@@ -120,6 +133,7 @@ db/migrations/              schema
 worker/contracts/           data passed between stages; imports nothing else
 worker/obs/                 run, stage, and event logging
 worker/normalize/           units, dates, postcodes
+worker/fetch/               robots.txt matching (RFC 9309)
 worker/pipeline/            stage orchestration
 worker/__main__.py          CLI entry point
 .github/workflows/          probe, scrape
