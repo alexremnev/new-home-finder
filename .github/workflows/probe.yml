@@ -1,0 +1,43 @@
+name: probe
+
+# Step -1 of the plan: find out whether the target site answers a GitHub
+# Actions runner IP, and which client profile it accepts. Runs on demand only.
+#
+# This gates everything else: a hard block here means the worker must run
+# somewhere other than GHA, and that decision is cheaper to make now than
+# after the pipeline is written.
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Optional single URL to probe (default: built-in OpenRent set)"
+        required: false
+        default: ""
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install probe dependencies
+        run: pip install --quiet "curl-cffi>=0.7" "requests>=2.32"
+
+      - name: Show runner egress IP
+        # Useful when comparing against a local run: tells us which IP was
+        # judged, so a later block can be attributed.
+        run: curl -s --max-time 10 https://api.ipify.org || echo "ip lookup failed"
+
+      - name: Probe
+        run: |
+          if [ -n "${{ inputs.url }}" ]; then
+            python scripts/probe.py --url "${{ inputs.url }}"
+          else
+            python scripts/probe.py
+          fi

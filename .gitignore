@@ -1,0 +1,33 @@
+# Secrets — the repository is public; nothing sensitive may be committed.
+.env
+.env.*
+!.env.example
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.vercel/
+
+# Local snapshots of fetched pages (debug artifacts, may be large)
+snapshots/
+
+# IDE
+.idea/
+.vscode/
+.DS_Store
