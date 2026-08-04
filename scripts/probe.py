@@ -46,6 +46,25 @@ CHROME_UA = (
 DEFAULT_DELAY = 1.5  # seconds between requests, unless robots asks for more
 
 
+def _accept_encoding(impersonate: str | None) -> str:
+    """Advertise only what this client can actually decode.
+
+    `requests` decodes brotli only when the optional package is installed;
+    advertising `br` without it yields an undecoded body, which then defeats
+    every content check downstream — a challenge page reads as binary noise.
+    """
+    if impersonate:
+        return "gzip, deflate, br"
+    try:
+        import brotli  # noqa: F401
+    except ImportError:
+        try:
+            import brotlicffi  # noqa: F401
+        except ImportError:
+            return "gzip, deflate"
+    return "gzip, deflate, br"
+
+
 @dataclass
 class Profile:
     name: str
@@ -163,7 +182,7 @@ def fetch(profile: Profile, url: str, timeout: int = 30):
         "User-Agent": profile.user_agent,
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-GB,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": _accept_encoding(profile.impersonate),
         "Upgrade-Insecure-Requests": "1",
     }
     try:
@@ -224,11 +243,17 @@ class Robots:
         self.rules = RobotsTxt()
         self.crawl_delay: float | None = None
         self.blanket_disallow = False
+        self.unreadable = False
 
     def load(self) -> str:
         status, body, _, err = fetch(PROFILES[0], self.url)
         if status != 200 or not body:
-            return f"unavailable (status={status}{', ' + err if err else ''})"
+            self.unreadable = True
+            return (
+                f"UNREADABLE (status={status}{', ' + err if err else ''}) — "
+                "the site will not serve its crawling policy to an honestly "
+                "identified client, so nothing here may be treated as permitted"
+            )
         self.rules = RobotsTxt.parse(body)
         self.crawl_delay = self.rules.crawl_delay(HONEST_UA)
         self.blanket_disallow = self.rules.disallows_everything(HONEST_UA)
@@ -261,6 +286,9 @@ def probe_site(site: Site, *, delay: float, save: str | None) -> list[Result]:
 
     robots = Robots(site.base)
     print(f"  robots.txt: {robots.load()}")
+    if robots.unreadable:
+        print("  stopping here for this site: refusing to probe further paths.")
+        return [Result(site.key, "robots", PROFILES[0].name, None, 0, "REFUSED(no robots)")]
 
     pace = max(delay, robots.crawl_delay or 0)
     if pace > delay:
@@ -444,7 +472,10 @@ def main() -> int:
     print(f"\n{'=' * 78}\nSUMMARY")
     for key in keys:
         detail = [r for r in all_results if r.site == key and r.target == "detail"]
-        if not detail:
+        refused = [r for r in all_results if r.site == key and r.verdict.startswith("REFUSED")]
+        if refused:
+            state = "site refuses an honestly identified client"
+        elif not detail:
             state = "no listing url found"
         elif detail[0].verdict == "SKIPPED(robots)":
             state = "robots-disallowed"
