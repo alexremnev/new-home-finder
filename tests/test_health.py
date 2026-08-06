@@ -59,11 +59,23 @@ def test_optional_field_may_be_absent() -> None:
     assert health.verdict == "ok"
 
 
-def test_a_few_blanks_stay_within_tolerance() -> None:
-    mixed = rows(19) + [{"external_id": "x", "price_pcm": None, "bedrooms": 1}]
-    assert evaluate(mixed, FIELDS, min_items=5).verdict == "broken"  # 95% floor
-    mixed = rows(39) + [{"external_id": "y", "price_pcm": None, "bedrooms": 1}]
-    assert evaluate(mixed, FIELDS, min_items=5).verdict == "ok"      # 97.5%
+def blanks(n: int) -> list[dict[str, object]]:
+    return [{"external_id": f"b{i}", "price_pcm": None, "bedrooms": 1} for i in range(n)]
+
+
+def test_fill_rate_boundary() -> None:
+    """The floor is inclusive: exactly 95% filled is acceptable.
+
+    Both sides matter. Too strict and a page with a couple of genuinely blank
+    fields is declared broken, which spends tokens rewriting a correct schema;
+    too lax and a real break goes unnoticed.
+    """
+    # 18/20 = 90%, below the floor.
+    assert evaluate(rows(18) + blanks(2), FIELDS, min_items=5).verdict == "broken"
+    # 19/20 = exactly 95%, at the floor and therefore acceptable.
+    assert evaluate(rows(19) + blanks(1), FIELDS, min_items=5).verdict == "ok"
+    # 39/40 = 97.5%, comfortably above.
+    assert evaluate(rows(39) + blanks(1), FIELDS, min_items=5).verdict == "ok"
 
 
 def test_weekly_price_read_as_monthly_is_caught() -> None:
