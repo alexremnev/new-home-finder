@@ -1,5 +1,10 @@
-# Secrets — the repository is public; nothing sensitive may be committed.
+# Secrets. These lines are load-bearing: without them `git add -A` commits the
+# real .env, and a password in git history is compromised even in a private repo.
+.env
+.env.*
+!.env.example
 *.pem
+*.key
 
 # Python
 __pycache__/

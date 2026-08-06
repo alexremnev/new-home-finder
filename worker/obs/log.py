@@ -119,8 +119,15 @@ class Run:
             """,
             (status, json.dumps(self.counters), error, self.id),
         )
-        self.event("info" if status in ("ok", "skipped_locked") else "error",
-                   f"run finished: {status}", **self.counters)
+        # A degraded run is a warning, not an error. Logging it as an error
+        # makes every scaffold run shout, and an alert that fires on every run
+        # is one nobody reads.
+        level: Level = (
+            "info" if status in ("ok", "skipped_locked")
+            else "warn" if status == "degraded"
+            else "error"
+        )
+        self.event(level, f"run finished: {status}", **self.counters)
 
 
 class Stage:
