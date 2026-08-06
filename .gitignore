@@ -1,7 +1,4 @@
 # Secrets — the repository is public; nothing sensitive may be committed.
-.env
-.env.*
-!.env.example
 *.pem
 
 # Python

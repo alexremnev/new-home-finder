@@ -4,19 +4,21 @@
 </head>
 <body class="font-feature-settings antialiased">
 <input id="unsupported-browser-notice-close" type="checkbox" class="global-alert-checkbox">
-<div class="global-alert alert alert-warning alert-dismissible fade show" id="unsupported-browser-notice" role="alert">[text removed]<a>update your browser</a>!<button class="btn-close" data-bs-dismiss="alert" type="button">
+<div class="global-alert alert alert-warning alert-dismissible fade show" id="unsupported-browser-notice" role="alert">[text removed]<a>update your browser</a>!<button aria-label="Close" class="btn-close" data-bs-dismiss="alert" type="button">
 </button>
 </div>
 <input id="no-cookies-notice-close" type="checkbox" class="global-alert-checkbox">
-<div class="global-alert alert alert-warning alert-dismissible fade show" id="no-cookies-notice" role="alert">[text removed]<b>You won't be able to login to OpenRent without cookies enabled.</b>We work tirelessly to ensure our use of cookies is small and unobtrusive. Please add us to your whitelist, or<a>enable cookies in your browser</a>!<button class="btn-close" data-bs-dismiss="alert" type="button">
+<div class="global-alert alert alert-warning alert-dismissible fade show" id="no-cookies-notice" role="alert">[text removed]<b>You won't be able to login to OpenRent without cookies enabled.</b>We work tirelessly to ensure our use of cookies is small and unobtrusive. Please add us to your whitelist, or<a>enable cookies in your browser</a>!<button aria-label="Close" class="btn-close" data-bs-dismiss="alert" type="button">
 </button>
 </div>
-<div class="global-alert alert alert-warning alert-dismissible fade show" id="js-failed-to-load" role="alert">We noticed a script on this page failed to load. We recommend<a>reloading the page</a>to ensure everything is working correctly.<button class="btn-close" data-bs-dismiss="alert" type="button">
+<div class="global-alert alert alert-warning alert-dismissible fade show" id="js-failed-to-load" role="alert">We noticed a script on this page failed to load. We recommend<a>reloading the page</a>to ensure everything is working correctly.<button aria-label="Close" class="btn-close" data-bs-dismiss="alert" type="button">
 </button>
 </div>
 <div class="page-loader" id="page-loader">
 <div class="page-loader-inner">
 <div class="loader-svg-logo">
+<svg id="OR64b158ca036c47fca7f6187aed662897" class="openrent-icon svg-icon">
+</svg>
 </div>
 <span class="page-loader-label">Loading...</span>
 </div>
@@ -28,6 +30,9 @@
 <div class="content-wrapper">
 <a class="header-logo">
 <div class="logo-container">
+<svg id="ORf31fe657503c43798f7945f613586720" class="openrent-logo svg-logo logo-blue" role="presentation">
+<title>OpenRent</title>
+</svg>
 </div>
 </a>
 <ul class="large-nav-list">
@@ -35,7 +40,9 @@
 <a>
 <div class="d-flex gap-1 align-items-start">
 <div>About</div>
-<span class="icon-line flex-shrink-0">
+<span aria-hidden="true" class="icon-line flex-shrink-0">
+<svg class="or-icon size-em">
+</svg>
 </span>
 </div>
 </a>
@@ -57,7 +64,9 @@
 <a>
 <div class="d-flex gap-1 align-items-start">
 <div>Pricing & Services</div>
-<span class="icon-line flex-shrink-0">
+<span aria-hidden="true" class="icon-line flex-shrink-0">
+<svg class="or-icon size-em">
+</svg>
 </span>
 </div>
 </a>
@@ -129,7 +138,9 @@
 </div>
 </div>
 <hr/>
-<span class="tenant-price-note">Tenants Don't Pay Admin Fees</span>
+<span class="tenant-price-note">
+<svg class="icon or-icon size-5">
+</svg>Tenants Don't Pay Admin Fees</span>
 </div>
 </li>
 <li class="add-listing-cta">
@@ -144,21 +155,29 @@
 <ul class="small-nav-list">
 <li>
 <a id="menuShowbutton">
+<svg class="or-icon size-5">
+</svg>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li class="search-nav-item">
 <a>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li>
 <a class="useChatIfPossible useChatIfPossible_DefaultToMenu defaultMobileMenuHelpButton">
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 </ul>
 <div id="openid-config" data-is-mobile="false" data-login-endpoint="/account/openidlogin" data-user-status-endpoint="/account/userstatus" data-register-endpoint="/account/register" data-log-on-endpoint="/account/logon" data-reset-password-endpoint="/account/resetpassword" data-switch-endpoint="/account/switch" data-email data-display-name data-photo-url>
 </div>
 <div id="openid-modal-container">
-<div class="modal fade or-login-modal openid-instance" id="or-login-modal" role="dialog">
+<div class="modal fade or-login-modal openid-instance" id="or-login-modal" role="dialog" aria-hidden="true">
 <div class="modal-dialog" role="document">
 <div class="modal-content">
 <div class="openid-chooser-modal-inner">
@@ -172,7 +191,7 @@
 <div class="modal-title-cont show-register">
 <h2 class="sub-title">Create Account</h2>
 </div>
-<button type="button" class="btn-close" data-bs-dismiss="modal">
+<button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close">
 </button>
 </div>
 <div class="modal-body">
@@ -212,15 +231,15 @@
 <div class="openid-tab openid-signup">
 <div class="social-logins">
 <a data-provider="Google" class="btn-base openid-provider-link js-openid-provider-link">
-<img class="openid-provider-link__icon"/>
+<img alt="Google Icon" class="openid-provider-link__icon"/>
 <span>Continue with Google</span>
 </a>
 <a data-provider="Outlook" class="btn-base openid-provider-link js-openid-provider-link">
-<img class="openid-provider-link__icon"/>
+<img alt="Outlook Icon" class="openid-provider-link__icon"/>
 <span>Continue with Outlook</span>
 </a>
 <a data-provider="Yahoo" class="btn-base openid-provider-link js-openid-provider-link">
-<img class="openid-provider-link__icon"/>
+<img alt="Yahoo Icon" class="openid-provider-link__icon"/>
 <span>Continue with Yahoo</span>
 </a>
 </div>
@@ -250,7 +269,7 @@
 </div>
 <div class="openid-tab openid-emaillogin">
 <div class="user-profile">
-<img class="openid-displaypicture"/>
+<img class="openid-displaypicture" alt="User avatar"/>
 <div class="user-info">
 <h4 class="openid-displayname">
 </h4>
@@ -280,7 +299,7 @@
 <div>
 <button type="submit" class="btn-base btn--primary openid-password-button">Create Account</button>
 </div>
-<input name="__RequestVerificationToken" type="hidden"/>
+<input name="__RequestVerificationToken" type="hidden" value="CfDJ8A33KeFEI4tCp1_Yb9_wTmytDFP4W4lRs2g-3xialGhuCw-SvbseyPL0wCEgjTkD3kptJV6bIdolT6Hi5O2Vdk5G26AsH8KLrCzrOPIyJt4i1x5uUV5uabU8HrCtl8H34HPmhKDa-DDZ39V7t9OmB9U"/>
 </form>
 <div class="legal-text-wrapper">
 <p class="legal-text">
@@ -303,7 +322,9 @@
 <div class="openid-error openid-connectionfailed">
 <p class="or-mt-4">The request has timed out - please check your internet connection and then either:</p>
 <div>
-<a class="btn-base  btn--dark openid-connectionfailed-retry">Try Again</a>
+<a class="btn-base  btn--dark openid-connectionfailed-retry">
+<svg class="or-icon size-3.5">
+</svg>Try Again</a>
 <a class="simple-sign-in-link or-mt-4 d-block">Go to our simple sign in screen</a>
 </div>
 </div>
@@ -313,14 +334,16 @@
 <template class="openid-account-item-template">
 <li>
 <button type="button" class="openid-accountbox btn-base w-100">
-<img/>
+<img alt/>
 <div class="openid-details">
 <div class="openid-displayname">
 </div>
 <div class="openid-displayemail">
 </div>
 </div>
-<button type="button" class="openid-remove-account">
+<button type="button" class="openid-remove-account" aria-label="Remove account">
+<svg class="or-icon size-5">
+</svg>
 </button>
 </button>
 </li>
@@ -357,7 +380,12 @@
 <div id="mobileMenuContainer">
 <div class="side-nav-header or-lazy-bg-image" data-background-src="//staticcdn.openrent.co.uk/images/homepage/bgImages/Optimised-Small/background-3.jpg">
 <div class="nav-head-cont">
+<svg id="OR7b81cf12c4c7475e96bbee0e7bf4ceaa" class="openrent-logo svg-logo logo-white" role="presentation">
+<title>OpenRent</title>
+</svg>
 <a class="side-nav-close-btn">
+<svg class="or-icon size-5">
+</svg>
 </a>
 <div class="profile">
 <a class="btn btn-light sign-up-cta">Sign Up</a>
@@ -375,7 +403,9 @@
 </a>
 </li>
 <li class="mobile-menu__block">
-<div class="nav-header navHeaderToggle">About</div>
+<div class="nav-header navHeaderToggle">About<svg class="icon rotate-on-active or-icon size-5">
+</svg>
+</div>
 <ul class="sub-nav">
 <li class="activate-on-page-4">
 <a>
@@ -395,7 +425,9 @@
 </ul>
 </li>
 <li class="mobile-menu__block">
-<div class="nav-header navHeaderToggle">Pricing & Services</div>
+<div class="nav-header navHeaderToggle">Pricing & Services<svg class="icon rotate-on-active or-icon size-5">
+</svg>
+</div>
 <ul class="sub-nav">
 <li class="sep-break">
 <strong>Packages</strong>
@@ -492,14 +524,18 @@
 </li>
 <li class="activate-on-page-21 useChatIfPossible useChatIfPossible_DefaultToMenu defaultMobileMenuHelpButton">
 <a>
-<span>Help</span>
+<span>
+<svg class="or-icon size-em">
+</svg>Help</span>
 </a>
 </li>
 <li class="mobile-menu__block add-listing-cta">
 <a class="btn btn-success">Add Listing</a>
 </li>
 <li class="mobile-menu__block">
-<div class="nav-header navHeaderToggle">Other Links</div>
+<div class="nav-header navHeaderToggle">Other Links<svg class="icon rotate-on-active or-icon size-5">
+</svg>
+</div>
 <ul class="sub-nav">
 <li class="activate-on-page-0">
 <a>
@@ -556,7 +592,7 @@
 </li>
 <li class="mobile-menu__block add-to-hs">
 <a class="add-to-hs-btn d-flex align-items-center gap-3 text-decoration-none text-body py-2">
-<img class="rounded-3 flex-shrink-0">
+<img alt class="rounded-3 flex-shrink-0">
 <div class="flex-grow-1 lh-sm min-w-0">
 <div class="fw-semibold text-truncate">OpenRent</div>
 <small class="text-body-secondary text-truncate d-block">Google Play</small>
@@ -566,7 +602,7 @@
 </li>
 <li class="mobile-menu__block add-to-hs-safari-ios">
 <a class="add-to-hs-btn-ios d-flex align-items-center gap-3 text-decoration-none text-body py-2">
-<img class="rounded-3 flex-shrink-0">
+<img alt class="rounded-3 flex-shrink-0">
 <div class="flex-grow-1 lh-sm min-w-0">
 <div class="fw-semibold text-truncate">OpenRent</div>
 <small class="text-body-secondary text-truncate d-block">Add to Home</small>
@@ -578,9 +614,11 @@
 <div class="share-nav">
 <strong>Copy current page URL:</strong>
 <div class="input-group">
-<input id="share-url" class="text-box single-line form-control" type="text">
+<input id="share-url" class="text-box single-line form-control" type="text" value>
 <span class="input-group-btn">
 <button id="copy-page-btn" class="btn btn-light" type="button">
+<svg class="or-icon size-em">
+</svg>
 <span class="copy">Copy</span>
 </button>
 </span>
@@ -590,18 +628,26 @@
 <ul class="social-new">
 <li>
 <a>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li>
 <a>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li>
 <a>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li>
 <a>
+<svg class="or-icon size-5">
+</svg>
 </a>
 </li>
 </ul>
@@ -622,75 +668,83 @@
 <div class="position-relative">
 <div class="rounded-2 border overflow-hidden or-swiper js-carousel-cae84fd7-75b1-4613-8adb-9ae0817a0a01 or-swiper-navigation--overlay" data-mobile-items="1" data-large-mobile-items="1" data-tablet-items="1" data-desktop-items="1" data-gap="0" data-loop="true" data-autoplay="false" data-centered-mobile="false" data-centered-large-mobile="false" data-centered-tablet="false" data-centered-desktop="false" data-init="true" id="OR0035ebfc7e7a42daa0995439009a3850" data-lightbox-gallery data-lightbox-children=".lightbox_item">
 <div class="or-swiper-button-prev">
+<svg class="or-icon size-5">
+</svg>
 </div>
 <div class="or-swiper-button-next">
+<svg class="or-icon size-5">
+</svg>
 </div>
 <div class="swiper">
 <div class="swiper-wrapper">
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 <div class="swiper-slide">
 <a class="lightbox_item d-block ratio ratio-4x3" data-pswp-width="720" data-pswp-height="960" data-pswp-caption>
-<img class="img-fluid w-100 object-fit-cover"/>
+<img class="img-fluid w-100 object-fit-cover" alt/>
 </a>
 </div>
 </div>
 </div>
 </div>
 <div class="position-absolute bottom-0 end-0 z-1 d-flex p-3 gap-2">
-<a id="scrollToMap" class="btn btn-flex btn-light btn-sm">
+<a href="#map" id="scrollToMap" class="btn btn-flex btn-light btn-sm">
+<svg class="flex-shrink-0 btn-icon btn-icon--pre or-icon size-em">
+</svg>
 <span class="btn-text">Map</span>
 </a>
 <a class="js-add-to-favourite btn btn-flex btn-light btn-sm">
-<span class="btn-text">Favourite</span>
+<span class="btn-text">
+<svg class="or-icon size-em">
+</svg>Favourite</span>
 </a>
 </div>
 </div>
@@ -701,23 +755,31 @@
 <ul class="m-0 p-0 list-unstyled d-flex flex-wrap gap-1 gap-md-2 align-items-center text-secondary">
 <li class="d-flex align-items-center column-gap-2 column-md-gap-2">
 <span class="d-flex align-items-center gap-2 bg-white fs-body-small-2 fs-md-body-small-1 fw-normal bg-transparent border border-light-subtle border-opacity-50 badge text-start text-bg-light rounded-pill text-nowrap">
+<svg class="or-icon size-em">
+</svg>
 <span class="text-secondary-emphasis">1<span class="d-none d-md-inline">bedrooms</span>
 </span>
 </span>
 </li>
 <li class="d-flex align-items-center column-gap-2 column-md-gap-2">
 <span class="d-flex align-items-center gap-2 bg-white fs-body-small-2 fs-md-body-small-1 fw-normal bg-transparent border border-light-subtle border-opacity-50 badge text-start text-bg-light rounded-pill text-nowrap">
+<svg class="or-icon size-em">
+</svg>
 <span class="text-secondary-emphasis">1<span class="d-none d-md-inline">bathrooms</span>
 </span>
 </span>
 </li>
 <li class="d-flex align-items-center column-gap-2 column-md-gap-2">
 <span class="d-flex align-items-center gap-2 bg-white fs-body-small-2 fs-md-body-small-1 fw-normal bg-transparent border border-light-subtle border-opacity-50 badge text-start text-bg-light rounded-pill text-nowrap">
+<svg class="or-icon size-em">
+</svg>
 <span class="text-secondary-emphasis">1 tenant max.</span>
 </span>
 </li>
 <li class="d-flex align-items-center column-gap-2 column-md-gap-2">
 <span class="d-flex align-items-center gap-2 bg-white fs-body-small-2 fs-md-body-small-1 fw-normal bg-transparent border border-light-subtle border-opacity-50 badge text-start text-bg-light rounded-pill text-nowrap">
+<svg class="or-icon size-em">
+</svg>
 <span class="text-secondary-emphasis">London</span>
 </span>
 </li>
@@ -773,6 +835,8 @@
 <tr>
 <td class="fw-medium">Bills Included</td>
 <td>
+<svg class="text-success or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
@@ -791,10 +855,14 @@
 <tr>
 <td class="fw-medium">Student Friendly</td>
 <td>
+<svg class="text-success or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
-<td class="fw-medium">Families Allowed<button data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORa079aa47d87e4eaab705a2eef6eb772d" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<td class="fw-medium">Families Allowed<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORa079aa47d87e4eaab705a2eef6eb772d" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="ORa079aa47d87e4eaab705a2eef6eb772d">
 <p>The landlord has indicated they are unable to accept families.</p>
@@ -808,23 +876,33 @@
 </div>
 </td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
-<td class="fw-medium">Pets Allowed<button data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR43d056ed15bf42a0a0b9b894d3002c98" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<td class="fw-medium">Pets Allowed<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR43d056ed15bf42a0a0b9b894d3002c98" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="OR43d056ed15bf42a0a0b9b894d3002c98">[text removed]</div>
 </td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
 <td class="fw-medium">Smokers Allowed</td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
-<td class="fw-medium">DSS/LHA Covers Rent<button data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR1f1d0e2b302f4e61a846a3bbf890450d" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<td class="fw-medium">DSS/LHA Covers Rent<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR1f1d0e2b302f4e61a846a3bbf890450d" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="OR1f1d0e2b302f4e61a846a3bbf890450d">
 <p>[text removed]</p>
@@ -832,6 +910,8 @@
 </div>
 </td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 </table>
@@ -846,7 +926,9 @@
 <td>15 September, 2026</td>
 </tr>
 <tr>
-<td class="fw-medium">Preferred Minimum Tenancy<button data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR9a7a0a24bfed4accb0177eaccc792622" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<td class="fw-medium">Preferred Minimum Tenancy<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR9a7a0a24bfed4accb0177eaccc792622" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="OR9a7a0a24bfed4accb0177eaccc792622">[text removed]</div>
 </td>
@@ -856,7 +938,9 @@
 <td>
 <div class="d-flex align-items-center column-gap-2">
 <span class="fw-medium">Online Viewings</span>
-<button data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORa856e136b3ff48a3b6bee0081330cfed" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORa856e136b3ff48a3b6bee0081330cfed" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="ORa856e136b3ff48a3b6bee0081330cfed">
 <p>This indicates the landlord's availability to perform viewings online, if you are unable to be physically present.</p>
@@ -865,6 +949,8 @@
 </div>
 </td>
 <td>
+<svg class="text-success or-icon size-5">
+</svg>
 </td>
 </tr>
 </table>
@@ -877,16 +963,22 @@
 <tr>
 <td class="fw-medium">Garden</td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
 <td class="fw-medium">Parking</td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
 <td class="fw-medium">Fireplace</td>
 <td>
+<svg class="text-danger or-icon size-5">
+</svg>
 </td>
 </tr>
 <tr>
@@ -906,7 +998,7 @@
 <div id="map" data-map-load-location="/listing/justmapandstreetview/2981347" data-lat="51.507492" data-lng="-0.1248711" data-streetview-lat="51.5075" data-streetview-lng="-0.12486995" data-streetview-zoom="1" data-streetview-heading="184.60167" data-streetview-pitch="1" data-is-in-london="true">
 <div id="googlemapload" class="position-relative overflow-hidden">
 <div id="googleMapLoadingIcon" class="position-absolute inset-0 d-flex align-items-center justify-content-center z-2">
-<img/>
+<img alt="loading..."/>
 </div>
 </div>
 <div id="googleMapPartialContainer">
@@ -915,22 +1007,22 @@
 <h2 class="g-col-12 g-col-xl-4 mb-0 fs-body-large-1 fs-lg-body-large-2">London, WC2N</h2>
 <ul class="grid gap-2 g-col-12 g-col-xl-8 list-unstyled m-0 p-0">
 <li class="d-flex column-gap-2 g-col-12 g-col-md-6">
-<img class="size-4"/>
+<img alt="Underground" class="size-4"/>
 <p class="mb-0 fs-body-small-1 lh-sm">Charing Cross<span class="d-block text-secondary fs-body-small-2">~2 min. walk</span>
 </p>
 </li>
 <li class="d-flex column-gap-2 g-col-12 g-col-md-6">
-<img class="size-4"/>
+<img alt="National Rail" class="size-4"/>
 <p class="mb-0 fs-body-small-1 lh-sm">London Charing Cross<span class="d-block text-secondary fs-body-small-2">~2 min. walk</span>
 </p>
 </li>
 <li class="d-flex column-gap-2 g-col-12 g-col-md-6">
-<img class="size-4"/>
+<img alt="Underground" class="size-4"/>
 <p class="mb-0 fs-body-small-1 lh-sm">Embankment<span class="d-block text-secondary fs-body-small-2">~4 min. walk</span>
 </p>
 </li>
 <li class="d-flex column-gap-2 g-col-12 g-col-md-6">
-<img class="size-4"/>
+<img alt="Underground" class="size-4"/>
 <p class="mb-0 fs-body-small-1 lh-sm">Leicester Square<span class="d-block text-secondary fs-body-small-2">~9 min. walk</span>
 </p>
 </li>
@@ -947,8 +1039,8 @@
 <div>
 <div class="form-check">
 <span>
-<input class="form-check-input" id="OR2b67db8d899e4e81a7eff1a0e41cf08a" name="filterNursery" type="checkbox"/>
-<input name="filterNursery" type="hidden">
+<input class="form-check-input" id="OR2b67db8d899e4e81a7eff1a0e41cf08a" name="filterNursery" type="checkbox" value="true"/>
+<input name="filterNursery" type="hidden" value="false">
 </span>
 <label class="form-check-label">Nursery</label>
 </div>
@@ -958,8 +1050,8 @@
 <div>
 <div class="form-check">
 <span>
-<input class="form-check-input" id="ORd2dc3c30c3334ce78194312d2b388088" name="filterPrimary" type="checkbox"/>
-<input name="filterPrimary" type="hidden">
+<input class="form-check-input" id="ORd2dc3c30c3334ce78194312d2b388088" name="filterPrimary" type="checkbox" value="true"/>
+<input name="filterPrimary" type="hidden" value="false">
 </span>
 <label class="form-check-label">Primary</label>
 </div>
@@ -969,8 +1061,8 @@
 <div>
 <div class="form-check">
 <span>
-<input class="form-check-input" id="OR374100c260514cf1a01086c4eeb1a587" name="filterSecondary" type="checkbox"/>
-<input name="filterSecondary" type="hidden">
+<input class="form-check-input" id="OR374100c260514cf1a01086c4eeb1a587" name="filterSecondary" type="checkbox" value="true"/>
+<input name="filterSecondary" type="hidden" value="false">
 </span>
 <label class="form-check-label">Secondary</label>
 </div>
@@ -980,8 +1072,8 @@
 <div>
 <div class="form-check">
 <span>
-<input class="form-check-input" id="ORd8c0c22d41cf45b486c9fc7085722aa0" name="filterPostSixteen" type="checkbox"/>
-<input name="filterPostSixteen" type="hidden">
+<input class="form-check-input" id="ORd8c0c22d41cf45b486c9fc7085722aa0" name="filterPostSixteen" type="checkbox" value="true"/>
+<input name="filterPostSixteen" type="hidden" value="false">
 </span>
 <label class="form-check-label">Post-16</label>
 </div>
@@ -991,11 +1083,11 @@
 <div>
 <div class="form-check">
 <span>
-<input class="form-check-input" id="OR990c1405293940ab97f7785e3c81c6db" name="filterSend" type="checkbox"/>
-<input name="filterSend" type="hidden">
+<input class="form-check-input" id="OR990c1405293940ab97f7785e3c81c6db" name="filterSend" type="checkbox" value="true"/>
+<input name="filterSend" type="hidden" value="false">
 </span>
 <label class="form-check-label">
-<span data-bs-toggle="popover" data-bs-html="true" data-bs-sanitize="false" data-bs-placement="bottom" class="cursor-pointer text-decoration-underline-dotted" data-bs-trigger="hover" data-bs-content="Dedicated schools for students with Special Educational Needs and Disabilities" data-bs-custom-class="whitespace-pre">SEND</span>
+<span data-bs-toggle="popover" data-bs-html="true" data-bs-sanitize="false" data-bs-placement="bottom" class="cursor-pointer text-decoration-underline-dotted" data-bs-trigger="hover" data-bs-content="Dedicated schools for students with Special Educational Needs and Disabilities" data-bs-custom-class="whitespace-pre" aria-label="More information">SEND</span>
 </label>
 </div>
 <span class="field-validation-valid text-danger invalid-feedback" data-valmsg-for="filterSend" data-valmsg-replace="true">
@@ -1008,6 +1100,8 @@
 <ul class="grid gap-2 list-unstyled m-0 p-0">
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">The Royal Ballet School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Secondary</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Post-16</span>
@@ -1017,6 +1111,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">St Clement Danes CofE Primary School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Nursery</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
@@ -1026,6 +1122,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Soho Parish CofE Primary School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Nursery</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
@@ -1035,6 +1133,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Harris Westminster Sixth Form<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Post-16</span>
 <span class="d-block text-secondary fs-body-small-2">1.0 km, ~15 min. walk</span>
@@ -1043,6 +1143,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">St Josephs Catholic Primary School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Nursery</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
@@ -1052,6 +1154,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">DLD College<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Secondary</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Post-16</span>
@@ -1061,6 +1165,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Westminster Abbey Choir School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Secondary</span>
@@ -1070,6 +1176,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Evelina Hospital School<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Nursery</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
@@ -1082,6 +1190,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Odyssey House School - Bloomsbury<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Secondary</span>
@@ -1093,6 +1203,8 @@
 </li>
 <li class="g-col-12">
 <div class="d-flex column-gap-2">
+<svg alt="School" class="flex-shrink-0 or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-sm">Children's Hospital School at Gt Ormond Street and UCH<br/>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Nursery</span>
 <span class="badge text-start text-info-emphasis bg-info-subtle rounded-pill text-nowrap">Primary</span>
@@ -1115,23 +1227,50 @@
 <div class="d-flex justify-content-center">
 <div>
 <div class="justify-content-center hstack gap-1 flex-wrap">
-<a class="btn btn-link p-2 social-btn-native d-inline-block d-md-none">
+<a class="btn btn-link p-2 social-btn-native d-inline-block d-md-none" title="Share">
+<svg role="img">
+<title>Share</title>
+</svg>
 </a>
-<a class="btn btn-link p-2 d-inline-block d-md-none">
+<a class="btn btn-link p-2 d-inline-block d-md-none" title="Share on Whatsapp">
+<svg role="img">
+<title>WhatsApp</title>
+</svg>
 </a>
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on Facebook">
+<svg role="img">
+<title>Facebook</title>
+</svg>
 </a>
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share by email">
+<svg role="img">
+<title>Email</title>
+</svg>
 </a>
-<a class="btn btn-link p-2 d-inline-block d-md-none">
+<a class="btn btn-link p-2 d-inline-block d-md-none" title="Share on Facebook Messenger">
+<svg role="img">
+<title>Messenger</title>
+</svg>
 </a>
-<a class="btn btn-link p-2 d-none d-md-inline-block">
+<a class="btn btn-link p-2 d-none d-md-inline-block" title="Share on Gmail">
+<svg role="img">
+<title>Gmail</title>
+</svg>
 </a>
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on X">
+<svg role="img">
+<title>X</title>
+</svg>
 </a>
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Copy to clipboard">
+<svg role="img">
+<title>Copy</title>
+</svg>
 </a>
 <button type="button" class="btn btn-link share-more-btn p-2" data-bs-toggle="popover" data-bs-placement="top" data-bs-content-id="share-container-ef8a925c78344812a92c0dbb11122883" data-bs-html="true" data-bs-sanitize="false" data-bs-trigger="focus">
+<svg role="img">
+<title>More Options</title>
+</svg>
 </button>
 </div>
 </div>
@@ -1139,31 +1278,52 @@
 <div class="text-center">
 <div class="row justify-content-center gy-1 gx-1">
 <div class="col-auto">
-<a class="btn btn-link p-2 d-none d-md-inline-block">
+<a class="btn btn-link p-2 d-none d-md-inline-block" title="Print">
+<svg role="img">
+<title>Print</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on Telegram">
+<svg role="img">
+<title>Telegram</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on Pinterest">
+<svg role="img">
+<title>Pinterest</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on Yahoo Mail">
+<svg role="img">
+<title>YahooMail</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2">
+<a class="btn btn-link p-2" title="Share on LinkedIn">
+<svg role="img">
+<title>LinkedIn</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2 d-none d-md-inline-block">
+<a class="btn btn-link p-2 d-none d-md-inline-block" title="Share on WhatsApp">
+<svg role="img">
+<title>WhatsApp</title>
+</svg>
 </a>
 </div>
 <div class="col-auto">
-<a class="btn btn-link p-2 d-none d-md-inline-block">
+<a class="btn btn-link p-2 d-none d-md-inline-block" title="Share on Facebook Messenger">
+<svg role="img">
+<title>Messenger</title>
+</svg>
 </a>
 </div>
 </div>
@@ -1195,6 +1355,8 @@
 <div class="g-col-7 d-md-none flex-1 justify-content-center text-end text-md-center vstack gap-2">
 <p class="d-md-none mb-0 fs-body-small-2 fw-medium text-end">Questions or viewing enquiries?</p>
 <a class="align-self-end align-self-md-stretch btn btn-flex btn-primary" data-ab-test="160011" data-ab-cookie-event="0">
+<svg class="flex-shrink-0 btn-icon btn-icon--pre or-icon size-em">
+</svg>
 <span class="btn-text">Message Landlord<span class="d-none d-sm-inline">or Request Viewing</span>
 </span>
 </a>
@@ -1203,15 +1365,21 @@
 </div>
 <div class="vstack gap-2">
 <div class="d-flex justify-content-center align-items-center column-gap-2">
+<svg class="or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-1 text-secondary">No admin fees</p>
 </div>
 <div class="d-flex justify-content-center align-items-center column-gap-2">
+<svg class="or-icon size-5">
+</svg>
 <p class="mb-0 fs-body-small-1 lh-1 text-secondary">No hidden charges</p>
 </div>
 </div>
 <div class="vstack gap-4">
 <div class="d-grid gap-2 text-center">
-<h2 class="d-flex gap-2 justify-content-center align-items-center fs-body fs-sm-body-large-1 text-center text-balance">Ready to Rent Now?<button data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR2f632168c65748d28c3555eff42c9358" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<h2 class="d-flex gap-2 justify-content-center align-items-center fs-body fs-sm-body-large-1 text-center text-balance">Ready to Rent Now?<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="focus" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="OR2f632168c65748d28c3555eff42c9358" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="OR2f632168c65748d28c3555eff42c9358">
 <div>
@@ -1260,14 +1428,18 @@
 <dl class="mb-0 text-center text-secondary-emphasis">
 <div class="d-flex flex-wrap align-items-center justify-content-center column-gap-1">
 <dt class="fw-medium">Response Rate:</dt>
-<dd class="mb-0">99%<button data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORec736f9a985b4146afd7175237282949" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<dd class="mb-0">99%<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORec736f9a985b4146afd7175237282949" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="ORec736f9a985b4146afd7175237282949">The percentage of enquiries from tenants this landlord has replied to.</div>
 </dd>
 </div>
 <div class="d-flex flex-wrap align-items-center justify-content-center column-gap-1">
 <dt class="fw-medium">Response Time:</dt>
-<dd class="mb-0">Within 2 Days<button data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORf4a84afbecba4936a646d842f4e94d8f" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<dd class="mb-0">Within 2 Days<button aria-label="More information" data-bs-toggle="popover" type="button" data-bs-trigger="hover" data-bs-container="body" data-bs-offset="0, 4px" data-bs-placement="top" data-bs-html="true" data-bs-content-id="ORf4a84afbecba4936a646d842f4e94d8f" data-bs-sanitize="false" class="or-popover-icon d-inline-flex text-body">
+<svg class="or-icon size-em">
+</svg>
 </button>
 <div class="d-none" id="ORf4a84afbecba4936a646d842f4e94d8f">The average time this landlord takes to reply to a tenant's first enquiry.</div>
 </dd>
@@ -1285,11 +1457,15 @@
 <div class="py-1 d-flex gap-4 align-items-center border-bottom border-light-subtle">
 <dt class="flex-1 fw-normal">Email address verified</dt>
 <dd class="mb-0">
+<svg class="text-success or-icon size-5">
+</svg>
 </dd>
 </div>
 <div class="pt-1 d-flex gap-4 align-items-center">
 <dt class="flex-1 fw-normal">Phone number verified</dt>
 <dd class="mb-0">
+<svg class="text-danger or-icon size-5">
+</svg>
 </dd>
 </div>
 </dl>
@@ -1302,25 +1478,33 @@
 </div>
 </div>
 <div class="p-0 bs-callout bs-callout-primary">
-<div class="d-flex justify-content-between align-items-center p-4" data-bs-toggle="collapse" role="button">
+<div class="d-flex justify-content-between align-items-center p-4" data-bs-toggle="collapse" href="#tenant-insights" role="button">
 <h4 class="h5 mb-0">Tenant Insights</h4>
+<svg class="or-icon size-5">
+</svg>
+<svg class="or-icon size-5">
+</svg>
 </div>
 <div id="tenant-insights" class="show mt-2 px-4">
 <p class="fw-semibold fs-body mb-0">
-<span>XX+</span>
+<span aria-hidden="true">XX+</span>
 <span class="visually-hidden">Multiple</span>other tenants have enquired about this property.</p>
 <div class="grid-stack border border-2 border-primary-subtle rounded-1 p-2 mt-2">
-<div class="text-center pe-none opacity-75">
+<div aria-hidden="true" class="text-center pe-none opacity-75">
 <p>More Insights will appear here for verified tenants</p>
 <p class="mb-0">And Other Insights when they are available</p>
 </div>
 <div class="d-flex gap-2 align-items-center justify-content-center mx-auto border-primary">
+<svg class="flex-shrink-0 or-icon size-4">
+</svg>
 <p class="mb-0 fw-semibold">You must be a Verified Tenant to unlock insights</p>
 </div>
 </div>
 <p class="text-pretty mt-2">Landlords are 90% more likely to rent to Verified Tenants. Become Verified to get more stats and insights.</p>
 <div class="justify-content-center vstack gap-2">
 <a class="btn btn-flex btn-primary">
+<svg class="flex-shrink-0 btn-icon btn-icon--pre or-icon size-em">
+</svg>
 <span class="btn-text">Become Verified</span>
 </a>
 <br/>
@@ -1329,6 +1513,8 @@
 </div>
 <div class="d-flex flex-wrap justify-content-center align-items-center">
 <a class="d-inline-flex gap-1 align-items-center text-decoration-none py-1">
+<svg class="or-icon size-em">
+</svg>
 <span>Report Listing</span>
 </a>
 </div>
@@ -1338,31 +1524,33 @@
 </div>
 </div>
 <div id="favouriteAlert" class="position-fixed start-0 end-0 bottom-0 z-10 d-flex justify-content-center p-3">
-<div class="mx-auto mb-0 w-auto alert alert-info alert-dismissible fade show" id="ORe494b8ab9b7542b99a4ad492ffb76732" role="alert">Thanks, property saved! You can manage all your favourites on your<a>My Favourites</a>page.<button class="btn-close" data-bs-dismiss="alert" type="button">
+<div class="mx-auto mb-0 w-auto alert alert-info alert-dismissible fade show" id="ORe494b8ab9b7542b99a4ad492ffb76732" role="alert">Thanks, property saved! You can manage all your favourites on your<a>My Favourites</a>page.<button aria-label="Close" class="btn-close" data-bs-dismiss="alert" type="button">
 </button>
 </div>
 </div>
 <div id="favouriteAlertLogin" class="position-fixed start-0 end-0 bottom-0 z-10 d-flex justify-content-center p-3">
-<div class="mx-auto mb-0 w-auto alert alert-warning alert-dismissible fade show" id="OR3fd7b4e5cf1549da9587fa6875197b71" role="alert">If you wish to favourite this property, you need to be registered or logged in. To do that, please<a>Click Here</a>.<button class="btn-close" data-bs-dismiss="alert" type="button">
+<div class="mx-auto mb-0 w-auto alert alert-warning alert-dismissible fade show" id="OR3fd7b4e5cf1549da9587fa6875197b71" role="alert">If you wish to favourite this property, you need to be registered or logged in. To do that, please<a>Click Here</a>.<button aria-label="Close" class="btn-close" data-bs-dismiss="alert" type="button">
 </button>
 </div>
 </div>
 </div>
 </main>
-<footer class="or-footer site-footer" role="contentinfo">
+<footer class="or-footer site-footer" role="contentinfo" aria-label="Site footer">
 <div class="or-footer__content">
 <div class="or-footer__logo-tagline">
 <div class="or-footer__logo">
-<img class="img-fluid w-100">
+<img class="img-fluid w-100" alt="OpenRent">
 </div>
 <div class="or-footer__tagline">
-<img/>
+<img alt="Renting the way it should be"/>
 </div>
 </div>
-<nav class="or-footer__links">
+<nav class="or-footer__links" aria-label="Footer navigation">
 <ul class="or-footer__list">
 <li class="or-footer__item or-footer__item--title">
 <span class="or-footer__title-text">For Tenants</span>
+<svg class="or-footer__toggle-icon or-icon size-5">
+</svg>
 </li>
 <li class="or-footer__item">
 <a class="or-footer__link">Why use OpenRent</a>
@@ -1380,6 +1568,8 @@
 <ul class="or-footer__list">
 <li class="or-footer__item or-footer__item--title">
 <span class="or-footer__title-text">Landlord Services</span>
+<svg class="or-footer__toggle-icon or-icon size-5">
+</svg>
 </li>
 <li class="or-footer__item">
 <a class="or-footer__link">Property Advertising</a>
@@ -1430,6 +1620,8 @@
 <ul class="or-footer__list">
 <li class="or-footer__item or-footer__item--title">
 <span class="or-footer__title-text">OpenRent</span>
+<svg class="or-footer__toggle-icon or-icon size-5">
+</svg>
 </li>
 <li class="or-footer__item">
 <a class="or-footer__link">About</a>
@@ -1447,6 +1639,8 @@
 <ul class="or-footer__list">
 <li class="or-footer__item or-footer__item--title">
 <span class="or-footer__title-text">Support</span>
+<svg class="or-footer__toggle-icon or-icon size-5">
+</svg>
 </li>
 <li class="or-footer__item">
 <a class="or-footer__link">Help Centre</a>
@@ -1474,17 +1668,23 @@
 <li class="or-footer__item">© 2012 - 2026 OpenRent Ltd.</li>
 <li class="or-footer__item">OpenRent Ltd, 20 Wenlock Road, London, N1 7GU</li>
 </ul>
-<ul class="or-footer__list or-footer__social-links">
+<ul class="or-footer__list or-footer__social-links" aria-label="Social media links">
 <li class="or-footer__item">
-<a class="or-footer__link">
+<a class="or-footer__link" aria-label="Visit OpenRent on Facebook">
+<svg aria-hidden="true" class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li class="or-footer__item">
-<a class="or-footer__link">
+<a class="or-footer__link" aria-label="Visit OpenRent on Twitter">
+<svg aria-hidden="true" class="or-icon size-5">
+</svg>
 </a>
 </li>
 <li class="or-footer__item">
-<a class="or-footer__link">
+<a class="or-footer__link" aria-label="Visit OpenRent on Instagram">
+<svg aria-hidden="true" class="or-icon size-5">
+</svg>
 </a>
 </li>
 </ul>
@@ -1494,7 +1694,9 @@
 <button id="show-help" class="btn btn-primary btn-large position-fixed d-none bottom-0 end-4 me-4 rounded-0 rounded-top-1 py-3 px-10 fs-3" data-html2canvas-ignore>
 <span class="d-inline-flex align-items-center gap-2">
 <div class="btn-copy help-title d-flex gap-2 align-items-start">
-<span class="icon-line flex-shrink-0">
+<span aria-hidden="true" class="icon-line flex-shrink-0">
+<svg class="or-icon size-em">
+</svg>
 </span>
 <div>Need Help?</div>
 </div>
