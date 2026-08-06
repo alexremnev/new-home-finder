@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from worker.env import load_env
+
 
 class ConfigError(RuntimeError):
     pass
@@ -27,6 +29,7 @@ class Config:
 
     @classmethod
     def load(cls, *, dry_run: bool = False) -> Config:
+        load_env()
         database_url = os.environ.get("DATABASE_URL", "").strip()
         if not database_url:
             raise ConfigError(

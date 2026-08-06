@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pathlib
 import sys
 import time
 import urllib.error
@@ -37,6 +38,9 @@ import urllib.request
 
 import psycopg
 from psycopg.rows import dict_row
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from worker.env import load_env  # noqa: E402 - path set above for direct runs
 
 # Approximate zone membership. A district listed in two zones is split by a zone
 # boundary and gets min/max accordingly.
@@ -99,9 +103,15 @@ def main() -> int:
     )
     args = ap.parse_args()
 
+    load_env()
     database_url = os.environ.get("DATABASE_URL", "").strip()
     if not database_url:
-        print("DATABASE_URL is not set", file=sys.stderr)
+        print(
+            "DATABASE_URL is not set.\n"
+            "  Create .env next to pyproject.toml (copy .env.example) and put the\n"
+            "  Supabase connection string in it, or set the variable in the shell.",
+            file=sys.stderr,
+        )
         return 2
 
     scope = {c.strip().upper() for c in args.enable.split(",") if c.strip()}
