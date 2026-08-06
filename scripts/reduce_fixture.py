@@ -7,10 +7,16 @@ details, and a public repository is the wrong place for those.
 
 This reduces a saved page to the part a test uses:
 
-  kept     tag structure; class, id and data-* attributes; short text nodes,
-           which is where field values live ("£590.00 p/m", "12 Sep", "Furnished")
-  dropped  script, style, svg, noscript, comments, meta and link tags;
-           every URL in href/src; long text nodes, which is where prose lives
+  kept     tag structure; class, id, data-*, and accessibility attributes;
+           short text nodes, which is where field values live ("£590.00 p/m",
+           "12 Sep", "Furnished"); icon elements and their fragment references
+  dropped  script, style, noscript, comments, meta and link tags; vector
+           geometry; external URLs; long text nodes, which is where prose lives
+
+Icons are kept because a yes/no field is often not text at all: a tick or a cross
+in the value cell, with the answer carried by the icon's class, its `#fragment`
+reference, or an accessibility label. Dropping them turns "pets allowed" into an
+empty cell, which reads as "not stated" — a different answer entirely.
 
 The result is a derived artifact of our own, an order of magnitude smaller, with
 readable diffs when a site changes its markup.
@@ -28,13 +34,28 @@ import re
 import sys
 from html.parser import HTMLParser
 
-DROP_TAGS = {"script", "style", "svg", "noscript", "iframe", "meta", "link", "picture", "source"}
+DROP_TAGS = {"script", "style", "noscript", "iframe", "meta", "link", "picture", "source"}
+
+# Vector geometry carries no field values, only coordinates. The svg and use
+# elements around it are kept: that is where the icon's identity lives.
+DROP_TAGS |= {"path", "defs", "g", "circle", "rect", "polygon", "polyline",
+              "ellipse", "line", "mask", "clippath", "lineargradient", "stop",
+              "filter", "pattern", "symbol", "desc"}
 VOID_TAGS = {"br", "hr", "img", "input", "meta", "link", "source", "col", "area", "base"}
 
 # Attributes a selector may reasonably target. Everything else is noise for a
 # structural fixture, and URLs additionally carry content we are not keeping.
-KEEP_ATTRS = ("class", "id", "itemprop", "itemtype", "role", "type", "name", "content")
-URL_ATTRS = ("href", "src", "srcset", "data-src", "poster", "action")
+KEEP_ATTRS = (
+    "class", "id", "itemprop", "itemtype", "role", "type", "name", "content",
+    # Accessibility text frequently states a boolean outright ("Yes", "Allowed"),
+    # which makes it the most reliable reading of an icon.
+    "aria-label", "aria-hidden", "aria-checked", "title", "alt", "value",
+)
+URL_ATTRS = ("src", "srcset", "data-src", "poster", "action")
+
+# href is kept only when it is an in-document fragment such as `#icon-tick`,
+# which identifies an icon rather than pointing at content.
+FRAGMENT_ATTRS = ("href", "xlink:href")
 
 # Text at or below this length is a field value; above it, prose.
 TEXT_LIMIT = 120
@@ -50,6 +71,7 @@ class Reducer(HTMLParser):
         self._skip_tag: str | None = None
         self.dropped_text = 0
         self.dropped_urls = 0
+        self.kept_icons = 0
 
     # ── tags ──────────────────────────────────────────────────────────────
 
@@ -86,6 +108,13 @@ class Reducer(HTMLParser):
             if low in URL_ATTRS:
                 self.dropped_urls += 1
                 continue
+            if low in FRAGMENT_ATTRS:
+                if value and value.startswith("#"):
+                    parts.append(f' {low}="{value}"')
+                    self.kept_icons += 1
+                else:
+                    self.dropped_urls += 1
+                continue
             if low in KEEP_ATTRS or low.startswith("data-"):
                 parts.append(f' {low}="{(value or "").strip()}"' if value else f" {low}")
         return "".join(parts)
@@ -120,6 +149,7 @@ def reduce_html(html: str, *, text_limit: int = TEXT_LIMIT) -> tuple[str, dict[s
         "out_bytes": len(body),
         "text_nodes_dropped": reducer.dropped_text,
         "urls_dropped": reducer.dropped_urls,
+        "icon_refs_kept": reducer.kept_icons,
     }
     return body + "\n", stats
 
@@ -150,7 +180,8 @@ def main() -> int:
         f"{args.source} -> {args.out}\n"
         f"  {stats['in_bytes']:,} -> {stats['out_bytes']:,} bytes ({ratio:.1%})\n"
         f"  {stats['text_nodes_dropped']} long text nodes replaced, "
-        f"{stats['urls_dropped']} urls removed"
+        f"{stats['urls_dropped']} urls removed, "
+        f"{stats['icon_refs_kept']} icon references kept"
     )
     return 0
 
