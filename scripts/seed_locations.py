@@ -89,7 +89,11 @@ def main() -> int:
         default=",".join(DEFAULT_SCOPE),
         help="districts the source should watch now (comma separated)",
     )
-    ap.add_argument("--source", default="openrent")
+    ap.add_argument(
+        "--source",
+        action="append",
+        help="source to scope; repeatable. Default: every enabled source",
+    )
     ap.add_argument(
         "--skip-coords", action="store_true", help="do not call postcodes.io; leave lat/lng null"
     )
@@ -118,12 +122,23 @@ def main() -> int:
             time.sleep(0.05)  # open service; stay well below any sensible limit
 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
-        source = conn.execute(
-            "SELECT key FROM sources WHERE key = %s", (args.source,)
-        ).fetchone()
-        if source is None:
-            print(f"source {args.source!r} not in sources; apply the migration", file=sys.stderr)
-            return 2
+        if args.source:
+            keys = args.source
+            missing = [
+                k for k in keys
+                if conn.execute("SELECT 1 FROM sources WHERE key = %s", (k,)).fetchone() is None
+            ]
+            if missing:
+                print(f"unknown sources {missing}; apply the migrations", file=sys.stderr)
+                return 2
+        else:
+            keys = [
+                r["key"] for r in
+                conn.execute("SELECT key FROM sources WHERE enabled ORDER BY key").fetchall()
+            ]
+            if not keys:
+                print("no enabled sources; apply the migrations first", file=sys.stderr)
+                return 2
 
         for code, (zmin, zmax) in sorted(bounds.items()):
             latlng = coords.get(code)
@@ -149,39 +164,40 @@ def main() -> int:
             )
 
         # external_id is what the source itself uses to denote the place. For
-        # sitemap-based discovery that is the lowercase outward code appearing in
-        # a listing URL; a search endpoint would use its own area id instead.
-        conn.execute(
-            """
-            INSERT INTO source_locations (source_key, location_id, external_id, enabled)
-            SELECT %(source)s, l.id, lower(l.code), l.code = ANY(%(scope)s)
-              FROM locations l
-             WHERE l.kind = 'postcode_district'
-            ON CONFLICT (source_key, location_id) DO UPDATE
-               SET enabled = excluded.enabled,
-                   external_id = excluded.external_id
-            """,
-            {"source": args.source, "scope": list(scope)},
-        )
+        # sitemap-based discovery that is the outward code appearing in a listing
+        # URL; a source that searches per area needs its own identifier, and
+        # existing values are therefore left alone rather than overwritten.
+        summaries = []
+        for key in keys:
+            conn.execute(
+                """
+                INSERT INTO source_locations (source_key, location_id, external_id, enabled)
+                SELECT %(source)s, l.id, lower(l.code), l.code = ANY(%(scope)s)
+                  FROM locations l
+                 WHERE l.kind = 'postcode_district'
+                ON CONFLICT (source_key, location_id) DO UPDATE
+                   SET enabled = excluded.enabled
+                """,
+                {"source": key, "scope": list(scope)},
+            )
+            summaries.append((key, conn.execute(
+                """
+                SELECT count(*) AS total,
+                       count(*) FILTER (WHERE sl.enabled) AS enabled,
+                       count(*) FILTER (WHERE l.lat IS NULL) AS without_coords
+                  FROM source_locations sl JOIN locations l ON l.id = sl.location_id
+                 WHERE sl.source_key = %s
+                """,
+                (key,),
+            ).fetchone()))
         conn.commit()
 
-        summary = conn.execute(
-            """
-            SELECT count(*) AS total,
-                   count(*) FILTER (WHERE sl.enabled) AS enabled,
-                   count(*) FILTER (WHERE l.lat IS NULL) AS without_coords
-              FROM source_locations sl JOIN locations l ON l.id = sl.location_id
-             WHERE sl.source_key = %s
-            """,
-            (args.source,),
-        ).fetchone()
-
-    assert summary is not None
-    print(
-        f"{args.source}: {summary['total']} districts seeded, "
-        f"{summary['enabled']} enabled ({', '.join(sorted(scope))}), "
-        f"{summary['without_coords']} without coordinates"
-    )
+    for key, summary in summaries:
+        assert summary is not None
+        print(
+            f"{key}: {summary['total']} districts, {summary['enabled']} enabled "
+            f"({', '.join(sorted(scope))}), {summary['without_coords']} without coordinates"
+        )
     return 0
 
 
