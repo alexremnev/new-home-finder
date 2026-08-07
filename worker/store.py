@@ -37,19 +37,45 @@ def set_source_health(
     *,
     note: str | None = None,
     cooldown_seconds: float | None = None,
+    count_failure: bool = False,
 ) -> None:
     conn.execute(
         """
         UPDATE sources
            SET health = %(health)s,
                health_note = %(note)s,
+               -- Casts are required: a NULL parameter compared with IS NULL
+               -- gives the planner nothing to infer a type from, and the
+               -- statement is rejected before it runs.
                health_until = CASE
-                   WHEN %(cooldown)s IS NULL THEN NULL
-                   ELSE now() + make_interval(secs => %(cooldown)s)
+                   WHEN %(cooldown)s::double precision IS NULL THEN NULL
+                   ELSE now() + make_interval(secs => %(cooldown)s::double precision)
+               END,
+               consecutive_fails = CASE
+                   WHEN %(count_failure)s::boolean THEN consecutive_fails + 1
+                   ELSE consecutive_fails
                END
          WHERE key = %(key)s
         """,
-        {"key": source_key, "health": health, "note": note, "cooldown": cooldown_seconds},
+        {
+            "key": source_key, "health": health, "note": note,
+            "cooldown": cooldown_seconds, "count_failure": count_failure,
+        },
+    )
+
+
+def clear_source_failures(conn: Conn, source_key: str) -> None:
+    """A run that reached the source resets the escalation.
+
+    Without this the cooldown would keep doubling on the strength of refusals that
+    happened days ago and have since stopped.
+    """
+    conn.execute(
+        """
+        UPDATE sources SET consecutive_fails = 0
+         WHERE key = %s AND consecutive_fails > 0
+        """,
+        (source_key,),
     )
 
 

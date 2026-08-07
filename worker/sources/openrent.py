@@ -125,6 +125,9 @@ class OpenRent:
     display_name = "OpenRent"
     preferred: tuple[str, ...] = ("dom",)
     fields = FIELDS
+    # Written and verified by hand, so it is stored as pinned on first use: the
+    # repair path may propose a replacement but never overwrites it silently.
+    detail_schema = DETAIL_SCHEMA
 
     # ── discovery ─────────────────────────────────────────────────────────
 
