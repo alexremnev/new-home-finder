@@ -38,13 +38,38 @@ ALTER TABLE job_events         ENABLE ROW LEVEL SECURITY;
 
 -- Belt and braces: revoke the grants those roles receive by default, so a table
 -- created later without row level security is not exposed by omission.
-REVOKE ALL ON ALL TABLES    IN SCHEMA public FROM anon, authenticated;
-REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated;
-REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM anon, authenticated;
-
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES    FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
+--
+-- `anon` and `authenticated` are created by Supabase and do not exist on a plain
+-- Postgres. Referencing a missing role aborts the statement, and because this
+-- file is one transaction that would roll back the row-level-security changes
+-- above as well — leaving the tables open while the migration appears to have
+-- been applied. Each role is therefore handled only if it is present, which also
+-- lets this run against a local database.
+DO $$
+DECLARE
+    target text;
+BEGIN
+    FOREACH target IN ARRAY ARRAY['anon', 'authenticated']
+    LOOP
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = target) THEN
+            EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA public FROM %I', target);
+            EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM %I', target);
+            EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public FROM %I', target);
+            EXECUTE format(
+                'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM %I', target);
+            EXECUTE format(
+                'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM %I',
+                target);
+            EXECUTE format(
+                'ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON FUNCTIONS FROM %I',
+                target);
+            RAISE NOTICE 'revoked default grants from %', target;
+        ELSE
+            RAISE NOTICE 'role % is absent; nothing to revoke', target;
+        END IF;
+    END LOOP;
+END
+$$;
 
 COMMIT;
 
