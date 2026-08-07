@@ -24,7 +24,7 @@ from worker.config import Config, ConfigError
 from worker.db import claim_schedule, connect, fetch_due_schedules, finish_schedule
 from worker.db import advisory_lock as db_advisory_lock
 from worker.obs import Run
-from worker.pipeline import run_job
+from worker.pipeline.run import run_job
 
 Row = dict[str, Any]
 JOBS = ("hot", "sweep", "drain")
