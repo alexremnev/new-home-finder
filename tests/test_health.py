@@ -47,6 +47,21 @@ def test_duplicate_ids_signal_a_wrong_selector() -> None:
     assert health.id_duplicates == 9
 
 
+def test_duplicate_ids_across_separate_pages_are_not_a_schema_fault() -> None:
+    """One listing per page, so a repeated id means discovery queued it twice.
+
+    That is a different fault with a different fix, and reporting it as a broken
+    schema stops the source and suspends delisting for no reason — which is what
+    happened on the first live run.
+    """
+    duplicated = rows(10)
+    for row in duplicated:
+        row["external_id"] = "same"
+    health = evaluate(duplicated, FIELDS, min_items=5, check_duplicate_ids=False)
+    assert health.verdict == "ok"
+    assert health.id_duplicates == 0
+
+
 def test_missing_required_field_is_broken() -> None:
     health = evaluate(rows(20, price_pcm=None), FIELDS, min_items=5)
     assert health.verdict == "broken"

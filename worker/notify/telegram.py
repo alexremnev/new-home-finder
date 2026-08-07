@@ -30,42 +30,35 @@ API = "https://api.telegram.org/bot{token}/sendMessage"
 LIMIT = 4096
 
 MONTHS = (
-    "янв", "фев", "мар", "апр", "мая", "июн",
-    "июл", "авг", "сен", "окт", "ноя", "дек",
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 )
 
 # Wording lives here so that changing the language, or the tone, is one edit
 # rather than a hunt through the rendering code.
 LABELS = {
-    "per_month": "/мес",
-    "studio": "студия",
-    "room": "комната",
-    "rooms": ("спальня", "спальни", "спален"),
+    "per_month": "/mo",
+    "studio": "studio",
+    "room": "room in a share",
+    "bedroom": "bedroom",
     "zone": "Zone",
-    "available": "Свободна с",
-    "available_now": "Свободна сейчас",
-    "min_term": "мин.",
-    "months": "мес",
-    "pets_yes": "🐾 Питомцы: можно",
-    "pets_no": "🐾 Питомцы: нельзя",
-    "bills_yes": "💡 Счета включены",
-    "bills_no": "💡 Счета: не включены",
-    "landlord_direct": "напрямую от собственника",
-    "unsubscribe": "/stop — отписаться",
+    "available": "Available from",
+    "min_term": "min",
+    "months": "months",
+    "month": "month",
+    "pets_yes": "🐾 Pets: allowed",
+    "pets_no": "🐾 Pets: not allowed",
+    "bills_yes": "💡 Bills included",
+    "bills_no": "💡 Bills: not included",
+    "landlord_direct": "direct from landlord",
+    "unsubscribe": "/stop to unsubscribe",
 }
 
 
-def plural(count: int, forms: tuple[str, str, str]) -> str:
-    """Russian plural agreement: 1 спальня, 2 спальни, 5 спален."""
-    tens = count % 100
-    if 11 <= tens <= 14:
-        return forms[2]
-    ones = count % 10
-    if ones == 1:
-        return forms[0]
-    if 2 <= ones <= 4:
-        return forms[1]
-    return forms[2]
+def plural(count: int, word: str) -> str:
+    """`1 bedroom`, `2 bedrooms`. Kept as a function so the count and the word
+    cannot drift apart at a call site."""
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
 def money(amount: int) -> str:
@@ -86,13 +79,13 @@ def render_listing(view: ListingView) -> str:
     lines: list[str] = []
 
     # A studio and a room already name the property type, so repeating it would
-    # read as "студия · studio".
+    # read as "studio · studio".
     if view.bedrooms == 0:
         rooms, type_is_implied = LABELS["studio"], True
     elif view.property_type == "room":
         rooms, type_is_implied = LABELS["room"], True
     else:
-        rooms = f"{view.bedrooms} {plural(view.bedrooms, LABELS['rooms'])}"  # type: ignore[arg-type]
+        rooms = plural(view.bedrooms, LABELS["bedroom"])
         type_is_implied = False
     head = [f"{money(view.price_pcm)}{LABELS['per_month']}", rooms]
     if view.property_type and not type_is_implied:
@@ -107,7 +100,8 @@ def render_listing(view: ListingView) -> str:
     if view.available_from is not None:
         when.append(f"{LABELS['available']} {short_date(view.available_from)}")
     if view.min_tenancy_months:
-        when.append(f"{LABELS['min_term']} {view.min_tenancy_months} {LABELS['months']}")
+        term = plural(view.min_tenancy_months, LABELS["month"])
+        when.append(f"{LABELS['min_term']} {term}")
     if when:
         lines.append("📅 " + " · ".join(when))
 

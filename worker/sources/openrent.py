@@ -132,11 +132,15 @@ class OpenRent:
     # ── discovery ─────────────────────────────────────────────────────────
 
     def discover(self, locations: list[SourceLocation], mode: Mode) -> Iterator[FetchTask]:
-        """Request the sitemaps. The index is enough for a hot run.
+        """Request the sitemap index; `expand` follows its children.
 
-        A hot run reads the index only, which is small and changes when listings
-        are added. A sweep reads the full children, which is what reconciliation
-        needs to tell a removed listing from one the hot run simply did not see.
+        The index holds no listing urls, so the children are read on every run.
+        They are large, which is why conditional requests matter here more than
+        anywhere else: once ETags are stored an unchanged child costs a 304 rather
+        than several megabytes.
+
+        A sweep additionally names the children directly, so a run still works if
+        the index itself is unavailable.
         """
         yield FetchTask(source_key=self.key, page_kind="search_list", url=SITEMAP_INDEX)
         if mode == "sweep":
@@ -149,7 +153,9 @@ class OpenRent:
         body = result.body.decode("utf-8", errors="replace")
         for url in LOC.findall(body):
             if url.endswith(".xml"):
-                # The index points at child sitemaps; follow them in a sweep only.
+                # The index carries no listing urls of its own, only links to the
+                # children, so they are always followed. Their size is handled by
+                # conditional requests: an unchanged child costs a 304.
                 if "listings" in url:
                     yield FetchTask(source_key=self.key, page_kind="search_list", url=url)
                 continue

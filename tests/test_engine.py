@@ -261,9 +261,35 @@ def test_expand_ignores_non_listing_urls() -> None:
     assert "https://www.openrent.co.uk/about" not in [t.url for t in tasks]
 
 
-def test_discover_reads_the_index_on_a_hot_run_and_children_on_a_sweep() -> None:
+def test_discover_asks_for_the_index_and_a_sweep_also_names_the_children() -> None:
+    """The index holds no listing urls, so `expand` follows its children on every
+    run. A sweep names them directly as well, so a run still works if the index
+    itself is unavailable."""
     source = OpenRent()
     hot = list(source.discover([], "hot"))
     sweep = list(source.discover([], "sweep"))
     assert len(hot) == 1
     assert len(sweep) > len(hot)
+
+
+SITEMAP_WITH_REPEATS = """<?xml version="1.0"?><urlset>
+  <url><loc>https://www.openrent.co.uk/property-to-rent/london/2-bed-street-se16/1</loc></url>
+  <url><loc>https://www.openrent.co.uk/property-to-rent/rotherhithe/2-bed-street-se16/1</loc></url>
+  <url><loc>https://www.openrent.co.uk/property-to-rent/london/studio-deptford-se8/2</loc></url>
+</urlset>"""
+
+
+def test_a_listing_can_appear_under_more_than_one_url() -> None:
+    """The live sitemap does this: the same id under two city slugs.
+
+    `expand` reports both, because deduplication needs the whole run's tasks to
+    compare; the pipeline drops the repeat before spending a request on it.
+    """
+    tasks = list(
+        OpenRent().expand(_result(SITEMAP_WITH_REPEATS),
+                          scope=frozenset({"SE16", "SE8"}), known_ids=set())
+    )
+    ids = [t.external_id for t in tasks]
+    assert ids == ["1", "1", "2"]
+    assert len({t.url for t in tasks}) == 3
+    assert len(set(ids)) == 2

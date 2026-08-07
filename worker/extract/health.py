@@ -41,8 +41,16 @@ def evaluate(
     min_items: int,
     id_field: str = "external_id",
     recent_average: float | None = None,
+    check_duplicate_ids: bool = True,
 ) -> Health:
-    """Judge one extraction result."""
+    """Judge one extraction result.
+
+    `check_duplicate_ids` applies when every row came from the same page. A repeated
+    id there means the item selector matched the wrong level of the document. When
+    the rows come from separate pages — one listing per page — a repeated id means
+    discovery produced the same listing twice, which is a different fault with a
+    different fix and must not be reported as a broken schema.
+    """
     notes: list[str] = []
     items = len(rows)
 
@@ -53,7 +61,7 @@ def evaluate(
     }
 
     ids = [str(r.get(id_field)) for r in rows if _present(r.get(id_field))]
-    duplicates = len(ids) - len(set(ids))
+    duplicates = (len(ids) - len(set(ids))) if check_duplicate_ids else 0
 
     implausible = sum(1 for r in rows if _implausible(r))
 

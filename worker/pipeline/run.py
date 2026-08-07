@@ -275,6 +275,22 @@ def _discover(
                     )
                 else:
                     tasks.append(task)
+        # A sitemap can list the same listing under more than one URL, and the
+        # children can overlap. Without this the duplicates cost a request each and
+        # then look like an extraction fault further down.
+        unique: dict[str, FetchTask] = {}
+        duplicates = 0
+        for task in tasks:
+            key = task.external_id or task.url
+            if key in unique:
+                duplicates += 1
+                continue
+            unique[key] = task
+        if duplicates:
+            stage.set("duplicate_tasks_dropped", duplicates)
+            stage.log("info", f"dropped {duplicates} duplicate listing urls before fetching")
+        tasks = list(unique.values())
+
         # Order carries no meaning, and walking identifiers in sequence is one of
         # the most recognisable signatures of an automated client.
         urls = client.order([t.url for t in tasks])
@@ -357,7 +373,9 @@ def _collect(
             # The item floor belongs to the index, not here: a run may legitimately
             # find only one new listing, and treating that as a break would rewrite
             # a working schema for nothing.
-            health = evaluate(rows, source.fields, min_items=1)
+            # One listing per page, so a repeated id would mean duplicated
+            # discovery rather than a bad selector; that is checked earlier.
+            health = evaluate(rows, source.fields, min_items=1, check_duplicate_ids=False)
             extract_stage.set("health", health.verdict)
             extract_stage.set("fill_rate", {k: round(v, 3) for k, v in health.fill_rate.items()})
             if health.verdict != "ok":

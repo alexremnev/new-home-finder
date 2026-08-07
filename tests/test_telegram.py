@@ -42,15 +42,15 @@ def view(**overrides: Any) -> ListingView:
 def test_a_full_listing_renders_every_line() -> None:
     text = render_listing(view())
     print(text)
-    assert "£1,950/мес" in text
-    assert "2 спальни" in text
+    assert "£1,950/mo" in text
+    assert "2 bedrooms" in text
     assert "SE16" in text and "Zone 2" in text
-    assert "12 сен" in text
-    assert "мин. 12 мес" in text
-    assert "Питомцы: можно" in text
-    assert "Счета: не включены" in text
+    assert "12 Sep" in text
+    assert "min 12 months" in text
+    assert "Pets: allowed" in text
+    assert "Bills: not included" in text
     assert "https://www.openrent.co.uk" in text
-    assert "напрямую от собственника" in text
+    assert "direct from landlord" in text
     assert "/stop" in text
 
 
@@ -62,11 +62,11 @@ def test_unknown_values_drop_their_line_rather_than_saying_unknown() -> None:
     )
     assert "📅" not in text
     assert "📍" not in text
-    assert "Питомцы" not in text
-    assert "Счета" not in text
+    assert "Pets" not in text
+    assert "Bills" not in text
     assert "🛋" not in text
     # The essentials survive.
-    assert "£1,950/мес" in text and "https://" in text and "/stop" in text
+    assert "£1,950/mo" in text and "https://" in text and "/stop" in text
 
 
 def test_every_message_carries_the_unsubscribe_line() -> None:
@@ -82,10 +82,10 @@ def test_neither_photographs_nor_a_description_are_reproduced() -> None:
 
 
 def test_the_three_states_of_a_flag_render_differently() -> None:
-    assert "Питомцы: можно" in render_listing(view(pets_allowed=True))
-    assert "Питомцы: нельзя" in render_listing(view(pets_allowed=False))
+    assert "Pets: allowed" in render_listing(view(pets_allowed=True))
+    assert "Pets: not allowed" in render_listing(view(pets_allowed=False))
     text = render_listing(view(pets_allowed=None))
-    assert "Питомцы" not in text
+    assert "Pets" not in text
 
 
 # ── wording details ───────────────────────────────────────────────────────
@@ -93,27 +93,26 @@ def test_the_three_states_of_a_flag_render_differently() -> None:
 
 def test_a_studio_is_not_called_zero_bedrooms() -> None:
     text = render_listing(view(bedrooms=0, property_type="studio"))
-    assert "студия" in text
+    assert "studio" in text
     assert "0 " not in text
-    # The word already names the type; repeating it reads as "студия · studio".
-    assert "studio" not in text
+    # The word already names the type; repeating it would read as "studio · studio".
+    assert text.splitlines()[0].count("studio") == 1
     assert text.splitlines()[0].count("·") == 1
 
 
 def test_a_room_in_a_shared_property_is_named_as_one() -> None:
     text = render_listing(view(bedrooms=1, property_type="room"))
-    assert "комната" in text
+    assert "room in a share" in text
     # The type is already in the word; it is not repeated.
-    assert text.count("комната") == 1
+    assert text.splitlines()[0].count("room") == 1
 
 
 @pytest.mark.parametrize(
     ("count", "expected"),
-    [(1, "спальня"), (2, "спальни"), (3, "спальни"), (4, "спальни"),
-     (5, "спален"), (11, "спален"), (12, "спален"), (21, "спальня"), (22, "спальни")],
+    [(1, "1 bedroom"), (2, "2 bedrooms"), (5, "5 bedrooms")],
 )
 def test_plural_agreement(count: int, expected: str) -> None:
-    assert plural(count, ("спальня", "спальни", "спален")) == expected
+    assert plural(count, "bedroom") == expected
 
 
 def test_prices_are_grouped() -> None:
@@ -127,12 +126,12 @@ def test_prices_are_grouped() -> None:
 
 def test_a_text_alert_renders_its_actions_as_plain_links() -> None:
     alert = Alert(
-        kind="stopped", text="Спасибо!",
-        actions=[Action(label="Отзыв", url="https://x/review")],
+        kind="stopped", text="Thanks for using the service.",
+        actions=[Action(label="Leave a review", url="https://x/review")],
     )
     text = render(alert)
-    assert "Спасибо!" in text
-    assert "Отзыв: https://x/review" in text
+    assert "Thanks for using the service." in text
+    assert "Leave a review: https://x/review" in text
 
 
 def test_a_listing_alert_without_a_listing_is_a_programming_error() -> None:
