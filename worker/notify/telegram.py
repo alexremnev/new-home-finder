@@ -1,0 +1,212 @@
+"""Telegram delivery.
+
+Messages are sent as plain text with no parse mode. This is a change from the
+earlier plan, which called for MarkdownV2 with escaping: a listing line contains
+`£1,950 (E14)` and `-`, every one of which MarkdownV2 treats as syntax, and a
+single missed escape is a rejected message rather than an ugly one. Plain text
+removes that failure mode entirely, and Telegram links bare URLs by itself.
+
+Link previews are disabled. A preview would pull the site's own photograph into
+our message, which is the one thing the content rules say not to do — facts and a
+link to the original, nothing reproduced.
+
+Two things are separated on purpose: rendering is a pure function of an `Alert`,
+and sending is injectable. The wording can therefore be tested without a network
+and without a bot token.
+"""
+
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from datetime import date
+from typing import Any
+
+from worker.contracts.notify import Alert, AlertKind, ListingView, Recipient, SendResult, register_notifier
+
+API = "https://api.telegram.org/bot{token}/sendMessage"
+LIMIT = 4096
+
+MONTHS = (
+    "янв", "фев", "мар", "апр", "мая", "июн",
+    "июл", "авг", "сен", "окт", "ноя", "дек",
+)
+
+# Wording lives here so that changing the language, or the tone, is one edit
+# rather than a hunt through the rendering code.
+LABELS = {
+    "per_month": "/мес",
+    "studio": "студия",
+    "room": "комната",
+    "rooms": ("спальня", "спальни", "спален"),
+    "zone": "Zone",
+    "available": "Свободна с",
+    "available_now": "Свободна сейчас",
+    "min_term": "мин.",
+    "months": "мес",
+    "pets_yes": "🐾 Питомцы: можно",
+    "pets_no": "🐾 Питомцы: нельзя",
+    "bills_yes": "💡 Счета включены",
+    "bills_no": "💡 Счета: не включены",
+    "landlord_direct": "напрямую от собственника",
+    "unsubscribe": "/stop — отписаться",
+}
+
+
+def plural(count: int, forms: tuple[str, str, str]) -> str:
+    """Russian plural agreement: 1 спальня, 2 спальни, 5 спален."""
+    tens = count % 100
+    if 11 <= tens <= 14:
+        return forms[2]
+    ones = count % 10
+    if ones == 1:
+        return forms[0]
+    if 2 <= ones <= 4:
+        return forms[1]
+    return forms[2]
+
+
+def money(amount: int) -> str:
+    return f"£{amount:,}".replace(",", ",")
+
+
+def short_date(value: date) -> str:
+    return f"{value.day} {MONTHS[value.month - 1]}"
+
+
+def render_listing(view: ListingView) -> str:
+    """Render one listing.
+
+    A line whose values are all unknown is omitted rather than filled with
+    "unknown": the message is shorter and it does not claim to know things it does
+    not.
+    """
+    lines: list[str] = []
+
+    # A studio and a room already name the property type, so repeating it would
+    # read as "студия · studio".
+    if view.bedrooms == 0:
+        rooms, type_is_implied = LABELS["studio"], True
+    elif view.property_type == "room":
+        rooms, type_is_implied = LABELS["room"], True
+    else:
+        rooms = f"{view.bedrooms} {plural(view.bedrooms, LABELS['rooms'])}"  # type: ignore[arg-type]
+        type_is_implied = False
+    head = [f"{money(view.price_pcm)}{LABELS['per_month']}", rooms]
+    if view.property_type and not type_is_implied:
+        head.append(view.property_type)
+    lines.append("🏠 " + " · ".join(head))
+
+    where = [part for part in (view.district, f"{LABELS['zone']} {view.zone}" if view.zone else None) if part]
+    if where:
+        lines.append("📍 " + " · ".join(where))
+
+    when: list[str] = []
+    if view.available_from is not None:
+        when.append(f"{LABELS['available']} {short_date(view.available_from)}")
+    if view.min_tenancy_months:
+        when.append(f"{LABELS['min_term']} {view.min_tenancy_months} {LABELS['months']}")
+    if when:
+        lines.append("📅 " + " · ".join(when))
+
+    flags: list[str] = []
+    if view.furnished and view.furnished != "unknown":
+        flags.append("🛋 " + view.furnished.capitalize())
+    if view.pets_allowed is not None:
+        flags.append(LABELS["pets_yes"] if view.pets_allowed else LABELS["pets_no"])
+    if view.bills_included is not None:
+        flags.append(LABELS["bills_yes"] if view.bills_included else LABELS["bills_no"])
+    if flags:
+        lines.append("   ".join(flags))
+
+    lines.append("🔗 " + view.url)
+
+    origin = view.source_display
+    if view.is_landlord_direct:
+        origin += " · " + LABELS["landlord_direct"]
+    lines.append("— " + origin)
+
+    lines.append("")
+    lines.append(LABELS["unsubscribe"])
+    return "\n".join(lines)
+
+
+def render(alert: Alert) -> str:
+    if alert.kind == "listing":
+        if alert.listing is None:
+            raise ValueError("a listing alert needs a listing")
+        text = render_listing(alert.listing)
+    else:
+        text = alert.text or ""
+        if alert.actions:
+            text += "\n\n" + "\n".join(
+                f"{action.label}: {action.url}" for action in alert.actions
+            )
+    return text[:LIMIT]
+
+
+Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
+
+
+def _post(url: str, payload: dict[str, Any], *, timeout: float = 20.0) -> dict[str, Any]:
+    body = json.dumps(payload).encode()
+    request = urllib.request.Request(
+        url, data=body, headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return dict(json.load(response))
+    except urllib.error.HTTPError as exc:
+        try:
+            return dict(json.load(exc))
+        except Exception:  # noqa: BLE001 - a non-JSON error body still has a status
+            return {"ok": False, "error_code": exc.code, "description": exc.reason}
+
+
+@register_notifier
+class TelegramNotifier:
+    key = "telegram"
+
+    def __init__(self, token: str | None = None, sender: Sender | None = None) -> None:
+        self.token = token
+        self.sender = sender or (lambda url, payload: _post(url, payload))
+
+    def supports(self, kind: AlertKind) -> bool:
+        return kind in ("listing", "welcome", "stopped", "ops")
+
+    def send(self, to: Recipient, alert: Alert) -> SendResult:
+        if not self.token:
+            return SendResult(ok=False, error="no telegram token configured", retryable=False)
+        payload = {
+            "chat_id": to.address,
+            "text": render(alert),
+            "disable_web_page_preview": True,
+        }
+        try:
+            response = self.sender(API.format(token=self.token), payload)
+        except Exception as exc:  # noqa: BLE001 - transport failures are retryable
+            return SendResult(ok=False, error=f"{type(exc).__name__}: {exc}", retryable=True)
+        return _interpret(response)
+
+
+def _interpret(response: dict[str, Any]) -> SendResult:
+    if response.get("ok"):
+        message_id = str((response.get("result") or {}).get("message_id") or "")
+        return SendResult(ok=True, provider_msg_id=message_id or None)
+
+    code = int(response.get("error_code") or 0)
+    description = str(response.get("description") or "unknown error")
+    # 403 means the person blocked the bot or deleted the chat. Retrying cannot
+    # help and repeated attempts count against the bot's standing, so it is final.
+    retryable = code in (429, 500, 502, 503, 504) or code == 0
+    return SendResult(ok=False, error=f"{code}: {description}", retryable=retryable)
+
+
+def is_blocked_by_user(result: SendResult) -> bool:
+    """Distinguish "this person is gone" from "this failed once".
+
+    A blocked bot must stop the subscription rather than accumulate failures.
+    """
+    return bool(result.error and result.error.startswith(("403", "400: Bad Request: chat not found")))
