@@ -23,33 +23,72 @@ Verdict = Literal["ok", "degraded", "broken"]
 
 
 class FieldRule(BaseModel):
-    """How to locate one field within a single listing element."""
+    """How to locate one field within a single listing element.
+
+    Four ways to say where a value is, and exactly one must be chosen:
+
+      path   JSONPath, for the structured strategies
+      sel    CSS selector, for the dom strategy
+      label  the text of a label cell; the value is taken from the cell beside it
+      const  a fixed value, for a fact implied by the source rather than the page
+
+    `label` exists because portals present listing details as label-and-value
+    tables, and a CSS path to the value cell encodes its position. Anchoring on
+    the label text instead survives the rows being reordered, which is the most
+    common kind of markup change.
+    """
 
     model_config = {"extra": "forbid"}
 
-    # Structured strategies (next_data, api_json, jsonld): JSONPath relative to
-    # the listing element.
     path: str | None = None
 
-    # The dom strategy: CSS selector relative to the listing element. The
-    # literal "self" addresses the element itself.
+    # The literal "self" addresses the listing element itself.
     sel: str | None = None
+
+    label: str | None = Field(
+        default=None,
+        description="matched against the start of a label cell's text, "
+        "case-insensitively, so a help tooltip inside the cell does not defeat it",
+    )
+    label_in: str = Field(default="td,th,dt", description="tag names that may hold a label")
+    value_in: str = Field(default="td,th,dd", description="tag names that may hold a value")
+
     attr: str | None = None
 
-    # Applied to whichever of the above produced a value.
+    # Applied to whatever text the locator produced.
     regex: str | None = Field(default=None, description="first capture group is taken")
 
-    # A fixed value, for facts implied by the source rather than the page.
+    # A yes/no field is often an icon rather than text: a tick or a cross in the
+    # value cell. These test for its presence and yield True, False, or None for
+    # "the listing did not say" — three states, because the data has three.
+    true_if: str | None = Field(
+        default=None, description="CSS selector; if it matches inside the value, the field is True"
+    )
+    false_if: str | None = Field(
+        default=None, description="CSS selector; if it matches inside the value, the field is False"
+    )
+
     const: str | int | float | bool | None = None
 
     @model_validator(mode="after")
     def _exactly_one_locator(self) -> FieldRule:
-        locators = [self.path is not None, self.sel is not None, self.const is not None]
+        locators = [
+            self.path is not None,
+            self.sel is not None,
+            self.label is not None,
+            self.const is not None,
+        ]
         if sum(locators) != 1:
-            raise ValueError("provide exactly one of: path, sel, const")
-        if self.attr is not None and self.sel is None:
-            raise ValueError("attr applies to sel only")
+            raise ValueError("provide exactly one of: path, sel, label, const")
+        if self.attr is not None and self.sel is None and self.label is None:
+            raise ValueError("attr applies to sel or label")
+        if (self.true_if or self.false_if) and self.path is not None:
+            raise ValueError("true_if and false_if are for the dom strategy")
         return self
+
+    @property
+    def is_tri_state(self) -> bool:
+        return self.true_if is not None or self.false_if is not None
 
 
 class ExtractionSchema(BaseModel):

@@ -89,13 +89,25 @@ class Source(Protocol):
     fields: tuple[FieldSpec, ...]
     """The extraction specification; see FieldSpec."""
 
-    def discover(
-        self, locations: list[SourceLocation], mode: Mode, known_ids: set[str]
-    ) -> Iterator[FetchTask]:
-        """Yield the requests for one run.
+    def discover(self, locations: list[SourceLocation], mode: Mode) -> Iterator[FetchTask]:
+        """Yield the index requests for one run: sitemaps, search pages, or both.
 
-        `known_ids` lets an adapter skip listings already stored, which is what
-        keeps a run to a handful of requests rather than a full crawl.
+        Discovery is two-phase because an index has to be read before the pages it
+        points at are known. Keeping the phases separate keeps both of them pure
+        functions of their input, which means they can be tested without network
+        access.
+        """
+        ...
+
+    def expand(
+        self, result: FetchResult, *, scope: frozenset[str], known_ids: set[str]
+    ) -> Iterator[FetchTask]:
+        """Turn an index response into requests for individual listings.
+
+        `scope` and `known_ids` are applied here rather than after fetching, so a
+        listing outside the configured districts, or one already stored, costs no
+        request at all. That is what keeps a run to a handful of requests instead
+        of one per listing nationwide.
         """
         ...
 
