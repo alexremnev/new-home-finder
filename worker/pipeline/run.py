@@ -38,6 +38,7 @@ from worker.fetch.client import (
     Transport,
 )
 from worker.obs import Run, Stage
+from worker.pipeline.outbox import drain, queue_matches
 from worker.pipeline.reconcile import Summary, decide_missing, decide_seen
 
 # Imported from the package, not from the contracts module: the registry is filled
@@ -75,10 +76,10 @@ def run_job(
     without touching a live site.
     """
     if job == "drain":
-        with run.stage("notify") as stage:
-            stage.set("implemented", False)
-            stage.log("debug", "delivery is not implemented yet")
-        return "degraded"
+        # A separate job so that a delivery failure can be retried without
+        # scraping anything again, and so quiet hours can hold messages and a
+        # later tick can release them.
+        return drain(conn, run, suppress=suppress_delivery, dry_run=cfg.dry_run)
 
     keys = [source_key] if source_key else _all_enabled_sources(conn)
     if not keys:
@@ -180,16 +181,18 @@ def _run_source(
             ua_escalations=client.stats.ua_escalations,
         )
 
-    with run.stage("match", source_key=source_key) as stage:
-        stage.set("candidates", len(summary.new_ids))
-        stage.set("implemented", False)
-        stage.log("debug", "matching is not implemented yet")
-    with run.stage("notify", source_key=source_key) as stage:
-        stage.set("suppressed", suppress_delivery)
-        stage.set("implemented", False)
-        stage.log("debug", "delivery is not implemented yet")
+    # Matching runs even when nothing was found, so that the stage always leaves a
+    # row: a run with no `match` stage is indistinguishable from one that crashed
+    # before reaching it.
+    queue_matches(conn, run, source_key=source_key, listing_ids=summary.new_ids)
 
-    return "degraded"  # match and notify are still placeholders
+    # Delivery happens in the same run rather than waiting for the next tick. The
+    # value of this service is in the minutes between a listing appearing and the
+    # message arriving, and a separate pass would add a whole interval to that.
+    return drain(
+        conn, run, source_key=source_key,
+        suppress=suppress_delivery, dry_run=cfg.dry_run,
+    )
 
 
 def _scope(

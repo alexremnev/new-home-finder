@@ -61,6 +61,12 @@ class SendResult(BaseModel):
     provider_msg_id: str | None = None
     error: str | None = None
     retryable: bool = False
+    # "This person is gone" as opposed to "this failed once": a blocked bot, a
+    # deleted chat, a dead number. The channel knows how its provider says this;
+    # the delivery stage only needs to know that retrying is pointless and the
+    # subscription should stop. Without it the pipeline would have to read
+    # provider error codes, which is exactly what these contracts exist to avoid.
+    recipient_gone: bool = False
     cost_micros: int = 0
 
 
@@ -73,10 +79,23 @@ class Notifier(Protocol):
     def send(self, to: Recipient, alert: Alert) -> SendResult: ...
 
 
-NOTIFIERS: dict[str, Notifier] = {}
+# Classes, not instances. Credentials are read by each channel in its own
+# module, so adding WhatsApp is a new file plus a row in `channels` — never an
+# edit to the delivery stage.
+NOTIFIERS: dict[str, type] = {}
 
 
 def register_notifier(cls: type) -> type:
-    instance = cls()
-    NOTIFIERS[instance.key] = instance
+    NOTIFIERS[cls.key] = cls
     return cls
+
+
+def build_notifier(channel: str) -> Notifier | None:
+    """A notifier ready to send, or None if this channel has no implementation.
+
+    A missing implementation is not an error here: `channels` may hold a row for
+    a channel that is planned but not built, and a queued message for one of
+    those must fail visibly on its own rather than stop the whole run.
+    """
+    cls = NOTIFIERS.get(channel)
+    return cls.from_env() if cls is not None else None

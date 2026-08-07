@@ -316,6 +316,211 @@ def _listing_values(listing: Listing) -> dict[str, Any]:
     return {name: data.get(name) for name in _INSERT_COLUMNS}
 
 
+# ── matching and the outbox ───────────────────────────────────────────────
+#
+# Delivery goes through a table rather than straight out of the matcher. The
+# reason is the one property that matters most here: a listing must reach the
+# recipient exactly once. A crash between deciding to send and sending would,
+# without a row to point at, either lose the message or repeat it, and
+# `UNIQUE (user_id, listing_id)` makes the repeat impossible even if the whole
+# stage runs twice.
+
+_LISTING_VIEW_COLUMNS = (
+    "price_pcm", "bedrooms", "property_type", "postcode_district", "tfl_zone",
+    "available_from", "furnished", "pets_allowed", "bills_included",
+    "min_tenancy_months", "is_landlord_direct", "url",
+)
+
+
+def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
+    """The listings a run just found, oldest first.
+
+    Read back from the database rather than reused from memory because matching
+    needs `first_seen_at`, which only exists once the row is written.
+    """
+    if not listing_ids:
+        return []
+    columns = ", ".join(_LISTING_VIEW_COLUMNS)
+    return list(
+        conn.execute(
+            f"SELECT id, first_seen_at, {columns} FROM listings "  # noqa: S608 - fixed names
+            "WHERE id = ANY(%s) ORDER BY first_seen_at, id",
+            (listing_ids,),
+        ).fetchall()
+    )
+
+
+def active_subscriptions(conn: Conn) -> list[Row]:
+    """Every filter that should currently receive alerts.
+
+    The address is deliberately not selected: matching does not need it, and a
+    value that is never loaded cannot be logged by accident.
+    """
+    return list(
+        conn.execute(
+            """
+            SELECT s.id, s.user_id, s.criteria, s.backfill_from, s.max_alerts_per_day,
+                   uc.channel
+              FROM subscriptions s
+              JOIN users u          ON u.id = s.user_id
+              JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
+              JOIN channels c       ON c.key = uc.channel AND c.enabled
+             WHERE s.active AND u.status = 'active'
+             ORDER BY s.id
+            """
+        ).fetchall()
+    )
+
+
+def sent_today(conn: Conn) -> dict[int, int]:
+    """Messages already queued or sent to each user in the current London day.
+
+    The cap is a promise about the recipient's day, so it turns over at local
+    midnight rather than at 00:00 UTC. Queued rows count: they are going to be
+    delivered, and leaving them out would let one run queue past the cap.
+    """
+    rows = conn.execute(
+        """
+        SELECT user_id, count(*) AS n FROM notifications
+         WHERE status IN ('queued', 'sent')
+           AND created_at >= date_trunc('day', now() AT TIME ZONE 'Europe/London')
+                             AT TIME ZONE 'Europe/London'
+         GROUP BY user_id
+        """
+    ).fetchall()
+    return {int(r["user_id"]): int(r["n"]) for r in rows}
+
+
+def queue_notification(
+    conn: Conn, *, user_id: int, subscription_id: int, listing_id: int, channel: str,
+    kind: str = "new_listing",
+) -> bool:
+    """Add one message to the outbox. False means this user already had it."""
+    row = conn.execute(
+        """
+        INSERT INTO notifications (user_id, subscription_id, listing_id, channel, kind)
+        VALUES (%s, %s, %s, %s, %s)
+        ON CONFLICT (user_id, listing_id) DO NOTHING
+        RETURNING id
+        """,
+        (user_id, subscription_id, listing_id, channel, kind),
+    ).fetchone()
+    return row is not None
+
+
+def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
+    """Take a batch of queued messages and count the attempt before sending.
+
+    Counting first is deliberate. If the process dies mid-send the attempt is
+    already recorded, so a message that kills the worker is retried a bounded
+    number of times instead of forever.
+    """
+    claimed = conn.execute(
+        """
+        WITH due AS (
+            SELECT id FROM notifications
+             WHERE status = 'queued' AND attempts < %(max_attempts)s
+             ORDER BY created_at
+             LIMIT %(limit)s
+             FOR UPDATE SKIP LOCKED
+        )
+        UPDATE notifications n SET attempts = n.attempts + 1
+          FROM due WHERE n.id = due.id
+        RETURNING n.id
+        """,
+        {"limit": limit, "max_attempts": max_attempts},
+    ).fetchall()
+    ids = [int(r["id"]) for r in claimed]
+    if not ids:
+        return []
+    columns = ", ".join(f"l.{name}" for name in _LISTING_VIEW_COLUMNS)
+    return list(
+        conn.execute(
+            f"""
+            SELECT n.id, n.user_id, n.channel, n.kind, n.attempts,
+                   uc.address, src.display_name AS source_display, {columns}
+              FROM notifications n
+              JOIN listings l  ON l.id = n.listing_id
+              JOIN sources src ON src.key = l.source_key
+              LEFT JOIN user_channels uc
+                     ON uc.user_id = n.user_id AND uc.channel = n.channel
+             WHERE n.id = ANY(%s)
+             ORDER BY n.created_at
+            """,  # noqa: S608 - column names are a fixed tuple in this module
+            (ids,),
+        ).fetchall()
+    )
+
+
+def queued_count(conn: Conn) -> int:
+    row = conn.execute(
+        "SELECT count(*) AS n FROM notifications WHERE status = 'queued'"
+    ).fetchone()
+    return int((row or {}).get("n") or 0)
+
+
+def mark_sent(
+    conn: Conn, notification_id: int, *, provider_msg_id: str | None, cost_micros: int = 0
+) -> None:
+    conn.execute(
+        """
+        UPDATE notifications
+           SET status = 'sent', sent_at = now(), provider_msg_id = %s,
+               cost_micros = %s, error = NULL
+         WHERE id = %s
+        """,
+        (provider_msg_id, cost_micros, notification_id),
+    )
+
+
+def mark_failed(conn: Conn, notification_id: int, error: str) -> None:
+    conn.execute(
+        "UPDATE notifications SET status = 'failed', error = %s WHERE id = %s",
+        (error[:500], notification_id),
+    )
+
+
+def mark_skipped(conn: Conn, notification_id: int, reason: str) -> None:
+    """Abandoned rather than attempted: the recipient is gone, or delivery was
+    called off for a reason that has nothing to do with this message."""
+    conn.execute(
+        "UPDATE notifications SET status = 'skipped', error = %s WHERE id = %s",
+        (reason[:500], notification_id),
+    )
+
+
+def leave_queued(conn: Conn, notification_id: int, error: str) -> None:
+    """A failure worth retrying: the reason is recorded, the row stays in the queue."""
+    conn.execute(
+        "UPDATE notifications SET error = %s WHERE id = %s",
+        (error[:500], notification_id),
+    )
+
+
+def stop_user(conn: Conn, user_id: int, *, reason: str) -> None:
+    """The recipient is unreachable: stop trying, and stop collecting for them.
+
+    Subscriptions are deactivated rather than deleted. Deleting is what `/stop`
+    means — an explicit request — and this is not that: someone who blocked the
+    bot and later unblocks it should find their filter intact.
+    """
+    conn.execute(
+        """
+        UPDATE users SET status = 'blocked', stopped_at = now()
+         WHERE id = %s AND status <> 'blocked'
+        """,
+        (user_id,),
+    )
+    conn.execute("UPDATE subscriptions SET active = false WHERE user_id = %s", (user_id,))
+    conn.execute(
+        """
+        UPDATE notifications SET status = 'skipped', error = %s
+         WHERE user_id = %s AND status = 'queued'
+        """,
+        (reason[:500], user_id),
+    )
+
+
 # ── conditional request validators ────────────────────────────────────────
 
 

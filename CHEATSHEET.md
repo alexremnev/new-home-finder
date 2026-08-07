@@ -34,6 +34,49 @@ uv run ruff check .                            # линтер
 uv run mypy worker                             # типы
 ```
 
+`tests/test_outbox_db.py` требует настоящий Postgres и без него пропускается —
+там проверяется то, чего у заглушки быть не может: уникальный индекс, граница
+суток, `ON CONFLICT`, поведение LEFT JOIN. **Базу он затирает**, поэтому только
+одноразовый контейнер, никогда не Supabase.
+
+```bash
+docker run -d --name pg -e POSTGRES_PASSWORD=x -p 5433:5432 postgres:16-alpine
+TEST_DATABASE_URL=postgresql://postgres:x@localhost:5433/postgres uv run pytest tests/test_outbox_db.py -q
+docker rm -f pg
+```
+
+## Уведомления
+
+Бот: `@BotFather` → `/newbot` → имя и username (обязательно кончается на `bot`).
+Токен из ответа — в `.env` как `TELEGRAM_TOKEN`. Свой chat id: написать боту
+что-нибудь и открыть `https://api.telegram.org/bot<ТОКЕН>/getUpdates`, взять
+`chat.id`.
+
+```bash
+uv run python -m worker drain                  # отправить очередь
+uv run python -m worker drain --dry-run        # посмотреть сколько ждёт, не отправляя
+```
+
+`hot` отправляет сам, в том же прогоне — ждать отдельного `drain` не нужно. `drain`
+как отдельная джоба существует для двух случаев: повторить доставку без повторного
+скрапинга и выпустить очередь, задержанную тихими часами.
+
+```sql
+-- очередь и её состояние
+SELECT status, count(*) FROM notifications GROUP BY status;
+
+-- почему не ушло
+SELECT id, user_id, attempts, error FROM notifications
+ WHERE status IN ('queued','failed') ORDER BY created_at DESC LIMIT 20;
+
+-- дневной лимит на пользователя
+UPDATE subscriptions SET max_alerts_per_day = 20 WHERE id = 1;
+```
+
+Состояния строки: `queued` (ждёт), `sent`, `failed` (насовсем — либо ошибка
+неповторяемая, либо кончились 5 попыток), `skipped` (получатель недоступен,
+остаток его очереди брошен).
+
 ## Доступность источников и фикстуры
 
 ```bash

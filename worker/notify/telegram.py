@@ -18,6 +18,7 @@ and without a bot token.
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -167,6 +168,16 @@ class TelegramNotifier:
         self.token = token
         self.sender = sender or (lambda url, payload: _post(url, payload))
 
+    @classmethod
+    def from_env(cls) -> TelegramNotifier:
+        """How the delivery stage obtains a sender.
+
+        The token is read here and not handed down the pipeline, so the stage
+        stays ignorant of what any particular channel needs to authenticate.
+        `.env` has already been loaded by `Config` before any job runs.
+        """
+        return cls(os.environ.get("TELEGRAM_TOKEN") or None)
+
     def supports(self, kind: AlertKind) -> bool:
         return kind in ("listing", "welcome", "stopped", "ops")
 
@@ -195,12 +206,12 @@ def _interpret(response: dict[str, Any]) -> SendResult:
     # 403 means the person blocked the bot or deleted the chat. Retrying cannot
     # help and repeated attempts count against the bot's standing, so it is final.
     retryable = code in (429, 500, 502, 503, 504) or code == 0
-    return SendResult(ok=False, error=f"{code}: {description}", retryable=retryable)
+    gone = code == 403 or "chat not found" in description.lower()
+    return SendResult(
+        ok=False, error=f"{code}: {description}", retryable=retryable, recipient_gone=gone
+    )
 
 
 def is_blocked_by_user(result: SendResult) -> bool:
-    """Distinguish "this person is gone" from "this failed once".
-
-    A blocked bot must stop the subscription rather than accumulate failures.
-    """
-    return bool(result.error and result.error.startswith(("403", "400: Bad Request: chat not found")))
+    """Kept for readability at call sites; the judgement itself is on the result."""
+    return result.recipient_gone
