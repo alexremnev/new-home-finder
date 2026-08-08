@@ -77,6 +77,39 @@ UPDATE subscriptions SET max_alerts_per_day = 20 WHERE id = 1;
 неповторяемая, либо кончились 5 попыток), `skipped` (получатель недоступен,
 остаток его очереди брошен).
 
+## Веб-часть (apps/web)
+
+```bash
+cd apps/web
+npm install
+npm run dev          # http://localhost:3000
+npm test             # парсер формы и парсер команд бота
+npm run typecheck
+```
+
+Регистрация вебхука — только после деплоя, Telegram ходит по HTTPS:
+
+```bash
+SECRET=$(openssl rand -hex 24)     # он же в TELEGRAM_WEBHOOK_SECRET
+curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook" \
+  -d "url=https://<приложение>.vercel.app/api/tg/webhook" \
+  -d "secret_token=$SECRET" -d 'allowed_updates=["message"]'
+curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/getWebhookInfo"
+```
+
+`secret_token` — вся защита маршрута: URL не секрет, он попадает в логи. Бот
+держит ровно один вебхук, поэтому кто поставил последним — тот и владеет.
+
+```sql
+-- кто подписан и на что
+SELECT u.id, u.status, s.label, s.max_alerts_per_day, s.backfill_from
+  FROM users u LEFT JOIN subscriptions s ON s.user_id = u.id ORDER BY u.id;
+
+-- зависшие pending: форму заполнили, но Start в боте не нажали
+SELECT id, created_at, token_expires_at FROM users
+ WHERE status = 'pending' AND token_expires_at < now();
+```
+
 ## Доступность источников и фикстуры
 
 ```bash
@@ -99,6 +132,26 @@ python scripts/reduce_fixture.py snapshots/openrent/detail.plain_honest.html \
 
 `snapshots/` в `.gitignore` — сырые страницы остаются на той машине, где скачаны.
 Коммитятся только урезанные фикстуры.
+
+## Источники
+
+```bash
+uv run python -m worker hot --source openrent --districts SE16
+uv run python -m worker hot --source rightmove --districts SE16
+uv run python -m worker hot                     # все включённые источники
+```
+
+Rightmove читает обычную страницу поиска `/property-to-rent/SE16.html?sortType=6`
+— район это сам слаг URL, сортировка «новые сначала», поэтому hot-прогон берёт
+одну страницу на район. JSON-эндпоинт `/api/*` запрещён `robots.txt` и не
+используется. Минимальный срок аренды там за модалкой, поэтому остаётся
+неизвестным: подписка с `min_tenancy_max_months` объявления Rightmove не
+получит — это правило «заданный критерий требует известного значения», а не баг.
+
+```sql
+-- выключить источник целиком, без деплоя
+UPDATE sources SET enabled = false WHERE key = 'rightmove';
+```
 
 ## Частота и охват — это данные, не код
 

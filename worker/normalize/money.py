@@ -60,6 +60,11 @@ def to_pcm(text: str | None, *, default_period: Period = "month") -> int:
     `default_period` applies only when the text carries no period at all. It
     defaults to monthly because that is how every source in use displays prices
     when unqualified; a source that differs must say so explicitly.
+
+    Passing `default_period="unknown"` means the caller would rather fail than
+    guess. A source that always prints the period should say so this way: a
+    missing period there is a markup change, and silently reading a weekly rent
+    as monthly makes every filter wrong by a factor of four while looking fine.
     """
     if not text:
         raise PriceError("empty price")
@@ -70,6 +75,8 @@ def to_pcm(text: str | None, *, default_period: Period = "month") -> int:
     period = detect_period(str(text))
     if period == "unknown":
         period = default_period
+    if period == "unknown":
+        raise PriceError(f"no period in {text!r} and none assumed")
     if period == "week":
         amount = amount * 52 / 12
     return int(round(amount))

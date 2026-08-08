@@ -56,6 +56,29 @@ def split_postcode(value: str | None) -> tuple[str | None, str | None]:
     return normalize_outward(value), None
 
 
+# An address written out for a person ends with the district: "Rope Street,
+# Surrey Quays, London, SE16". The letters must sit against the digits, so a
+# "Studio 5" or a house number cannot be mistaken for a district.
+_TRAILING_OUTWARD = re.compile(r"([A-Z]{1,2}[0-9]{1,2}[A-Z]?)\s*$", re.IGNORECASE)
+
+
+def outward_from_address(value: str | None) -> str | None:
+    """The district named at the end of a written address, if it names one.
+
+    Rightmove's search cards carry an address rather than a URL slug, so this is
+    what applies the district filter before any listing page is requested.
+    Returns None when the address does not name a district — which means unknown,
+    never out of scope.
+    """
+    if not value:
+        return None
+    outward, _ = split_postcode(value)
+    if outward:
+        return outward
+    match = _TRAILING_OUTWARD.search(value.strip())
+    return normalize_outward(match.group(1)) if match else None
+
+
 def in_scope(url: str, scope: frozenset[str]) -> tuple[bool, str | None]:
     """Decide whether a listing URL is within the configured districts.
 
