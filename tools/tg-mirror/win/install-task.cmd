@@ -1,55 +1,22 @@
 @echo off
-REM Registers the hourly task. Run once, from a normal prompt — no elevation
-REM needed, because /RL LIMITED runs it as you, and reading your own Telegram
-REM messages needs nothing more than that.
+REM Registers the hourly task by handing over to install-task.ps1, which is where
+REM the work is: the settings that let the task run while nobody is logged in, and
+REM wake the machine from sleep, are reachable from the ScheduledTasks cmdlets and
+REM not from schtasks.
 REM
-REM /SC HOURLY /MO 1 with /ST 00:07 puts it seven minutes past the hour rather
-REM than on the hour, where every other scheduled thing on the machine already is.
+REM This wrapper exists so the thing stays double-clickable, and so the execution
+REM policy is bypassed for this one file rather than changed for the machine.
 REM
-REM Two settings this cannot reach, both worth having on a laptop, so the last
-REM step below opens the GUI for them:
-REM
-REM   "Run task as soon as possible after a scheduled start is missed" — without
-REM   it, hours spent asleep are simply skipped. Nothing is lost from Telegram
-REM   (history is real history, and the cursor is in state.json), but the copies
-REM   arrive only at the next waking hour.
-REM
-REM   "Hidden" — without it a console window flashes every hour.
+REM The script asks for your Windows password — Windows needs it to log the account
+REM in unattended — and elevates itself, because storing a task credential is an
+REM administrative act.
 
-setlocal
-set TASK=TG mirror
-
-schtasks /Create ^
-  /TN "%TASK%" ^
-  /TR "\"%~dp0run-mirror.cmd\"" ^
-  /SC HOURLY /MO 1 ^
-  /ST 00:07 ^
-  /RL LIMITED ^
-  /F
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-task.ps1"
 
 if errorlevel 1 (
   echo.
-  echo Could not register the task. Check the name is not already taken by
-  echo something you did not create: schtasks /Query /TN "%TASK%"
-  exit /b 1
+  echo install-task.ps1 reported a failure. Nothing was registered.
 )
 
 echo.
-echo Registered. Run it now to check it works end to end:
-echo   schtasks /Run /TN "%TASK%"
-echo   type "%~dp0..\logs\mirror-*.log"
-echo.
-echo Other useful commands:
-echo   schtasks /Query  /TN "%TASK%" /V /FO LIST
-echo   schtasks /Change /TN "%TASK%" /DISABLE
-echo   schtasks /Delete /TN "%TASK%" /F
-echo.
-echo Now tick two boxes the command line cannot set. Opening Task Scheduler:
-echo   Task Scheduler Library -^> "%TASK%" -^> Properties
-echo     Settings tab -^> "Run task as soon as possible after a scheduled start is missed"
-echo     General  tab -^> "Hidden"
-echo.
 pause
-REM `start` rather than a bare taskschd.msc: .MSC is in PATHEXT, so the bare form
-REM works but blocks this window until the console is closed.
-start "" taskschd.msc

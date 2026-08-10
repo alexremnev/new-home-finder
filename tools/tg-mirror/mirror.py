@@ -32,13 +32,20 @@ is the argument for a laptop or a small VPS over CI.
 
 Delivery
 --------
-`--via bot` (default) re-sends the text through your own bot, which is why
-`TG_DEST_BOT_TOKEN` exists. Only text survives: to re-upload a photo the script
-would have to download it first, and that is not worth it for a mirror.
+`--via bot` (default) re-sends through your own bot, which is why
+`TG_DEST_BOT_TOKEN` exists. The photo comes too: file ids belong to the bot that
+saw them, so a second bot cannot reference the same file and the bytes have to be
+downloaded and re-uploaded through this machine. Add `--no-media` to skip that.
 
-`--via forward` forwards natively, as you. Media, formatting and the "forwarded
-from" header all survive, and no bot token is involved — but your account must be
-a member of the destination chat.
+Links get the same treatment for the same reason — reconstruction, not
+reference. A listing bot puts them where `message.text` does not reach: hidden
+behind a hyperlinked word, or on an inline keyboard button. Both are dug out and
+appended as bare URLs, so nothing that could be opened is lost.
+
+`--via forward` forwards natively, as you. Media, formatting, buttons and the
+"forwarded from" header all survive untouched, Telegram moves the file
+server-side so nothing is downloaded, and no bot token is involved — but your
+account must be a member of the destination chat.
 
 Usage
 -----
@@ -46,8 +53,9 @@ Usage
     python mirror.py once                  # forward what is new, then exit (cron)
     python mirror.py once --backfill 3     # also take the last 3, to prove it works
     python mirror.py once --dry-run        # print, send nothing, remember nothing
+    python mirror.py once --no-media       # text and links only, no upload
     python mirror.py watch                 # stay connected and forward live
-    python mirror.py watch --via forward   # keep photos and formatting
+    python mirror.py watch --via forward   # forward as yourself, nothing rebuilt
 
 The cursor is the last id already forwarded, per chat, in `state.json` beside this
 file. A first run with no cursor forwards nothing and records where it started —
@@ -70,6 +78,14 @@ from typing import Any
 HERE = pathlib.Path(__file__).resolve().parent
 STATE = HERE / "state.json"
 LIMIT = 4096
+# A caption is not a message: Telegram allows 4096 characters of text and only
+# 1024 attached to a photo. Anything longer has to travel as its own message, or
+# the tail is silently lost.
+CAPTION_LIMIT = 1024
+# The Bot API's upload ceilings. A photo over the first is still deliverable as a
+# document, which is worth doing: a large photo is usually the interesting one.
+PHOTO_BYTES = 10 * 1024 * 1024
+UPLOAD_BYTES = 50 * 1024 * 1024
 PAUSE_SECONDS = 1.1
 
 try:
@@ -182,6 +198,82 @@ def post(token: str, method: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error_code": 0, "description": f"{type(exc).__name__}: {exc}"}
 
 
+def post_multipart(
+    token: str, method: str, fields: dict[str, Any],
+    file_field: str, filename: str, mime: str, content: bytes,
+) -> dict[str, Any]:
+    """Upload one file with its text fields, as multipart/form-data.
+
+    Hand-rolled rather than pulled from a library: `requests` would be a second
+    dependency for one request, and the encoding is a dozen lines. The boundary is
+    random so it cannot collide with bytes inside a photo — a fixed one would
+    corrupt the upload on exactly the file that happened to contain it.
+    """
+    boundary = "----mirror" + os.urandom(16).hex()
+    parts: list[bytes] = []
+    for name, value in fields.items():
+        if value is None:
+            continue
+        parts.append(
+            f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n"
+            f"{value}\r\n".encode()
+        )
+    parts.append(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{file_field}\"; "
+        f"filename=\"{filename}\"\r\nContent-Type: {mime}\r\n\r\n".encode()
+    )
+    body = b"".join(parts) + content + f"\r\n--{boundary}--\r\n".encode()
+
+    request = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/{method}",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        # Generous: a few megabytes over a domestic uplink is not a 30s operation.
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return dict(json.load(response))
+    except urllib.error.HTTPError as exc:
+        try:
+            return dict(json.load(exc))
+        except Exception:  # noqa: BLE001 - a non-JSON body still carries a status
+            return {"ok": False, "error_code": exc.code, "description": exc.reason}
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return {"ok": False, "error_code": 0, "description": f"{type(exc).__name__}: {exc}"}
+
+
+def links_in(message: Any) -> list[str]:
+    """Every URL the message carries, including the ones `message.text` does not show.
+
+    Three places hold links and only one of them is the visible text:
+
+      a bare https://… in the body            — already in `message.text`
+      a word hyperlinked to somewhere else    — the text says "View", the URL lives
+                                                on the entity
+      an inline keyboard button               — the URL is not in the text at all
+
+    A listing bot uses the last two for exactly the links worth having, so dropping
+    them would mean mirroring an advert with no way to open it.
+    """
+    found: list[str] = []
+    for entity in getattr(message, "entities", None) or []:
+        url = getattr(entity, "url", None)
+        if url:
+            found.append(str(url))
+    markup = getattr(message, "reply_markup", None)
+    for row in getattr(markup, "rows", None) or []:
+        for button in getattr(row, "buttons", None) or []:
+            url = getattr(button, "url", None)
+            if url:
+                found.append(str(url))
+
+    # Dropped if the body already shows it, so a plain link is not printed twice.
+    # Order is preserved and duplicates removed: the bot's own ordering is
+    # meaningful, and a dict keeps it while a set would not.
+    body = getattr(message, "text", None) or ""
+    return list(dict.fromkeys(url for url in found if url not in body))
+
+
 def media_label(message: Any) -> str | None:
     for attribute, label in (
         ("photo", "photo"), ("video", "video"), ("document", "document"),
@@ -193,23 +285,33 @@ def media_label(message: Any) -> str | None:
     return "media" if getattr(message, "media", None) else None
 
 
-def describe(message: Any, source: str) -> str:
+def describe(message: Any, source: str, *, media_attached: bool = False) -> str:
     """One message as plain text.
 
     No parse mode anywhere: this is text somebody else wrote, so any markup it
-    happens to contain would be a rejected message rather than an ugly one.
+    happens to contain would be a rejected message rather than an ugly one. Which
+    is also why hidden links are spelled out below instead of being re-linked —
+    a visible URL cannot be mangled by an escaping mistake.
+
+    `media_attached` says the photo is travelling with this text as its caption,
+    so the "[photo]" placeholder is not needed and would only be noise.
     """
     stamp = message.date.strftime("%d %b %H:%M") if message.date else ""
     header = " · ".join(part for part in (f"@{source}", stamp, f"msg {message.id}") if part)
-    label = media_label(message)
+    label = None if media_attached else media_label(message)
     text = (message.text or "").strip()
     if label and text:
         text = f"[{label}]\n{text}"
     elif label:
         text = f"[{label}, no text]"
     elif not text:
-        text = "[no text]"
-    body = f"{header}\n\n{text}"
+        text = "" if media_attached else "[no text]"
+
+    extra = links_in(message)
+    if extra:
+        text = (text + "\n\n" if text else "") + "\n".join(extra)
+
+    body = f"{header}\n\n{text}" if text else header
     return body if len(body) <= LIMIT else body[: LIMIT - 14].rstrip() + "\n… (truncated)"
 
 
@@ -217,14 +319,16 @@ class Destination:
     """Where copies go, and how. Both routes expose the same `send`, so the
     forwarding loop does not branch on the choice."""
 
-    def __init__(self, via: str, chat: str, token: str | None, client: Any) -> None:
+    def __init__(self, via: str, chat: str, token: str | None, client: Any,
+                 media: bool = True) -> None:
         self.via = via
         self.chat: str | int = int(chat) if chat.lstrip("-").isdigit() else chat
         self.token = token
         self.client = client
+        self.media = media
 
     @classmethod
-    def build(cls, via: str, client: Any) -> Destination:
+    def build(cls, via: str, client: Any, media: bool = True) -> Destination:
         chat = need(
             "TG_DEST_CHAT",
             "The chat id copies go to. Your own chat id works; a private group works too.",
@@ -236,29 +340,105 @@ class Destination:
                 "The token of *your* bot, from @BotFather → /mybots → API Token. "
                 "Or use --via forward, which needs no bot at all.",
             )
-        return cls(via, chat, token, client)
+        return cls(via, chat, token, client, media)
+
+    def check(self, response: dict[str, Any]) -> None:
+        if response.get("ok"):
+            return
+        code = response.get("error_code") or 0
+        raise Fault(
+            f"your bot could not deliver to {self.chat}: "
+            f"{code}: {response.get('description') or 'unknown error'}"
+            + (
+                "\nA bot cannot message a chat it has never been spoken to — open "
+                "your bot and press Start, or add it to the destination group."
+                if code == 403 else ""
+            )
+        )
 
     async def send(self, message: Any, source: str) -> None:
         if self.via == "forward":
+            # Nothing to reconstruct: a native forward carries the photo, the
+            # formatting, the buttons and the "forwarded from" header as they are.
             await self.client.forward_messages(self.chat, message)
             return
+
         assert self.token is not None
-        response = post(self.token, "sendMessage", {
-            "chat_id": self.chat,
-            "text": describe(message, source),
-            "disable_web_page_preview": True,
-        })
-        if not response.get("ok"):
-            code = response.get("error_code") or 0
-            raise Fault(
-                f"your bot could not deliver to {self.chat}: "
-                f"{code}: {response.get('description') or 'unknown error'}"
-                + (
-                    "\nA bot cannot message a chat it has never been spoken to — open "
-                    "your bot and press Start, or add it to the destination group."
-                    if code == 403 else ""
-                )
-            )
+        upload = await self.fetch_media(message) if self.media else None
+        if upload is None:
+            self.check(post(self.token, "sendMessage", {
+                "chat_id": self.chat,
+                "text": describe(message, source),
+                "disable_web_page_preview": True,
+            }))
+            return
+
+        method, field, filename, mime, content = upload
+        # The caption holds a quarter of what a message holds, so a long body
+        # travels separately rather than being cut off at 1024. Deliberately not
+        # both: a duplicated caption reads as a bug.
+        caption = describe(message, source, media_attached=True)
+        fits = len(caption) <= CAPTION_LIMIT
+        self.check(post_multipart(
+            self.token, method,
+            {"chat_id": self.chat, "caption": caption if fits else None},
+            field, filename, mime, content,
+        ))
+        if not fits:
+            await asyncio.sleep(PAUSE_SECONDS)
+            self.check(post(self.token, "sendMessage", {
+                "chat_id": self.chat,
+                "text": describe(message, source, media_attached=True),
+                "disable_web_page_preview": True,
+            }))
+
+    async def fetch_media(self, message: Any) -> tuple[str, str, str, str, bytes] | None:
+        """Download the attachment, ready to re-upload. None when there is nothing
+        to send, or nothing that can be sent.
+
+        A bot cannot re-use the other bot's file id — file ids are scoped to the bot
+        that saw them — so the bytes genuinely have to make the round trip through
+        this machine. That is the price of `--via bot`; `--via forward` pays none of
+        it because Telegram moves the file server-side.
+        """
+        if not getattr(message, "media", None):
+            return None
+        # A link preview is `media` too, and there is no file behind it. Sending
+        # nothing is right: the URL is already in the text.
+        if getattr(message, "web_preview", None) or getattr(message, "poll", None):
+            return None
+
+        info = getattr(message, "file", None)
+        size = getattr(info, "size", None) or 0
+        if size > UPLOAD_BYTES:
+            return None  # describe() will name it instead
+
+        try:
+            content = await self.client.download_media(message, file=bytes)
+        except Exception as error:  # noqa: BLE001 - any failure here degrades to text
+            print(f"mirror: could not download the attachment of msg {message.id} "
+                  f"({type(error).__name__}), sending the text alone", file=sys.stderr)
+            return None
+        if not content:
+            return None
+
+        extension = getattr(info, "ext", None) or ""
+        mime = getattr(info, "mime_type", None) or "application/octet-stream"
+        name = getattr(info, "name", None) or f"msg{message.id}{extension or '.bin'}"
+
+        if getattr(message, "photo", None) and len(content) <= PHOTO_BYTES:
+            return "sendPhoto", "photo", name or "photo.jpg", mime or "image/jpeg", content
+        if getattr(message, "video", None):
+            return "sendVideo", "video", name, mime, content
+        if getattr(message, "voice", None):
+            return "sendVoice", "voice", name, mime, content
+        if getattr(message, "audio", None):
+            return "sendAudio", "audio", name, mime, content
+        if getattr(message, "gif", None):
+            return "sendAnimation", "animation", name, mime, content
+        # Everything else, including a photo too large for sendPhoto, goes as a
+        # document: it keeps the bytes intact and Telegram still previews images.
+        return "sendDocument", "document", name, mime, content
 
 
 # ---------------------------------------------------------------------- the work
@@ -325,7 +505,7 @@ async def deliver_batch(
 async def do_once(args: argparse.Namespace) -> int:
     api_id, api_hash = credentials()
     client = await connect(api_id, api_hash)
-    destination = Destination.build(args.via, client)
+    destination = Destination.build(args.via, client, media=not args.no_media)
     state = read_state()
     problems: list[str] = []
 
@@ -394,7 +574,7 @@ async def do_once(args: argparse.Namespace) -> int:
 async def do_watch(args: argparse.Namespace) -> int:
     api_id, api_hash = credentials()
     client = await connect(api_id, api_hash)
-    destination = Destination.build(args.via, client)
+    destination = Destination.build(args.via, client, media=not args.no_media)
     sources = watched()
     state = read_state()
 
@@ -439,8 +619,12 @@ def main() -> int:
                             ("watch", "stay connected and forward live")):
         sub = subcommands.add_parser(name, help=help_text)
         sub.add_argument("--via", choices=("bot", "forward"), default="bot",
-                         help="bot: re-send the text through your bot (default). "
-                              "forward: forward as yourself, keeping media and formatting")
+                         help="bot: re-send through your bot, photo included (default). "
+                              "forward: forward as yourself, keeping everything as it is")
+        sub.add_argument("--no-media", action="store_true",
+                         help="skip attachments and send the text alone. Faster and "
+                              "cheaper on a metered connection; the text still names "
+                              "what was dropped")
         if name == "once":
             sub.add_argument("--backfill", type=int, default=0, metavar="N",
                              help="on a first run, take the last N messages (default 0)")
