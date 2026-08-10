@@ -1,0 +1,7 @@
+# Deliberately separate from the project's pyproject.toml. The scraper must not
+# grow a dependency on an MTProto client, and this tool must not be held back by
+# the scraper's version pins. Install it in its own virtualenv:
+#
+#   python3 -m venv .venv && . .venv/bin/activate && pip install -r requirements.txt
+
+telethon>=1.36,<2

@@ -6,6 +6,15 @@
 *.pem
 *.key
 
+# Telegram user sessions for tools/tg-mirror. A session is a live login, not a
+# credential that can be rotated quietly: whoever holds one is signed in as you,
+# with no password and no code. Its cursor file is local bookkeeping, not shared.
+*.session
+*.session-journal
+tools/tg-mirror/state.json
+tools/tg-mirror/state.json.tmp
+tools/tg-mirror/logs/
+
 # Python
 __pycache__/
 *.py[cod]

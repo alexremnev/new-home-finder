@@ -32,6 +32,11 @@ packages = ["worker"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# tools/ holds standalone utilities with their own requirements.txt and their own
+# virtualenv. Checking them from here would mean resolving dependencies this
+# project does not install, which is exactly the coupling keeping them separate
+# avoids.
+exclude = ["tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -40,6 +45,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+exclude = "^tools/"
 
 [[tool.mypy.overrides]]
 module = ["selectolax.*", "jsonpath_ng.*", "curl_cffi.*"]
