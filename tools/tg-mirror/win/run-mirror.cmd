@@ -39,8 +39,22 @@ for /f "tokens=1-3 delims=/-. " %%a in ("%DATE%") do set TODAY=%%c-%%b-%%a
 set LOG=%LOGDIR%\mirror-%TODAY%.log
 
 echo. >> "%LOG%"
-echo ==== %DATE% %TIME% once >> "%LOG%"
+echo ==== START %DATE% %TIME% >> "%LOG%"
 "%PY%" mirror.py once >> "%LOG%" 2>&1
 set CODE=%ERRORLEVEL%
-echo ==== exit %CODE% >> "%LOG%"
+REM %TIME% is read again here, so the pair brackets the run: the task's own
+REM "Last Run Time" only records when it fired, not how long it took.
+echo ==== END   %DATE% %TIME% exit %CODE% >> "%LOG%"
 exit /b %CODE%
+
+REM What a day's log looks like, and how to read it:
+REM
+REM   ==== START 10.08.2026 15:07:01,23
+REM   mirror: @HomeScoutUK_bot 2 new
+REM   mirror: @HomeScoutUK_bot sent 2, cursor now 10629
+REM   mirror: SUMMARY started 2026-08-10 15:07:01 finished 2026-08-10 15:07:09 sent 2 failed 0
+REM   ==== END   10.08.2026 15:07:09,44 exit 0
+REM
+REM   findstr SUMMARY logs\mirror-2026-08-10.log     one line per run, with counts
+REM   findstr /C:"failed 0" logs\*.log               the clean runs
+REM   findstr /V /C:"failed 0" logs\*.log            the ones worth looking at

@@ -69,7 +69,9 @@ import asyncio
 import json
 import os
 import pathlib
+import re
 import sys
+from datetime import datetime
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -87,6 +89,21 @@ CAPTION_LIMIT = 1024
 PHOTO_BYTES = 10 * 1024 * 1024
 UPLOAD_BYTES = 50 * 1024 * 1024
 PAUSE_SECONDS = 1.1
+
+# Wording the source bot uses that is not worth mirroring verbatim. Add a pair
+# here rather than editing describe(); the substitution is deliberately the only
+# thing done to the text, so what arrives is otherwise exactly what was sent.
+#
+# Case-insensitive, and trailing punctuation is swallowed with the phrase —
+# "…posted!" would otherwise leave "NEW ALERT!" with an exclamation mark that was
+# never part of the replacement.
+#
+# Punctuation only, deliberately not `\s`: matching whitespace here would eat the
+# newline after the phrase and glue the replacement onto the first line of the
+# body — "NEW ALERT£1,950/mo".
+REWRITES: tuple[tuple[str, str], ...] = (
+    (r"A listing matching your criteria has just been posted[!.:]*", "NEW ALERT"),
+)
 
 try:
     from telethon import TelegramClient, events
@@ -285,6 +302,12 @@ def media_label(message: Any) -> str | None:
     return "media" if getattr(message, "media", None) else None
 
 
+def rewritten(text: str) -> str:
+    for pattern, replacement in REWRITES:
+        text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+    return text.strip()
+
+
 def describe(message: Any, source: str, *, media_attached: bool = False) -> str:
     """One message as plain text.
 
@@ -293,13 +316,17 @@ def describe(message: Any, source: str, *, media_attached: bool = False) -> str:
     is also why hidden links are spelled out below instead of being re-linked —
     a visible URL cannot be mangled by an escaping mistake.
 
+    No provenance header. There was one — source, date, message id — and it earned
+    its place only if copies from several bots share a chat. With one source it is
+    three facts nobody reads above every alert, and the id in particular belongs in
+    the log rather than in the message. `source` is kept in the signature because
+    the log lines and any future multi-source header need it.
+
     `media_attached` says the photo is travelling with this text as its caption,
     so the "[photo]" placeholder is not needed and would only be noise.
     """
-    stamp = message.date.strftime("%d %b %H:%M") if message.date else ""
-    header = " · ".join(part for part in (f"@{source}", stamp, f"msg {message.id}") if part)
     label = None if media_attached else media_label(message)
-    text = (message.text or "").strip()
+    text = rewritten(message.text or "")
     if label and text:
         text = f"[{label}]\n{text}"
     elif label:
@@ -311,8 +338,7 @@ def describe(message: Any, source: str, *, media_attached: bool = False) -> str:
     if extra:
         text = (text + "\n\n" if text else "") + "\n".join(extra)
 
-    body = f"{header}\n\n{text}" if text else header
-    return body if len(body) <= LIMIT else body[: LIMIT - 14].rstrip() + "\n… (truncated)"
+    return text if len(text) <= LIMIT else text[: LIMIT - 14].rstrip() + "\n… (truncated)"
 
 
 class Destination:
@@ -381,7 +407,9 @@ class Destination:
         fits = len(caption) <= CAPTION_LIMIT
         self.check(post_multipart(
             self.token, method,
-            {"chat_id": self.chat, "caption": caption if fits else None},
+            # `or None` because a photo with no text now describes to an empty
+            # string, and an empty caption field is noise on the wire.
+            {"chat_id": self.chat, "caption": (caption if fits else None) or None},
             field, filename, mime, content,
         ))
         if not fits:
@@ -477,37 +505,50 @@ async def do_login() -> int:
 
 async def deliver_batch(
     client: Any, destination: Destination, source: str, messages: list[Any], dry_run: bool
-) -> tuple[int, str]:
+) -> tuple[int, int, str]:
     """Send in order, stopping at the first failure.
 
-    Returns the highest id actually delivered. Stopping matters: the cursor may
-    only advance over messages that arrived, or a single failure would silently
-    swallow everything queued behind it.
+    Returns the highest id actually delivered, how many were sent, and the problem
+    that stopped it. Both numbers are needed and neither implies the other: the id
+    is what the cursor may advance to, the count is what the log reports, and a
+    single message delivered from a batch of nine gives a high id and a count of
+    one. Stopping matters — the cursor may only advance over messages that
+    arrived, or one failure would silently swallow everything queued behind it.
     """
     delivered = 0
+    count = 0
     for index, message in enumerate(messages):
         if dry_run:
-            print(f"\n{describe(message, source)}")
-            delivered = message.id
+            print(f"\n--- msg {message.id} ---\n{describe(message, source)}")
+            delivered, count = message.id, count + 1
             continue
         if index:
             await asyncio.sleep(PAUSE_SECONDS)
         try:
             await destination.send(message, source)
         except FloodWaitError as error:
-            return delivered, f"Telegram asked for a {error.seconds}s pause; stopping here"
+            return delivered, count, f"Telegram asked for a {error.seconds}s pause; stopping here"
         except Fault as error:
-            return delivered, str(error)
-        delivered = message.id
-    return delivered, ""
+            return delivered, count, str(error)
+        delivered, count = message.id, count + 1
+    return delivered, count, ""
+
+
+def stamp() -> str:
+    """Local wall-clock time, for the log. Seconds included: two runs in the same
+    minute happen the first time anything is tested by hand."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 async def do_once(args: argparse.Namespace) -> int:
+    started = stamp()
     api_id, api_hash = credentials()
     client = await connect(api_id, api_hash)
     destination = Destination.build(args.via, client, media=not args.no_media)
     state = read_state()
     problems: list[str] = []
+    sent_total = 0
+    per_source: list[str] = []
 
     try:
         for source in watched():
@@ -550,24 +591,36 @@ async def do_once(args: argparse.Namespace) -> int:
                 continue
 
             print(f"mirror: @{source} {len(messages)} new")
-            delivered, problem = await deliver_batch(
+            delivered, count, problem = await deliver_batch(
                 client, destination, source, messages, args.dry_run
             )
+            sent_total += count
+            per_source.append(f"@{source}: {count}")
             if delivered and not args.dry_run:
                 state[source] = delivered
-                print(f"mirror: @{source} delivered through {delivered}")
+                print(f"mirror: @{source} sent {count}, cursor now {delivered}")
             if problem:
                 problems.append(f"@{source}: {problem}")
     finally:
         await client.disconnect()
 
     if args.dry_run:
-        print("\nmirror: dry run, nothing sent and the cursor is unchanged")
+        print(f"\nmirror: dry run, {sent_total} would have been sent; "
+              "nothing sent and the cursor is unchanged")
         return 1 if problems else 0
 
     write_state(state)
     for problem in problems:
         print(f"mirror: {problem}", file=sys.stderr)
+
+    # The line the log is read for. One line, fixed shape, both timestamps: the
+    # start says when the task fired, the end says when it let go, and the gap
+    # between them is the first thing worth knowing when a run seems stuck.
+    # Prefixed SUMMARY so a week of logs answers "how much arrived, and when"
+    # with a findstr rather than by reading.
+    detail = f" [{', '.join(per_source)}]" if len(per_source) > 1 else ""
+    print(f"mirror: SUMMARY started {started} finished {stamp()} "
+          f"sent {sent_total} failed {len(problems)}{detail}")
     return 1 if problems else 0
 
 
@@ -590,7 +643,8 @@ async def do_watch(args: argparse.Namespace) -> int:
             return
         state[name] = event.message.id
         write_state(state)
-        print(f"mirror: @{name} msg {event.message.id} → {destination.chat}")
+        print(f"mirror: {stamp()} sent 1 — @{name} msg {event.message.id} "
+              f"→ {destination.chat}", flush=True)
 
     print(f"mirror: watching {', '.join('@' + s for s in sources)}, "
           f"delivering via {args.via}. Ctrl-C to stop.")
