@@ -18,7 +18,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
 
-AlertKind = Literal["listing", "welcome", "stopped", "ops"]
+AlertKind = Literal["listing", "welcome", "stopped", "expiring", "expired", "ops"]
 
 
 class Recipient(BaseModel):

@@ -9,7 +9,12 @@
 
 import { useState } from "react";
 
-type Props = { districts: string[]; propertyTypes: string[]; furnished: string[] };
+type Props = {
+  districts: string[];
+  maxDistricts: number;
+  propertyTypes: string[];
+  furnished: string[];
+};
 
 const row: React.CSSProperties = { display: "block", marginBottom: "1rem" };
 const label: React.CSSProperties = { display: "block", fontWeight: 600, marginBottom: "0.25rem" };
@@ -20,9 +25,13 @@ const input: React.CSSProperties = {
   width: "8rem",
 };
 
-export function SubscribeForm({ districts, propertyTypes, furnished }: Props) {
+export function SubscribeForm({ districts, maxDistricts, propertyTypes, furnished }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Pre-ticking one district rather than all of them: the plan limit is enforced
+  // on the server anyway, and a form that arrives already invalid teaches people
+  // that the limit is a nuisance instead of a choice.
+  const [chosen, setChosen] = useState<string[]>(districts.slice(0, maxDistricts));
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -60,9 +69,26 @@ export function SubscribeForm({ districts, propertyTypes, furnished }: Props) {
     <form onSubmit={submit}>
       <fieldset style={{ ...row, border: "1px solid #eee", borderRadius: 6, padding: "0.75rem" }}>
         <legend style={{ fontWeight: 600 }}>Districts</legend>
+        <p style={{ margin: "0 0 0.5rem", color: "#777", fontSize: "0.85rem" }}>
+          Your plan covers {maxDistricts}.{" "}
+          {chosen.length > maxDistricts && (
+            <strong style={{ color: "#900" }}>Untick {chosen.length - maxDistricts} to continue.</strong>
+          )}
+        </p>
         {districts.map((code) => (
           <label key={code} style={{ marginRight: "1rem", display: "inline-block" }}>
-            <input type="checkbox" name="districts" value={code} defaultChecked /> {code}
+            <input
+              type="checkbox"
+              name="districts"
+              value={code}
+              checked={chosen.includes(code)}
+              onChange={(e) =>
+                setChosen((prev) =>
+                  e.target.checked ? [...prev, code] : prev.filter((c) => c !== code),
+                )
+              }
+            />{" "}
+            {code}
           </label>
         ))}
       </fieldset>
@@ -122,10 +148,6 @@ export function SubscribeForm({ districts, propertyTypes, furnished }: Props) {
         <input style={input} type="number" name="min_tenancy_max_months" min={1} max={60} />
       </div>
 
-      <div style={row}>
-        <span style={label}>Most alerts per day</span>
-        <input style={input} type="number" name="max_alerts_per_day" defaultValue={10} min={1} max={50} />
-      </div>
 
       {error && (
         <p style={{ background: "#fff4f4", padding: "0.6rem", borderRadius: 4, color: "#900" }}>
@@ -135,13 +157,13 @@ export function SubscribeForm({ districts, propertyTypes, furnished }: Props) {
 
       <button
         type="submit"
-        disabled={busy}
+        disabled={busy || chosen.length === 0 || chosen.length > maxDistricts}
         style={{
           padding: "0.6rem 1.1rem",
           fontSize: "1rem",
           borderRadius: 5,
           border: "none",
-          background: busy ? "#999" : "#0a7",
+          background: busy || chosen.length > maxDistricts ? "#999" : "#0a7",
           color: "#fff",
           cursor: busy ? "default" : "pointer",
         }}

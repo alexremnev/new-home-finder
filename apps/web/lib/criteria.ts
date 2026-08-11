@@ -29,16 +29,35 @@ export type Criteria = {
 export const PROPERTY_TYPES = ["flat", "house", "studio", "room", "maisonette"] as const;
 export const FURNISHED = ["furnished", "unfurnished", "part"] as const;
 
-export const MAX_ALERTS_LIMIT = 50;
 const PRICE_LIMIT = 20_000;
 const BEDROOM_LIMIT = 10;
 const TENANCY_LIMIT = 60;
 
-export type Parsed = { criteria: Criteria; maxAlertsPerDay: number };
-
 export class InvalidForm extends Error {}
 
-export function parseForm(form: Record<string, unknown>, enabledDistricts: string[]): Parsed {
+/** What the person's plan allows. Read from the database, never assumed here. */
+export type Limits = { maxDistricts: number };
+
+/**
+ * The one place a plan limit is applied to a filter.
+ *
+ * Both the form and the bot commands go through this, so there is no path that
+ * can produce a subscription covering more districts than was paid for. Refusing
+ * with the number named is deliberate: silently keeping the first N would hand
+ * back a filter that is not the one they asked for.
+ */
+export function enforceLimits(criteria: Criteria, limits: Limits): Criteria {
+  const districts = criteria.areas?.postcode_districts ?? [];
+  if (districts.length > limits.maxDistricts) {
+    throw new InvalidForm(
+      `your plan covers ${limits.maxDistricts} ` +
+        `district${limits.maxDistricts === 1 ? "" : "s"}, and you chose ${districts.length}`,
+    );
+  }
+  return criteria;
+}
+
+export function parseForm(form: Record<string, unknown>, enabledDistricts: string[]): Criteria {
   const criteria: Criteria = {};
 
   const price = range(form.price_min, form.price_max, PRICE_LIMIT);
@@ -67,10 +86,7 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
   const tenancy = integer(form.min_tenancy_max_months, 1, TENANCY_LIMIT);
   if (tenancy !== undefined) criteria.min_tenancy_max_months = tenancy;
 
-  return {
-    criteria,
-    maxAlertsPerDay: integer(form.max_alerts_per_day, 1, MAX_ALERTS_LIMIT) ?? 10,
-  };
+  return criteria;
 }
 
 function range(
@@ -112,4 +128,96 @@ function districtList(value: unknown, enabled: string[]): string[] {
     throw new InvalidForm(`not covered yet: ${unknown.join(", ")}`);
   }
   return wanted;
+}
+
+
+// ── editing an existing filter ────────────────────────────────────────────
+
+export type Patch =
+  | { field: "price" | "bedrooms"; min?: number; max?: number }
+  | { field: "areas"; districts: string[] }
+  | { field: "pets_allowed" | "bills_included" | "landlord_direct_only"; on: boolean };
+
+/**
+ * Apply one change to an existing filter.
+ *
+ * Turning a flag off removes the criterion rather than setting it to false. The
+ * matcher reads `pets_allowed: false` as "listings that say pets are NOT allowed",
+ * which is a filter almost nobody wants and not what "off" means to the person
+ * typing it.
+ */
+export function applyPatch(
+  current: Criteria,
+  patch: Patch,
+  enabledDistricts: string[],
+): Criteria {
+  const criteria: Criteria = structuredClone(current);
+
+  switch (patch.field) {
+    case "price":
+    case "bedrooms": {
+      const ceiling = patch.field === "price" ? PRICE_LIMIT : BEDROOM_LIMIT;
+      const range = boundedRange(patch.min, patch.max, ceiling);
+      if (range === undefined) delete criteria[patch.field === "price" ? "price_pcm" : "bedrooms"];
+      else if (patch.field === "price") criteria.price_pcm = range;
+      else criteria.bedrooms = range;
+      break;
+    }
+    case "areas": {
+      const districts = districtList(patch.districts, enabledDistricts);
+      if (!districts.length) throw new InvalidForm("name at least one district");
+      criteria.areas = { postcode_districts: districts };
+      break;
+    }
+    default: {
+      if (patch.on) criteria[patch.field] = true;
+      else delete criteria[patch.field];
+    }
+  }
+
+  return criteria;
+}
+
+function boundedRange(
+  min: number | undefined,
+  max: number | undefined,
+  ceiling: number,
+): { min?: number; max?: number } | undefined {
+  const low = integer(min, 0, ceiling);
+  const high = integer(max, 0, ceiling);
+  if (low === undefined && high === undefined) return undefined;
+  if (low !== undefined && high !== undefined && low > high) {
+    throw new InvalidForm("the minimum is above the maximum");
+  }
+  return { ...(low !== undefined && { min: low }), ...(high !== undefined && { max: high }) };
+}
+
+/** The filter in words, for /show. Says "any" rather than leaving a line out. */
+export function describeCriteria(criteria: Criteria): string {
+  const lines = [
+    `Districts: ${(criteria.areas?.postcode_districts ?? []).join(", ") || "any"}`,
+    `Rent: ${rangeText(criteria.price_pcm, "£")}`,
+    `Bedrooms: ${rangeText(criteria.bedrooms, "")}`,
+    `Type: ${(criteria.property_types ?? []).join(", ") || "any"}`,
+    `Furnishing: ${(criteria.furnished ?? []).join(", ") || "any"}`,
+  ];
+  const musts = [
+    criteria.pets_allowed && "pets allowed",
+    criteria.bills_included && "bills included",
+    criteria.landlord_direct_only && "landlord direct",
+  ].filter(Boolean);
+  if (musts.length) lines.push(`Must state: ${musts.join(", ")}`);
+  if (criteria.min_tenancy_max_months !== undefined) {
+    lines.push(`Minimum tenancy at most: ${criteria.min_tenancy_max_months} months`);
+  }
+  return lines.join("\n");
+}
+
+function rangeText(value: { min?: number; max?: number } | undefined, unit: string): string {
+  if (!value || (value.min === undefined && value.max === undefined)) return "any";
+  if (value.min !== undefined && value.max !== undefined) {
+    return `${unit}${value.min}\u2013${unit}${value.max}`;
+  }
+  if (value.max !== undefined) return `up to ${unit}${value.max}`;
+  return `from ${unit}${value.min}`;
 }

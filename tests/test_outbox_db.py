@@ -2,7 +2,7 @@
 
 Skipped unless TEST_DATABASE_URL is set, because the behaviour worth testing here
 is behaviour a stub cannot have: the unique constraint that makes a repeat send
-impossible, the day boundary in `sent_today`, `ON CONFLICT DO NOTHING`, and what a
+impossible, `ON CONFLICT DO NOTHING`, the plan expiry condition, and what a
 LEFT JOIN yields when a user has no address. Every one of those has been a real
 bug in this project, and each looked like working code until a database was
 involved.
@@ -39,7 +39,7 @@ CRITERIA = {
     "areas": {"postcode_districts": ["SE16"]},
 }
 WIPE = """
-TRUNCATE notifications, subscriptions, user_channels, users,
+TRUNCATE notifications, subscriptions, user_channels, user_tokens, payments, users,
          listing_price_log, listings, job_events, job_stages, job_runs
     RESTART IDENTITY CASCADE
 """
@@ -49,7 +49,8 @@ TRUNCATE notifications, subscriptions, user_channels, users,
 def schema() -> Iterator[None]:
     with psycopg.connect(URL, autocommit=True) as conn:
         conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-        for name in ("0001_init.sql", "0004_source_failures.sql"):
+        for name in ("0001_init.sql", "0004_source_failures.sql",
+                     "0005_web.sql", "0006_plans.sql", "0007_no_alert_cap.sql"):
             conn.execute((MIGRATIONS / name).read_text(encoding="utf-8"))
     yield
 
@@ -69,11 +70,22 @@ def run(conn: Any) -> Run:
 # ── fixtures for the rows under test ──────────────────────────────────────
 
 
-def make_user(conn: Any, *, address: str = "555", status: str = "active") -> int:
+def make_user(
+    conn: Any, *, address: str = "555", status: str = "active",
+    plan: str = "paid", plan_days: int | None = 14, plan_hours: int | None = None,
+) -> int:
+    # `plan_hours` wins when given. The day and hour warnings fire inside a
+    # 24-hour window, which days cannot address.
     row = conn.execute(
-        "INSERT INTO users (status, consent_at, consent_source) "
-        "VALUES (%s, now(), 'test') RETURNING id",
-        (status,),
+        """
+        INSERT INTO users (status, consent_at, consent_source, plan, plan_until)
+        VALUES (%s, now(), 'test', %s,
+                CASE WHEN %s::int IS NOT NULL THEN now() + make_interval(hours => %s::int)
+                     WHEN %s::int IS NULL THEN NULL
+                     ELSE now() + make_interval(days => %s::int) END)
+        RETURNING id
+        """,
+        (status, plan, plan_hours, plan_hours, plan_days, plan_days),
     ).fetchone()
     user_id = int(row["id"])
     if address:
@@ -87,18 +99,18 @@ def make_user(conn: Any, *, address: str = "555", status: str = "active") -> int
 
 def make_subscription(
     conn: Any, user_id: int, *, criteria: dict[str, Any] | None = None,
-    cap: int = 10, backfill_hours: int = 1, active: bool = True,
+    backfill_hours: int = 1, active: bool = True,
 ) -> int:
     row = conn.execute(
         """
-        INSERT INTO subscriptions (user_id, criteria, max_alerts_per_day, backfill_from, active)
-        VALUES (%s, %s, %s, now() - make_interval(hours => %s), %s)
+        INSERT INTO subscriptions (user_id, criteria, backfill_from, active)
+        VALUES (%s, %s, now() - make_interval(hours => %s), %s)
         RETURNING id
         """,
         (
             user_id,
             psycopg.types.json.Jsonb(criteria if criteria is not None else CRITERIA),
-            cap, backfill_hours, active,
+            backfill_hours, active,
         ),
     ).fetchone()
     return int(row["id"])
@@ -217,21 +229,16 @@ def test_existing_stock_is_not_replayed_to_a_new_subscription(conn: Any, run: Ru
     assert counts(conn) == {}
 
 
-def test_the_daily_cap_holds_within_one_run(conn: Any, run: Run) -> None:
-    make_subscription(conn, make_user(conn), cap=2)
-    ids = [make_listing(conn, str(i)) for i in range(5)]
+
+
+def test_every_match_is_delivered_however_many_there_are(conn: Any, run: Run) -> None:
+    """There is no daily cap. Withholding a listing that matched is invisible to
+    the person waiting for it; the way to get fewer messages is a narrower
+    filter, which they control."""
+    make_subscription(conn, make_user(conn))
+    ids = [make_listing(conn, str(i)) for i in range(25)]
     outbox.queue_matches(conn, run, source_key="openrent", listing_ids=ids)
-    assert counts(conn) == {"queued": 2}
-
-
-def test_the_cap_counts_what_earlier_runs_queued(conn: Any, run: Run) -> None:
-    """A cap enforced only per run is not a cap."""
-    make_subscription(conn, make_user(conn), cap=2)
-    outbox.queue_matches(conn, run, source_key="openrent",
-                         listing_ids=[make_listing(conn, "a"), make_listing(conn, "b")])
-    outbox.queue_matches(conn, run, source_key="openrent",
-                         listing_ids=[make_listing(conn, "c")])
-    assert counts(conn) == {"queued": 2}
+    assert counts(conn) == {"queued": 25}
 
 
 def test_an_inactive_subscription_receives_nothing(conn: Any, run: Run) -> None:
@@ -426,3 +433,149 @@ def test_no_address_reaches_the_run_log(conn: Any, run: Run, notifier: FakeNotif
     ).fetchall()
     blob = " ".join(f"{e['message']} {e['ctx']}" for e in events)
     assert "555" not in blob
+
+
+# ── plans ─────────────────────────────────────────────────────────────────
+
+
+def test_an_expired_plan_stops_producing_messages(conn: Any, run: Run) -> None:
+    """Enforced in the matcher's own query, so it holds even if no expiry job has
+    run. A sweeper that failed to run would keep sending, and that is the failure
+    mode that costs money."""
+    make_subscription(conn, make_user(conn, plan_days=-1))
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+    assert counts(conn) == {}
+
+
+def test_a_plan_without_an_expiry_keeps_working(conn: Any, run: Run) -> None:
+    make_subscription(conn, make_user(conn, plan="comp", plan_days=None))
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+    assert counts(conn) == {"queued": 1}
+
+
+
+
+def test_an_expiry_is_announced_once(conn: Any, run: Run, notifier: FakeNotifier) -> None:
+    user_id = make_user(conn, plan="trial", plan_days=-1)
+    make_subscription(conn, user_id)
+
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+    address, alert = notifier.sent[0]
+    assert address == "555"
+    assert alert.kind == "expired"
+    assert "trial has ended" in (alert.text or "")
+
+    # Running again must not tell them a second time; an apologetic message
+    # arriving every few minutes is worse than none.
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+
+
+def test_a_day_out_is_warned_before_the_alerts_stop(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    """The point of warning ahead: "your alerts stopped an hour ago" is a message
+    about a decision the person no longer gets to make."""
+    make_subscription(conn, make_user(conn, plan="trial", plan_hours=23))
+
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert alert.kind == "expiring"
+    assert "ends tomorrow" in (alert.text or "")
+
+    # And not again on the next tick.
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+
+
+def test_an_hour_out_is_warned_separately_from_the_day(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    """Two stages, not one flag: the hour warning must still fire for someone who
+    already had the day warning."""
+    user_id = make_user(conn, plan="trial", plan_hours=23)
+    make_subscription(conn, user_id)
+    outbox.notify_plan_changes(conn, run)
+
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+    )
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 2
+    assert "about an hour" in (notifier.sent[1][1].text or "")
+
+
+def test_paying_re_arms_the_warnings_with_nothing_reset(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    """The reason `plan_until` is in the unique key. A renewal moves the expiry,
+    which makes a different key, which makes the warnings due again — no flag is
+    cleared anywhere, so no code path can forget to clear one."""
+    user_id = make_user(conn, plan="trial", plan_hours=23)
+    make_subscription(conn, user_id)
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+
+    # Paid mid-trial: the plan is extended well past the warning window.
+    conn.execute(
+        "UPDATE users SET plan = 'paid', plan_until = now() + interval '14 days' WHERE id = %s",
+        (user_id,),
+    )
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1, "nothing is due while the paid period is far off"
+
+    # And when the paid period is itself a day out, they are warned again.
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '20 hours' WHERE id = %s", (user_id,)
+    )
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 2
+    assert "subscription ends tomorrow" in (notifier.sent[1][1].text or "")
+
+
+def test_a_plan_that_lapsed_unnoticed_is_told_it_ended_not_that_it_will(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    """Only the most urgent unsent stage is claimed. A worker that was down for a
+    day must not send "ends tomorrow" about an expiry that already happened."""
+    make_subscription(conn, make_user(conn, plan="trial", plan_hours=-5))
+    outbox.notify_plan_changes(conn, run)
+    assert len(notifier.sent) == 1
+    assert notifier.sent[0][1].kind == "expired"
+    assert "has ended" in (notifier.sent[0][1].text or "")
+
+
+def test_an_expiry_leaves_the_filter_in_place(conn: Any, run: Run, notifier: FakeNotifier) -> None:
+    """Someone who renews should find their filter as they left it. Deleting it
+    here would make an expiry indistinguishable from a /stop."""
+    user_id = make_user(conn, plan_days=-1)
+    make_subscription(conn, user_id)
+    outbox.notify_plan_changes(conn, run)
+    remaining = conn.execute(
+        "SELECT count(*) AS n FROM subscriptions WHERE user_id = %s AND active", (user_id,)
+    ).fetchone()
+    assert remaining["n"] == 1
+
+
+def test_a_live_plan_is_not_announced_as_expired(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    make_subscription(conn, make_user(conn, plan_days=14))
+    outbox.notify_plan_changes(conn, run)
+    assert notifier.sent == []
+
+
+def test_renewing_starts_the_alerts_again(conn: Any, run: Run) -> None:
+    """The whole point of enforcing in the query: nothing has to be undone."""
+    user_id = make_user(conn, plan_days=-1)
+    make_subscription(conn, user_id)
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+    assert counts(conn) == {}
+
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '14 days' WHERE id = %s", (user_id,)
+    )
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "2")])
+    assert counts(conn) == {"queued": 1}

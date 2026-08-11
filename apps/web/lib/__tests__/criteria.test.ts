@@ -8,48 +8,48 @@ describe("an absent field stays absent", () => {
   // The matcher reads a present criterion as a requirement, so a default invented
   // here silently narrows someone's search.
   it("produces an empty object from an empty form", () => {
-    expect(parseForm({}, ENABLED).criteria).toEqual({});
+    expect(parseForm({}, ENABLED)).toEqual({});
   });
 
   it("keeps a one-sided range one-sided", () => {
-    expect(parseForm({ price_max: "2000" }, ENABLED).criteria.price_pcm).toEqual({ max: 2000 });
+    expect(parseForm({ price_max: "2000" }, ENABLED).price_pcm).toEqual({ max: 2000 });
   });
 
   it("treats a blank string as nothing, not as zero", () => {
-    expect(parseForm({ price_min: "", bedrooms_max: "" }, ENABLED).criteria).toEqual({});
+    expect(parseForm({ price_min: "", bedrooms_max: "" }, ENABLED)).toEqual({});
   });
 });
 
 describe("checkboxes", () => {
   it("only a ticked box becomes a criterion", () => {
     // An unticked "pets allowed" means "I don't mind", not "listings that forbid pets".
-    expect(parseForm({}, ENABLED).criteria.pets_allowed).toBeUndefined();
-    expect(parseForm({ pets_allowed: "on" }, ENABLED).criteria.pets_allowed).toBe(true);
+    expect(parseForm({}, ENABLED).pets_allowed).toBeUndefined();
+    expect(parseForm({ pets_allowed: "on" }, ENABLED).pets_allowed).toBe(true);
   });
 
   it("accepts a single value and a group alike", () => {
-    expect(parseForm({ property_types: "flat" }, ENABLED).criteria.property_types).toEqual(["flat"]);
+    expect(parseForm({ property_types: "flat" }, ENABLED).property_types).toEqual(["flat"]);
     expect(
-      parseForm({ property_types: ["flat", "house"] }, ENABLED).criteria.property_types,
+      parseForm({ property_types: ["flat", "house"] }, ENABLED).property_types,
     ).toEqual(["flat", "house"]);
   });
 
   it("drops a value that is not in the vocabulary", () => {
     // The worker's matcher compares against its own list; a value it has never
     // heard of would match nothing and look like a bug in matching.
-    expect(parseForm({ property_types: ["flat", "castle"] }, ENABLED).criteria.property_types)
+    expect(parseForm({ property_types: ["flat", "castle"] }, ENABLED).property_types)
       .toEqual(["flat"]);
   });
 
   it("de-duplicates", () => {
-    expect(parseForm({ districts: ["SE16", "se16"] }, ENABLED).criteria.areas)
+    expect(parseForm({ districts: ["SE16", "se16"] }, ENABLED).areas)
       .toEqual({ postcode_districts: ["SE16"] });
   });
 });
 
 describe("districts", () => {
   it("normalises case", () => {
-    expect(parseForm({ districts: "se16" }, ENABLED).criteria.areas)
+    expect(parseForm({ districts: "se16" }, ENABLED).areas)
       .toEqual({ postcode_districts: ["SE16"] });
   });
 
@@ -71,18 +71,16 @@ describe("ranges", () => {
   });
 
   it("allows a studio, which is zero and not missing", () => {
-    expect(parseForm({ bedrooms_min: "0", bedrooms_max: "0" }, ENABLED).criteria.bedrooms)
+    expect(parseForm({ bedrooms_min: "0", bedrooms_max: "0" }, ENABLED).bedrooms)
       .toEqual({ min: 0, max: 0 });
   });
 });
 
-describe("the daily cap", () => {
-  it("defaults to ten", () => {
-    expect(parseForm({}, ENABLED).maxAlertsPerDay).toBe(10);
-  });
 
-  it("is bounded, so a subscription cannot ask for a thousand messages", () => {
-    expect(() => parseForm({ max_alerts_per_day: "1000" }, ENABLED)).toThrow(InvalidForm);
-    expect(() => parseForm({ max_alerts_per_day: "0" }, ENABLED)).toThrow(InvalidForm);
+describe("there is no daily cap", () => {
+  it("ignores a cap someone tries to send", () => {
+    // Every match is delivered. A field left over from an old form must not
+    // quietly reappear as a limit.
+    expect(parseForm({ max_alerts_per_day: "3" }, ENABLED)).toEqual({});
   });
 });

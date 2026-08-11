@@ -68,9 +68,6 @@ SELECT status, count(*) FROM notifications GROUP BY status;
 -- почему не ушло
 SELECT id, user_id, attempts, error FROM notifications
  WHERE status IN ('queued','failed') ORDER BY created_at DESC LIMIT 20;
-
--- дневной лимит на пользователя
-UPDATE subscriptions SET max_alerts_per_day = 20 WHERE id = 1;
 ```
 
 Состояния строки: `queued` (ждёт), `sent`, `failed` (насовсем — либо ошибка
@@ -93,21 +90,125 @@ npm run typecheck
 SECRET=$(openssl rand -hex 24)     # он же в TELEGRAM_WEBHOOK_SECRET
 curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/setWebhook" \
   -d "url=https://<приложение>.vercel.app/api/tg/webhook" \
-  -d "secret_token=$SECRET" -d 'allowed_updates=["message"]'
+  -d "secret_token=$SECRET" \
+  -d 'allowed_updates=["message","callback_query"]'
 curl -s "https://api.telegram.org/bot$TELEGRAM_TOKEN/getWebhookInfo"
 ```
+
+**`callback_query` в `allowed_updates` обязателен.** Без него Telegram выбрасывает
+нажатия кнопок до того, как они дойдут до маршрута: визард отрисуется, кнопки
+будут видны, а тап не сделает ничего — и ни в логах приложения, ни в
+`getWebhookInfo` про это не будет ни слова. Если визард «не реагирует», проверять
+надо это в первую очередь: `getWebhookInfo` должен показывать оба типа.
 
 `secret_token` — вся защита маршрута: URL не секрет, он попадает в логи. Бот
 держит ровно один вебхук, поэтому кто поставил последним — тот и владеет.
 
+Меню бота (кнопка ⌘ рядом с полем ввода) ставится из самого бота: отправьте
+`/menu` с чата, указанного в `TELEGRAM_ADMIN_CHAT`. Список берётся из `BOT_MENU` в
+`apps/web/lib/commands.ts`, то есть из того же файла, что и парсер — меню не может
+предложить команду, которой бот не понимает. Повторять безопасно.
+
+```sql
+-- незавершённые визарды: начали настройку и ушли
+SELECT chat_id, step, updated_at, expires_at FROM wizard_sessions ORDER BY updated_at DESC;
+
+-- что уже сказано про планы (по одной строке на стадию и срок)
+SELECT user_id, stage, plan_until, sent_at FROM plan_notices ORDER BY sent_at DESC LIMIT 20;
+
+-- у кого план кончается в ближайшие сутки и предупреждён ли он
+SELECT u.id, u.plan, u.plan_until,
+       array_agg(n.stage ORDER BY n.stage) FILTER (WHERE n.plan_until = u.plan_until) AS told
+  FROM users u LEFT JOIN plan_notices n ON n.user_id = u.id
+ WHERE u.plan_until BETWEEN now() AND now() + interval '1 day'
+ GROUP BY u.id, u.plan, u.plan_until;
+```
+
 ```sql
 -- кто подписан и на что
-SELECT u.id, u.status, s.label, s.max_alerts_per_day, s.backfill_from
+SELECT u.id, u.status, s.label, s.backfill_from
   FROM users u LEFT JOIN subscriptions s ON s.user_id = u.id ORDER BY u.id;
 
 -- зависшие pending: форму заполнили, но Start в боте не нажали
 SELECT id, created_at, token_expires_at FROM users
  WHERE status = 'pending' AND token_expires_at < now();
+```
+
+## Запуск по расписанию (Windows)
+
+```cmd
+scripts\win\install-task.cmd          :: один раз, из админской консоли
+schtasks /Run   /TN "LondonRentAlerts worker"
+schtasks /Query /TN "LondonRentAlerts worker" /V /FO LIST
+```
+
+Задача вызывает `worker tick` каждые 10 минут. Что именно и как часто выполняется
+— решает таблица `schedules`, поэтому окно 10:00–19:00 и часовой интервал меняются
+`UPDATE`, а не правкой задачи. Если ничего не пора — тик стоит один запрос.
+
+Логи: `D:\projects\new-home-finder\logs\worker-ГГГГ-ММ-ДД.log`.
+
+## Планы и оплата
+
+Лимиты — строки в `plans`, не код. Меняются без деплоя.
+
+```sql
+SELECT * FROM plans;
+
+-- цена и длительность
+UPDATE plans SET price_pence = 1500, duration_days = 30 WHERE key = 'paid';
+-- сколько районов даёт бесплатный (0008 ставит 5 и там, и на платном)
+UPDATE plans SET max_districts = 5 WHERE key = 'trial';
+```
+
+Выдать план вручную (оплата пришла переводом):
+
+```sql
+-- Никаких флагов сбрасывать не надо: plan_notices ключуется по plan_until, так что
+-- сдвиг срока сам делает предупреждения за сутки и за час снова актуальными.
+UPDATE users SET plan = 'paid',
+       plan_until = greatest(coalesce(plan_until, now()), now()) + interval '14 days'
+ WHERE payment_ref = 'LRA-XXXXXX';
+
+INSERT INTO payments (user_id, plan, amount_pence, provider, granted_days, granted_by)
+SELECT id, 'paid', 1000, 'bank_transfer', 14, 'manual'
+  FROM users WHERE payment_ref = 'LRA-XXXXXX';
+```
+
+Или из бота, со своего chat id (`TELEGRAM_ADMIN_CHAT`): `/grant LRA-XXXXXX paid 14`.
+
+```sql
+-- кто на чём и до когда
+SELECT u.id, u.plan, u.plan_until, u.payment_ref, u.status,
+       (SELECT count(*) FROM subscriptions s WHERE s.user_id = u.id AND s.active) AS filters
+  FROM users u ORDER BY u.id;
+
+-- истёкшие, но ещё не уведомлённые
+SELECT u.id, u.plan_until FROM users u
+ WHERE u.plan_until < now()
+   AND NOT EXISTS (SELECT 1 FROM plan_notices n
+                    WHERE n.user_id = u.id AND n.stage = 'expired'
+                      AND n.plan_until = u.plan_until);
+
+-- выручка
+SELECT provider, count(*), sum(amount_pence)/100.0 AS pounds FROM payments GROUP BY provider;
+```
+
+Истёкший план перестаёт отправлять сам: условие стоит в запросе матчера, а не в
+отдельной джобе. Фильтр при этом сохраняется — продление включает алерты обратно.
+
+## Команды бота
+
+```
+/show          текущий фильтр и план
+/filter        ссылка на форму (30 минут, одноразовая)
+/price 1500-2200 · /price 2000 · /price any
+/beds 1-2
+/areas SE16, SE8
+/pets on · /bills on · /direct on
+/upgrade       тарифы и ссылка на оплату
+/stop          удалить фильтр и прекратить отправку
+/grant <ref> <plan> <days>   только из TELEGRAM_ADMIN_CHAT
 ```
 
 ## Доступность источников и фикстуры

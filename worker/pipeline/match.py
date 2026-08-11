@@ -7,8 +7,10 @@ One rule governs everything here, and it is worth stating before the code:
 A listing that does not say whether pets are allowed fails a "pets allowed"
 filter. So does one with no availability date against a "available before" filter.
 The alternative — treating unknown as acceptable — produces alerts the recipient
-cannot act on, and §11.5 is explicit that precision matters more than volume here:
-three relevant alerts a day are tolerated, fifteen noisy ones lose the user.
+cannot act on, and precision matters more than volume here: three relevant alerts
+a day are tolerated, fifteen noisy ones lose the user. That precision is the only
+thing limiting volume, because every match is delivered — a cap would withhold a
+listing that qualified, which the person waiting for it could never see.
 
 Matching works on plain dictionaries rather than model instances, so it needs
 neither a database nor a validation layer to test.
@@ -226,21 +228,16 @@ def _as_date(value: Any) -> date | None:
 # ── eligibility, separate from criteria ───────────────────────────────────
 
 
-def is_eligible(
-    listing: ListingValues,
-    *,
-    backfill_from: Any,
-    sent_today: int,
-    max_alerts_per_day: int,
-) -> Verdict:
+def is_eligible(listing: ListingValues, *, backfill_from: Any) -> Verdict:
     """Checks that are about the subscription, not about the listing's qualities.
 
     Kept apart from `matches` because they answer a different question: not "is
     this a suitable home" but "should this person be messaged about it now".
-    """
-    if sent_today >= max_alerts_per_day:
-        return Verdict(False, f"daily cap of {max_alerts_per_day} reached")
 
+    There is no daily cap. Everything that matches is delivered: withholding a
+    listing that matched is invisible to the person waiting for it, and the way to
+    get fewer messages is a narrower filter, which they control.
+    """
     first_seen = _as_datetime(listing.get("first_seen_at"))
     cutoff = _as_datetime(backfill_from)
     if first_seen is not None and cutoff is not None and first_seen <= cutoff:

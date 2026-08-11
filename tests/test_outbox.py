@@ -9,7 +9,13 @@ import pytest
 
 from worker.contracts.notify import NOTIFIERS, SendResult, build_notifier
 from worker.notify.telegram import render_listing
-from worker.pipeline.outbox import MAX_ATTEMPTS, alert_for, listing_view, outcome_for
+from worker.pipeline.outbox import (
+    MAX_ATTEMPTS,
+    alert_for,
+    interleave_by_user,
+    listing_view,
+    outcome_for,
+)
 
 
 def row(**overrides: Any) -> dict[str, Any]:
@@ -167,3 +173,45 @@ def test_an_absent_token_is_none_and_not_an_empty_string(
     notifier = build_notifier("telegram")
     assert notifier is not None
     assert notifier.token is None  # type: ignore[attr-defined]
+
+
+# ── the order a batch is sent in ──────────────────────────────────────────
+
+
+def queued(user_id: int, notification_id: int) -> dict[str, Any]:
+    return {"user_id": user_id, "id": notification_id}
+
+
+def test_one_persons_messages_are_spread_out_rather_than_sent_back_to_back() -> None:
+    """Telegram's per-chat limit is about one message a second while its overall
+    limit is about thirty, so four messages to one person in a row is the shape
+    that earns a 429 — and the retry then delays everyone queued behind them."""
+    batch = [queued(1, 1), queued(1, 2), queued(2, 3), queued(2, 4)]
+    order = [(r["user_id"], r["id"]) for r in interleave_by_user(batch)]
+    assert order == [(1, 1), (2, 3), (1, 2), (2, 4)]
+
+
+def test_a_persons_own_messages_keep_their_order() -> None:
+    """Interleaving is about spacing, not shuffling: listings must still arrive
+    oldest first for the person reading them."""
+    batch = [queued(1, 10), queued(2, 11), queued(1, 12), queued(1, 13)]
+    mine = [r["id"] for r in interleave_by_user(batch) if r["user_id"] == 1]
+    assert mine == [10, 12, 13]
+
+
+def test_nothing_is_reordered_when_there_is_only_one_recipient() -> None:
+    batch = [queued(1, 1), queued(1, 2), queued(1, 3)]
+    assert interleave_by_user(batch) == batch
+
+
+def test_every_message_survives_the_reordering() -> None:
+    """The failure that would matter most here is a dropped row: it would look
+    like a listing that simply never arrived."""
+    batch = [queued(user, user * 100 + n) for user in range(1, 6) for n in range(user)]
+    result = interleave_by_user(batch)
+    assert sorted(r["id"] for r in result) == sorted(r["id"] for r in batch)
+    assert len(result) == len(batch)
+
+
+def test_an_empty_batch_is_handled() -> None:
+    assert interleave_by_user([]) == []

@@ -179,7 +179,7 @@ class TelegramNotifier:
         return cls(os.environ.get("TELEGRAM_TOKEN") or None)
 
     def supports(self, kind: AlertKind) -> bool:
-        return kind in ("listing", "welcome", "stopped", "ops")
+        return kind in ("listing", "welcome", "stopped", "expiring", "expired", "ops")
 
     def send(self, to: Recipient, alert: Alert) -> SendResult:
         if not self.token:

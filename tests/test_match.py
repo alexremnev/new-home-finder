@@ -229,33 +229,22 @@ def test_each_criterion_can_reject_and_says_why(
 SUBSCRIBED_AT = datetime(2026, 8, 7, 10, 0)
 
 
-def test_the_daily_cap_stops_further_alerts() -> None:
-    assert is_eligible(listing(), backfill_from=SUBSCRIBED_AT, sent_today=9,
-                       max_alerts_per_day=10)
-    verdict = is_eligible(listing(), backfill_from=SUBSCRIBED_AT, sent_today=10,
-                          max_alerts_per_day=10)
-    assert not verdict
-    assert "daily cap" in verdict.reason
-
 
 def test_existing_stock_at_subscription_time_is_not_news() -> None:
     """Otherwise the relationship opens with a burst of listings nobody asked for."""
     older = listing(first_seen_at=SUBSCRIBED_AT - timedelta(hours=1))
-    verdict = is_eligible(older, backfill_from=SUBSCRIBED_AT, sent_today=0,
-                          max_alerts_per_day=10)
+    verdict = is_eligible(older, backfill_from=SUBSCRIBED_AT)
     assert not verdict
     assert "before the subscription" in verdict.reason
 
 
 def test_a_listing_seen_after_subscribing_is_eligible() -> None:
     newer = listing(first_seen_at=SUBSCRIBED_AT + timedelta(minutes=1))
-    assert is_eligible(newer, backfill_from=SUBSCRIBED_AT, sent_today=0,
-                       max_alerts_per_day=10)
+    assert is_eligible(newer, backfill_from=SUBSCRIBED_AT)
 
 
 def test_eligibility_and_suitability_are_separate_questions() -> None:
     """A listing can be a perfect home and still not be worth messaging about now."""
     older = listing(first_seen_at=SUBSCRIBED_AT - timedelta(days=1))
     assert matches(REALISTIC, older)
-    assert not is_eligible(older, backfill_from=SUBSCRIBED_AT, sent_today=0,
-                           max_alerts_per_day=10)
+    assert not is_eligible(older, backfill_from=SUBSCRIBED_AT)

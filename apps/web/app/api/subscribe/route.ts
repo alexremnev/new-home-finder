@@ -5,20 +5,25 @@
 // matcher's join excludes them entirely until the webhook sees a START. That is
 // the point: a subscription that could receive messages before its owner has
 // messaged the bot would be a subscription without provable consent.
-
-import { randomBytes } from "node:crypto";
+//
+// The sign-up plan and its limits come from the `plans` table. Nothing in this
+// file knows how many districts a trial covers or how long it lasts.
 
 import { NextResponse } from "next/server";
 
-import { InvalidForm, parseForm } from "@/lib/criteria";
-import { query, transaction } from "@/lib/db";
+import { enforceLimits, InvalidForm, parseForm } from "@/lib/criteria";
+import { transaction } from "@/lib/db";
+import {
+  botLink,
+  enabledDistricts,
+  newToken,
+  paymentRef,
+  signupPlan,
+  START_TTL_MINUTES,
+} from "@/lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// Long enough that guessing one is hopeless, short enough to sit in a URL.
-const TOKEN_BYTES = 24;
-const TOKEN_TTL_MINUTES = 60;
 
 export async function POST(request: Request): Promise<NextResponse> {
   let form: Record<string, unknown>;
@@ -35,9 +40,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ error: "no districts are being covered yet" }, { status: 503 });
   }
 
-  let parsed;
+  const plan = await signupPlan();
+
+  let criteria;
   try {
-    parsed = parseForm(form, districts);
+    criteria = enforceLimits(parseForm(form, districts), {
+      maxDistricts: plan.max_districts,
+    });
   } catch (error) {
     if (error instanceof InvalidForm) {
       return NextResponse.json({ error: error.message }, { status: 400 });
@@ -45,40 +54,46 @@ export async function POST(request: Request): Promise<NextResponse> {
     throw error;
   }
 
-  const token = randomBytes(TOKEN_BYTES).toString("base64url");
+  const token = newToken();
 
   await transaction(async (run) => {
     const users = await run(
-      `INSERT INTO users (status, consent_source, start_token, token_expires_at)
-       VALUES ('pending', 'web_form', $1, now() + make_interval(mins => $2))
+      `INSERT INTO users (status, consent_source, plan, plan_until, payment_ref)
+       VALUES ('pending', 'web_form', $1,
+               CASE WHEN $2::int IS NULL THEN NULL
+                    ELSE now() + make_interval(days => $2::int) END,
+               $3)
        RETURNING id`,
-      [token, TOKEN_TTL_MINUTES],
+      [plan.key, plan.duration_days, paymentRef()],
     );
     const userId = users[0]?.id;
     if (userId === undefined) throw new Error("user row was not created");
 
     await run(
-      `INSERT INTO subscriptions (user_id, label, criteria, max_alerts_per_day, backfill_from)
-       VALUES ($1, $2, $3::jsonb, $4, now())`,
+      `INSERT INTO subscriptions (user_id, label, criteria, backfill_from)
+       VALUES ($1, $2, $3::jsonb, now())`,
       [
         userId,
-        (parsed.criteria.areas?.postcode_districts ?? []).join(", ") || "London",
-        JSON.stringify(parsed.criteria),
-        parsed.maxAlertsPerDay,
+        (criteria.areas?.postcode_districts ?? []).join(", ") || "London",
+        JSON.stringify(criteria),
       ],
     );
+    await run(
+      `INSERT INTO user_tokens (token, user_id, purpose, expires_at)
+       VALUES ($1, $2, 'start', now() + make_interval(mins => $3::int))`,
+      [token, userId, START_TTL_MINUTES],
+    );
   });
-
-  const bot = process.env.TELEGRAM_BOT_USERNAME;
-  if (!bot) throw new Error("TELEGRAM_BOT_USERNAME is not set");
 
   return NextResponse.json({
     ok: true,
     // `backfill_from` is now, so the existing market is not replayed. Said out
     // loud because the first thing a new subscriber notices is silence.
     note: "Only listings that appear from now on will be sent.",
-    url: `https://t.me/${bot}?start=${token}`,
-    expires_in_minutes: TOKEN_TTL_MINUTES,
+    plan: plan.display_name,
+    trial_days: plan.duration_days,
+    url: botLink(token),
+    expires_in_minutes: START_TTL_MINUTES,
   });
 }
 
@@ -96,22 +111,4 @@ async function readForm(request: Request): Promise<Record<string, unknown>> {
     out[key] = values.length > 1 ? values : values[0];
   }
   return out;
-}
-
-/**
- * The districts a subscription may name.
- *
- * Read from the database, not from a constant here, so that widening coverage
- * stays an UPDATE to source_locations rather than a deploy of the web app.
- */
-async function enabledDistricts(): Promise<string[]> {
-  const rows = await query<{ code: string }>(
-    `SELECT DISTINCT l.code
-       FROM source_locations sl
-       JOIN locations l ON l.id = sl.location_id
-       JOIN sources s   ON s.key = sl.source_key AND s.enabled
-      WHERE sl.enabled
-      ORDER BY l.code`,
-  );
-  return rows.map((r) => r.code.toUpperCase());
 }

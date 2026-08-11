@@ -38,7 +38,7 @@ from worker.fetch.client import (
     Transport,
 )
 from worker.obs import Run, Stage
-from worker.pipeline.outbox import drain, queue_matches
+from worker.pipeline.outbox import drain, notify_plan_changes, queue_matches
 from worker.pipeline.reconcile import Summary, decide_missing, decide_seen
 
 # Imported from the package, not from the contracts module: the registry is filled
@@ -79,6 +79,11 @@ def run_job(
         # A separate job so that a delivery failure can be retried without
         # scraping anything again, and so quiet hours can hold messages and a
         # later tick can release them.
+        #
+        # Plan expiries are noticed here for the same reason: it is the job that
+        # runs on a short interval regardless of whether any source is due, so an
+        # expiry is acted on within minutes rather than at the next scrape.
+        notify_plan_changes(conn, run, dry_run=cfg.dry_run)
         return drain(conn, run, suppress=suppress_delivery, dry_run=cfg.dry_run)
 
     keys = [source_key] if source_key else _all_enabled_sources(conn)

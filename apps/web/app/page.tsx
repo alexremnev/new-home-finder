@@ -6,32 +6,17 @@
 // person has no way to tell the difference between "nothing matched" and "nothing
 // was ever looked at".
 
-import { query } from "@/lib/db";
 import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
+import { enabledDistricts, signupPlan } from "@/lib/plans";
 import { SubscribeForm } from "./form";
 
 export const dynamic = "force-dynamic";
 
-async function districts(): Promise<string[]> {
-  try {
-    const rows = await query<{ code: string }>(
-      `SELECT DISTINCT l.code
-         FROM source_locations sl
-         JOIN locations l ON l.id = sl.location_id
-         JOIN sources s   ON s.key = sl.source_key AND s.enabled
-        WHERE sl.enabled
-        ORDER BY l.code`,
-    );
-    return rows.map((r) => r.code.toUpperCase());
-  } catch {
-    // The page still renders and says so, rather than showing a stack trace to
-    // someone who only wanted to sign up.
-    return [];
-  }
-}
-
 export default async function Page() {
-  const codes = await districts();
+  // The page still renders and says so if the database is unreachable, rather
+  // than showing a stack trace to someone who only wanted to sign up.
+  const codes = await enabledDistricts().catch(() => []);
+  const plan = await signupPlan().catch(() => null);
 
   return (
     <main>
@@ -46,11 +31,22 @@ export default async function Page() {
           No districts are being covered right now, so there is nothing to subscribe to yet.
         </p>
       ) : (
-        <SubscribeForm
-          districts={codes}
-          propertyTypes={[...PROPERTY_TYPES]}
-          furnished={[...FURNISHED]}
-        />
+        <>
+          {plan && (
+            <p style={{ background: "#f5fbf8", padding: "0.7rem", borderRadius: 6 }}>
+              <strong>{plan.display_name}</strong>: {plan.max_districts} district
+              {plan.max_districts === 1 ? "" : "s"}
+              {plan.duration_days ? `, ${plan.duration_days} days` : ""}. Every matching
+              listing is sent — <a href="/upgrade">more districts</a>.
+            </p>
+          )}
+          <SubscribeForm
+            districts={codes}
+            maxDistricts={plan?.max_districts ?? 1}
+            propertyTypes={[...PROPERTY_TYPES]}
+            furnished={[...FURNISHED]}
+          />
+        </>
       )}
 
       <p style={{ color: "#777", fontSize: "0.85rem", marginTop: "2rem" }}>

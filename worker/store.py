@@ -353,42 +353,84 @@ def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
 def active_subscriptions(conn: Conn) -> list[Row]:
     """Every filter that should currently receive alerts.
 
+    The plan is enforced here, in the query the matcher already runs, rather than
+    by a job that deactivates expired subscriptions. A job that fails to run keeps
+    sending; a condition in this query cannot.
+
     The address is deliberately not selected: matching does not need it, and a
     value that is never loaded cannot be logged by accident.
     """
     return list(
         conn.execute(
             """
-            SELECT s.id, s.user_id, s.criteria, s.backfill_from, s.max_alerts_per_day,
-                   uc.channel
+            SELECT s.id, s.user_id, s.criteria, s.backfill_from, uc.channel
               FROM subscriptions s
               JOIN users u          ON u.id = s.user_id
+              JOIN plans p          ON p.key = u.plan
               JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
               JOIN channels c       ON c.key = uc.channel AND c.enabled
              WHERE s.active AND u.status = 'active'
+               AND (u.plan_until IS NULL OR u.plan_until > now())
              ORDER BY s.id
             """
         ).fetchall()
     )
 
 
-def sent_today(conn: Conn) -> dict[int, int]:
-    """Messages already queued or sent to each user in the current London day.
+def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
+    """Plan warnings that are due, claimed so each is sent exactly once.
 
-    The cap is a promise about the recipient's day, so it turns over at local
-    midnight rather than at 00:00 UTC. Queued rows count: they are going to be
-    delivered, and leaving them out would let one run queue past the cap.
+    Three stages: a day before the plan ends, an hour before, and once it has. The
+    point of warning beforehand is that "your alerts stopped an hour ago" is a
+    message about a decision the person no longer gets to make.
+
+    Two properties are worth stating, because both are enforced by the schema
+    rather than by this function remembering.
+
+    Once each. The INSERT into `plan_notices` *is* the claim: the unique index on
+    (user_id, stage, plan_until) means a second worker, or a second tick, inserts
+    nothing and therefore returns nothing. There is no flag to read, and no window
+    between deciding and recording.
+
+    Re-armed by a renewal, with no reset anywhere. `plan_until` is part of that key,
+    so paying moves the expiry, which makes a different key, which makes the day and
+    hour warnings due again for the new period. This is what makes "if they pay
+    before the trial ends, warn them again before the paid period ends" fall out of
+    the data model instead of being a special case in code.
+
+    The most urgent unsent stage per user, one row each: someone whose plan ended
+    while the worker was down is told it ended, not warned it is about to.
     """
-    rows = conn.execute(
-        """
-        SELECT user_id, count(*) AS n FROM notifications
-         WHERE status IN ('queued', 'sent')
-           AND created_at >= date_trunc('day', now() AT TIME ZONE 'Europe/London')
-                             AT TIME ZONE 'Europe/London'
-         GROUP BY user_id
-        """
-    ).fetchall()
-    return {int(r["user_id"]): int(r["n"]) for r in rows}
+    return list(
+        conn.execute(
+            """
+            WITH due AS (
+                SELECT u.id AS user_id, u.plan, u.plan_until,
+                       CASE
+                           WHEN u.plan_until <= now()                      THEN 'expired'
+                           WHEN u.plan_until <= now() + interval '1 hour'  THEN 'hour'
+                           ELSE 'day'
+                       END AS stage
+                  FROM users u
+                 WHERE u.status = 'active'
+                   AND u.plan_until IS NOT NULL
+                   AND u.plan_until <= now() + interval '1 day'
+                 ORDER BY u.plan_until
+                 LIMIT %s
+            ),
+            claimed AS (
+                INSERT INTO plan_notices (user_id, stage, plan_until, plan)
+                SELECT user_id, stage, plan_until, plan FROM due
+                ON CONFLICT (user_id, stage, plan_until) DO NOTHING
+                RETURNING user_id, stage, plan_until, plan
+            )
+            SELECT c.user_id, c.stage, c.plan_until, c.plan, uc.channel, uc.address
+              FROM claimed c
+              JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
+            """,
+            (limit,),
+        ).fetchall()
+    )
 
 
 def queue_notification(

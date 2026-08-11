@@ -21,6 +21,7 @@ import psycopg
 from worker import store
 from worker.contracts.notify import Alert, AlertKind, ListingView, Recipient, SendResult
 from worker.notify import build_notifier
+from worker.notify.plans import notice_for
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -31,7 +32,17 @@ Conn = psycopg.Connection[Row]
 # failures worth retrying are transient (429, 5xx); five spread across runs is
 # far more time than any of those last.
 MAX_ATTEMPTS = 5
-BATCH = 50
+
+# How many messages one drain may send.
+#
+# Sized against the queue, not against Telegram. Telegram accepts roughly 30
+# messages a second to different chats, so this batch is about eight seconds of its
+# time; what it has to keep up with is subscribers × matches. At 50 and a tick every
+# ten minutes the ceiling was 300 messages an hour, which 500 subscribers can exceed
+# in a quiet hour — and the backlog does not announce itself, it just delivers
+# yesterday's listings today, which for this product is indistinguishable from being
+# broken.
+BATCH = 250
 
 # `notifications.kind` names the event; `Alert.kind` names the message shape.
 # They are not the same vocabulary, and mapping them here keeps a new event kind
@@ -61,36 +72,18 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
             return
 
         listings = store.listings_for_matching(conn, listing_ids)
-        # A live tally, seeded from what today already holds. Without carrying it
-        # across subscriptions a single run could queue well past the cap and only
-        # discover it at delivery time, by which point the messages exist.
-        tally = store.sent_today(conn)
 
         for subscription in subscriptions:
             user_id = int(subscription["user_id"])
-            cap = int(subscription["max_alerts_per_day"])
             criteria = subscription["criteria"] or {}
 
             for listing in listings:
-                if tally.get(user_id, 0) >= cap:
-                    stage.count("capped")
-                    stage.log(
-                        "info", f"user {user_id} reached the daily cap of {cap}",
-                        user_id=user_id,
-                    )
-                    break
-
                 verdict = matches(criteria, listing)
                 if not verdict:
                     stage.count("not_matched")
                     continue
 
-                eligible = is_eligible(
-                    listing,
-                    backfill_from=subscription["backfill_from"],
-                    sent_today=tally.get(user_id, 0),
-                    max_alerts_per_day=cap,
-                )
+                eligible = is_eligible(listing, backfill_from=subscription["backfill_from"])
                 if not eligible:
                     stage.count("not_eligible")
                     continue
@@ -103,7 +96,6 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
                     channel=str(subscription["channel"]),
                 )
                 if queued:
-                    tally[user_id] = tally.get(user_id, 0) + 1
                     stage.count("queued")
                 else:
                     # Already sent to this user, most likely by another
@@ -185,6 +177,39 @@ def alert_for(row: Row) -> Alert | None:
     return Alert(kind=kind, listing=listing_view(row))
 
 
+def interleave_by_user(batch: list[Row]) -> list[Row]:
+    """Reorder a batch so consecutive messages go to different people.
+
+    Telegram's two limits are different in kind: about 30 messages a second overall,
+    but only about one a second *into a single chat*. A batch claimed in id order
+    puts all four of one person's matches back to back, which is exactly the shape
+    that earns a 429 — and the retry then delays everybody behind them.
+
+    Round-robin across users fixes it without a single sleep: four people with four
+    matches each are delivered as ABCD ABCD ABCD ABCD rather than AAAA BBBB. Only
+    when one person has far more queued than anyone else do their messages end up
+    adjacent, and by then there is nothing else to send instead.
+
+    Order within a user is preserved, so listings still arrive oldest first.
+    """
+    by_user: dict[int, list[Row]] = {}
+    for row in batch:
+        by_user.setdefault(int(row["user_id"]), []).append(row)
+    if len(by_user) < 2:
+        return batch
+
+    out: list[Row] = []
+    queues = list(by_user.values())
+    while queues:
+        # `[:]` because the list is rebuilt each pass; mutating while iterating
+        # would skip a queue every time one empties.
+        for queue in queues[:]:
+            out.append(queue.pop(0))
+            if not queue:
+                queues.remove(queue)
+    return out
+
+
 def drain(
     conn: Conn,
     run: Run,
@@ -219,7 +244,7 @@ def drain(
         gone: set[int] = set()
         status = "ok"
 
-        for row in batch:
+        for row in interleave_by_user(batch):
             channel = str(row["channel"])
             user_id = int(row["user_id"])
             if user_id in gone:
@@ -302,4 +327,57 @@ def _apply(conn: Conn, stage: Any, notification_id: int, user_id: int, decision:
     stage.count("retry_later")
 
 
-__all__ = ["alert_for", "drain", "listing_view", "outcome_for", "queue_matches"]
+# ── plan expiry ───────────────────────────────────────────────────────────
+
+
+def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
+    """Warn people a day and an hour before a plan ends, and once after.
+
+    Sent directly rather than through the outbox, because the outbox is keyed to a
+    listing and these messages are about none. It is also why a failure here is only
+    logged: a courtesy message is not worth a retry queue of its own.
+
+    The claim happens in the database — see `store.claim_plan_notices` — so a send
+    that fails is not retried. That is the deliberate trade: repeating an
+    "about to end" message hourly is worse than missing one, and the next stage will
+    reach them anyway.
+
+    Their filter is left in place at every stage. Someone who pays a week later
+    should find it as they left it, and deleting it here would make an expiry
+    indistinguishable from a `/stop`.
+    """
+    with run.stage("expire") as stage:
+        if dry_run:
+            stage.set("suppressed", True)
+            return
+        due = store.claim_plan_notices(conn)
+        stage.set("notices", len(due))
+        for row in due:
+            notice_stage = str(row["stage"])
+            notifier = build_notifier(str(row["channel"]))
+            if notifier is None or not row["address"]:
+                stage.count("unreachable")
+                continue
+            result = notifier.send(
+                Recipient(channel=str(row["channel"]), address=str(row["address"])),
+                Alert(
+                    kind="expired" if notice_stage == "expired" else "expiring",
+                    text=notice_for(str(row["plan"]), row["plan_until"], notice_stage),
+                ),
+            )
+            if result.ok:
+                stage.count(f"sent_{notice_stage}")
+            else:
+                stage.count("send_failed")
+                stage.log(
+                    "warn",
+                    f"could not send the {notice_stage} plan notice to user "
+                    f"{row['user_id']}: {result.error}",
+                    user_id=int(row["user_id"]),
+                )
+
+
+__all__ = [
+    "alert_for", "drain", "interleave_by_user", "listing_view", "notify_plan_changes",
+    "outcome_for", "queue_matches",
+]
