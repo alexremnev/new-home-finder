@@ -134,8 +134,10 @@ describe("the other commands", () => {
   it("distinguishes showing the filter from changing it", () => {
     expect(parseCommand("/show").kind).toBe("show");
     expect(parseCommand("/settings").kind).toBe("show");
-    // /filter with nothing after it means "let me change this".
-    expect(parseCommand("/filter").kind).toBe("edit");
+    // "Let me change this" now means the wizard, not a link to the form. /edit is
+    // what still sends the form, for someone who would rather use a screen.
+    expect(parseCommand("/filter").kind).toBe("update");
+    expect(parseCommand("/edit").kind).toBe("edit");
   });
 
   it("recognises the upgrade ask", () => {
