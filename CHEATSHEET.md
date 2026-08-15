@@ -45,7 +45,11 @@ UPDATE source_messages SET status = 'new', parse_error = NULL WHERE status = 'un
 
 ## Тесты
 
+Окружение собирается с обоими экстра. `uv sync` **синхронизирует**, а не докладывает:
+`uv sync --extra ingest` в одиночку уберёт `dev`, и `pytest` перестанет находиться.
+
 ```bash
+uv sync --extra ingest --extra dev             # один раз, и после каждой правки зависимостей
 uv run pytest -q                               # все
 uv run pytest tests/test_normalize.py -v       # один файл, подробно
 uv run pytest -q -k robots                     # по имени
