@@ -50,6 +50,7 @@ account must be a member of the destination chat.
 Usage
 -----
     python mirror.py login                 # once, interactively: prints a session
+    python mirror.py dump --limit 5        # print messages in full; changes nothing
     python mirror.py once                  # forward what is new, then exit (cron)
     python mirror.py once --backfill 3     # also take the last 3, to prove it works
     python mirror.py once --dry-run        # print, send nothing, remember nothing
@@ -624,6 +625,98 @@ async def do_once(args: argparse.Namespace) -> int:
     return 1 if problems else 0
 
 
+async def do_dump(args: argparse.Namespace) -> int:
+    """Print recent messages in full, for writing a parser against.
+
+    Read-only: no cursor is touched, nothing is sent, nothing is stored. Running it
+    does not consume anything, so it can be run as often as needed.
+
+    Everything a parser might key on is printed, including the parts that are
+    invisible when you read the chat: which words are hyperlinked and to where,
+    what the buttons point at, and whether several photos are one album. The exact
+    text is printed twice — once readable and once as `repr()` — because leading
+    spaces, double newlines and non-breaking spaces are precisely what a parser
+    trips over and precisely what copying by hand loses.
+    """
+    api_id, api_hash = credentials()
+    client = await connect(api_id, api_hash)
+    try:
+        for source in watched():
+            try:
+                entity = await client.get_entity(source)
+            except (ValueError, TypeError):
+                print(f"mirror: no such chat in this account: @{source}", file=sys.stderr)
+                continue
+
+            messages = await client.get_messages(entity, limit=args.limit)
+            # Oldest first, and only what the bot sent: your own replies are not
+            # what the parser will see.
+            incoming = [m for m in reversed(messages) if not m.out]
+            print(f"===== @{source}: {len(incoming)} message(s), oldest first =====")
+
+            for message in incoming:
+                print("\n" + "=" * 72)
+                head = [f"id {message.id}"]
+                if message.date:
+                    head.append(message.date.strftime("%Y-%m-%d %H:%M:%S %Z").strip())
+                grouped = getattr(message, "grouped_id", None)
+                if grouped:
+                    # Several photos sent as one album arrive as separate messages,
+                    # and only the first carries the caption. A parser that does not
+                    # know this reads the rest as empty listings.
+                    head.append(f"album {grouped}")
+                kinds = [
+                    key for key in (
+                        "photo", "video", "document", "audio", "voice", "sticker",
+                        "gif", "contact", "geo", "poll", "web_preview",
+                    )
+                    if getattr(message, key, None)
+                ]
+                if kinds:
+                    head.append("media: " + ", ".join(kinds))
+                print("--- " + " | ".join(head))
+
+                text = message.text or ""
+                print("--- text as shown:")
+                print(text if text else "(empty)")
+                print("--- text exactly (repr):")
+                print(repr(text))
+
+                # Hidden links: the chat shows a word, the URL lives on the entity.
+                # `get_entities_text` is used rather than slicing by offset because
+                # Telegram counts offsets in UTF-16 units, and a message full of
+                # emoji would slice wrongly.
+                try:
+                    pairs = message.get_entities_text()
+                except Exception:  # noqa: BLE001 - older Telethon, or no entities
+                    pairs = []
+                if pairs:
+                    print("--- entities:")
+                    for entity_obj, covered in pairs:
+                        url = getattr(entity_obj, "url", None)
+                        print(f"    {type(entity_obj).__name__}: {covered!r}"
+                              + (f"  ->  {url}" if url else ""))
+
+                markup = getattr(message, "reply_markup", None)
+                rows = getattr(markup, "rows", None) or []
+                if rows:
+                    print("--- buttons:")
+                    for row_index, row in enumerate(rows):
+                        for button in getattr(row, "buttons", None) or []:
+                            label = getattr(button, "text", "")
+                            url = getattr(button, "url", None)
+                            data = getattr(button, "data", None)
+                            print(f"    row {row_index}: {label!r}"
+                                  + (f"  ->  {url}" if url else "")
+                                  + (f"  [callback {data!r}]" if data else ""))
+    finally:
+        await client.disconnect()
+
+    print("\n" + "=" * 72)
+    print("Copy everything above, from the first ===== line.")
+    return 0
+
+
 async def do_watch(args: argparse.Namespace) -> int:
     api_id, api_hash = credentials()
     client = await connect(api_id, api_hash)
@@ -669,6 +762,11 @@ def main() -> int:
     subcommands = parser.add_subparsers(dest="command", required=True)
     subcommands.add_parser("login", help="sign in once and print a session string")
 
+    dump = subcommands.add_parser(
+        "dump", help="print recent messages in full, for writing a parser against")
+    dump.add_argument("--limit", type=int, default=5, metavar="N",
+                      help="how many recent messages to print (default 5)")
+
     for name, help_text in (("once", "forward what is new, then exit"),
                             ("watch", "stay connected and forward live")):
         sub = subcommands.add_parser(name, help=help_text)
@@ -690,6 +788,8 @@ def main() -> int:
     try:
         if args.command == "login":
             return asyncio.run(do_login())
+        if args.command == "dump":
+            return asyncio.run(do_dump(args))
         if args.command == "once":
             return asyncio.run(do_once(args))
         return asyncio.run(do_watch(args))
