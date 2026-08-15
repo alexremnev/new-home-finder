@@ -35,6 +35,16 @@ def source_row(conn: Conn, source_key: str) -> Row | None:
 
 # ── listings ──────────────────────────────────────────────────────────────
 
+# Every column a listing is written with. A fixed tuple, and the SQL is built from
+# it, so a field added to `Listing` has exactly one place to be added here — and the
+# f-string interpolating it is safe because nothing outside this module can reach it.
+_INSERT_COLUMNS = (
+    "source_key", "external_id", "url", "price_pcm", "bedrooms", "bathrooms",
+    "property_type", "furnished", "pets_allowed", "bills_included", "available_from",
+    "min_tenancy_months", "deposit_pcm", "postcode", "postcode_district", "tfl_zone",
+    "lat", "lng", "title", "description", "is_landlord_direct", "photo_count",
+)
+
 
 def insert_listing(conn: Conn, listing: Listing) -> int:
     values = _listing_values(listing)
