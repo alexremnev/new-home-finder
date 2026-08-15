@@ -31,7 +31,13 @@ import type { Button, Keyboard } from "./telegram";
 
 // ── the shape of a session ────────────────────────────────────────────────
 
-export const STEPS = ["districts", "bedrooms", "price", "pets", "furnished", "confirm"] as const;
+// Six questions. Rent is two of them because one field asking for "1500-2200"
+// makes people guess the format; two fields asking for a number each do not, and
+// either can be waved past with Continue.
+export const STEPS = [
+  "districts", "bedrooms", "priceMin", "priceMax", "pets", "furnished", "confirm",
+] as const;
+const TOTAL = STEPS.length - 1;   // `confirm` is not a question
 export type Step = (typeof STEPS)[number] | "overwrite";
 
 export type Session = {
@@ -46,6 +52,15 @@ export type Session = {
 export type Context = {
   districts: string[];
   maxDistricts: number;
+  /**
+   * Neighbourhood name (lower case) to district code — "leytonstone" -> "E11".
+   *
+   * Built from listings already seen rather than from a hand-kept gazetteer: the
+   * feed states a location name on every message, so the names people recognise
+   * arrive with the data. A name nobody has posted a listing for is unknown here,
+   * which is the honest answer — nothing would match it anyway.
+   */
+  names?: Record<string, string>;
 };
 
 export const SESSION_TTL_MINUTES = 60;
@@ -82,32 +97,43 @@ const OUTWARD = /^[A-Z]{1,2}\d{1,2}[A-Z]?$/;
 export function readDistricts(
   text: string,
   allowed: string[],
-): { codes: string[]; badFormat: string[]; notCovered: string[] } {
+  names: Record<string, string> = {},
+): { codes: string[]; unknown: string[]; notCovered: string[] } {
   const codes: string[] = [];
-  const badFormat: string[] = [];
+  const unknown: string[] = [];
   const notCovered: string[] = [];
   const permitted = new Set(allowed.map((code) => code.toUpperCase()));
 
-  // Split on commas and whitespace, then take the outward code off anything that
-  // looks like a full postcode: "E11 4EG" arrives as two tokens, and "4EG" alone
-  // is not a district.
-  const tokens = text.toUpperCase().split(/[,;\s]+/).map((t) => t.trim()).filter(Boolean);
-  for (const token of tokens) {
-    const cleaned = token.replace(/[^A-Z0-9]/g, "");
-    if (!cleaned) continue;
-    // An inward code — "4EG", "2ED" — is the second half of a postcode whose first
-    // half we have already taken. Skipped rather than reported: complaining about
-    // it would make pasting a full postcode feel like an error.
-    if (/^\d[A-Z]{2}$/.test(cleaned)) continue;
-    if (!OUTWARD.test(cleaned)) {
-      badFormat.push(token);
-    } else if (!permitted.has(cleaned)) {
-      notCovered.push(cleaned);
-    } else if (!codes.includes(cleaned)) {
-      codes.push(cleaned);
+  const add = (code: string, source: string) => {
+    if (!permitted.has(code)) notCovered.push(source);
+    else if (!codes.includes(code)) codes.push(code);
+  };
+
+  // Commas first, and names before codes. "Camden Town" contains a space, so
+  // splitting the whole input on whitespace — which the code-only version did —
+  // would have torn every two-word name in half.
+  for (const part of text.split(/[,;\n]+/).map((p) => p.trim()).filter(Boolean)) {
+    const named = names[part.toLowerCase().replace(/\s+/g, " ")];
+    if (named) {
+      add(named.toUpperCase(), part);
+      continue;
     }
+
+    // Not a name, so read it as one or more codes: "SE16 E14" is two, and
+    // "E11 4EG" is one with its inward half attached.
+    let recognised = false;
+    for (const token of part.toUpperCase().split(/\s+/).filter(Boolean)) {
+      const cleaned = token.replace(/[^A-Z0-9]/g, "");
+      if (!cleaned) continue;
+      // An inward code — "4EG" — is the second half of a postcode whose first half
+      // has already been taken. Ignored rather than reported: complaining would
+      // make pasting a full postcode feel like a mistake.
+      if (/^\d[A-Z]{2}$/.test(cleaned)) { recognised = true; continue; }
+      if (OUTWARD.test(cleaned)) { add(cleaned, token); recognised = true; }
+    }
+    if (!recognised) unknown.push(part);
   }
-  return { codes, badFormat, notCovered };
+  return { codes, unknown, notCovered };
 }
 
 /** Districts typed at the first step, merged with whatever was already chosen. */
@@ -118,9 +144,13 @@ export function applyDistrictText(
 ): { ok: true; session: Session; added: string[] } | { ok: false; reason: string } {
   if (session.step !== "districts") return { ok: false, reason: "not at the district step" };
 
-  const { codes, badFormat, notCovered } = readDistricts(text, context.districts);
+  const { codes, unknown, notCovered } = readDistricts(
+    text, context.districts, context.names ?? {},
+  );
   const complaints: string[] = [];
-  if (badFormat.length) complaints.push(`not a district: ${badFormat.join(", ")}`);
+  // Two different answers, and saying the wrong one is worse than saying nothing:
+  // "Narnia isn't covered yet" implies it would be, one day.
+  if (unknown.length) complaints.push(`I don't know: ${unknown.join(", ")}`);
   if (notCovered.length) complaints.push(`not covered yet: ${notCovered.join(", ")}`);
 
   if (!codes.length) {
@@ -285,9 +315,10 @@ export function apply(session: Session, action: Action, context: Context): Outco
       };
     }
 
-    case "price":
-      // Answered by typing, not tapping — see `applyPriceText`. The only button on
-      // this step is Skip.
+    case "priceMin":
+    case "priceMax":
+      // Answered by typing — see `applyPriceText`. Continue is the only button, and
+      // it means "no bound at this end" rather than "forget the question".
       if (action.kind !== "skip") return stale(session);
       return { kind: "render", session: advance(session) };
 
@@ -329,34 +360,36 @@ export function apply(session: Session, action: Action, context: Context): Outco
 export function applyPriceText(
   session: Session,
   text: string,
-  ): { ok: true; session: Session } | { ok: false; reason: string } {
-  if (session.step !== "price") return { ok: false, reason: "not at the price step" };
+): { ok: true; session: Session } | { ok: false; reason: string } {
+  const which = session.step === "priceMin" ? "min" : session.step === "priceMax" ? "max" : null;
+  if (!which) return { ok: false, reason: "not at a price step" };
 
-  const range = parseRange(text);
-  if (range === null) {
-    return { ok: false, reason: `I couldn't read "${text.trim()}" as a price.` };
+  const digits = text.replace(/[£,\s]/g, "");
+  if (!digits) return { ok: false, reason: "Send a number, or tap Continue." };
+  // "any" is what Continue does, so it is accepted rather than argued with.
+  if (/^(any|all|none|-)$/i.test(digits)) {
+    return { ok: true, session: advance(session) };
   }
-  // `{}` is what "any" parses to. It means no price criterion, which is exactly
-  // what Skip does, so it is accepted rather than refused.
-  if (range.min === undefined && range.max === undefined) {
-    return { ok: true, session: advance({ ...session, draft: stripPrice(session.draft) }) };
+  if (!/^\d+$/.test(digits)) {
+    return { ok: false, reason: `I couldn't read "${text.trim()}" as a number.` };
   }
-  for (const value of [range.min, range.max]) {
-    if (value === undefined) continue;
-    if (value < PRICE_FLOOR || value > PRICE_CEILING) {
-      return {
-        ok: false,
-        reason: `Rent has to be between £${PRICE_FLOOR} and £${PRICE_CEILING.toLocaleString("en-GB")} a month.`,
-      };
-    }
+
+  const value = Number(digits);
+  if (value < PRICE_FLOOR || value > PRICE_CEILING) {
+    return {
+      ok: false,
+      reason: `Rent has to be between £${PRICE_FLOOR} and £${PRICE_CEILING.toLocaleString("en-GB")} a month.`,
+    };
   }
-  if (range.min !== undefined && range.max !== undefined && range.min > range.max) {
-    return { ok: false, reason: "The minimum is above the maximum." };
+
+  const price = { ...(session.draft.price_pcm ?? {}) };
+  if (which === "max" && price.min !== undefined && value < price.min) {
+    // Caught here rather than at the confirmation: the person is looking at the
+    // number they just typed, which is the only moment the correction is cheap.
+    return { ok: false, reason: `That is below your minimum of £${price.min.toLocaleString("en-GB")}.` };
   }
-  return {
-    ok: true,
-    session: advance({ ...session, draft: { ...session.draft, price_pcm: range } }),
-  };
+  price[which] = value;
+  return { ok: true, session: advance({ ...session, draft: { ...session.draft, price_pcm: price } }) };
 }
 
 function advance(session: Session): Session {
@@ -389,7 +422,10 @@ function stripPrice(draft: Criteria): Criteria {
 
 // ── what each step looks like ─────────────────────────────────────────────
 
-const SKIP: Button = { text: "Doesn't matter", callback_data: "w:sk" };
+// "Continue" rather than "Doesn't matter": at the price steps skipping means a
+// bound of nothing-to-everything, and "doesn't matter" read as if it discarded the
+// answer rather than widening it.
+const SKIP: Button = { text: "Continue →", callback_data: "w:sk" };
 
 /**
  * The message and keyboard for a step.
@@ -426,17 +462,20 @@ export function render(session: Session, context: Context): { text: string; keyb
       ];
       return {
         text: [
-          "Step 1 of 5 — where?",
+          `Step 1 of ${TOTAL} — where?`,
           "",
           chosen.length
             ? `Chosen: ${chosen.join(", ")}  (${chosen.length} of ${context.maxDistricts})`
-            : `Choose up to ${context.maxDistricts} districts.`,
+            : `Choose up to ${context.maxDistricts} areas.`,
           "",
-          "Type them and send — for example:",
-          `${sample.slice(0, 2).join(", ") || "SE16, E14"}`,
+          "Send an area name or a postcode — either works:",
+          exampleNames(context).length
+            ? `${exampleNames(context).join(", ")}`
+            : "Leytonstone, Camden Town",
+          `${sample.slice(0, 2).join(", ") || "SE16, E14"}   ·   E11 4EG`,
           "",
-          "A full postcode works too: E11 4EG counts as E11.",
-          "Or tap one below. Tapping again removes it.",
+          "Several at once, separated by commas. Or tap one below;",
+          "tapping again removes it.",
         ].join("\n"),
         keyboard: [
           ...rows(
@@ -454,7 +493,7 @@ export function render(session: Session, context: Context): { text: string; keyb
     case "bedrooms":
       return {
         text: [
-          "Step 2 of 5 — how many bedrooms, at least?",
+          `Step 2 of ${TOTAL} — how many bedrooms, at least?`,
           "",
           "0 includes studios.",
         ].join("\n"),
@@ -470,23 +509,37 @@ export function render(session: Session, context: Context): { text: string; keyb
         ],
       };
 
-    case "price":
+    case "priceMin":
       return {
         text: [
-          "Step 3 of 5 — rent per month?",
+          `Step 3 of ${TOTAL} — cheapest rent you'd consider?`,
           "",
-          "Send a range, for example:",
-          "1500-2200   ·   2000 (means up to £2000)   ·   1500-",
+          "Send a number, for example 1500.",
           "",
-          `Between £${PRICE_FLOOR} and £${PRICE_CEILING.toLocaleString("en-GB")}.`,
+          `Continue skips it — anything from £${PRICE_FLOOR} a month.`,
         ].join("\n"),
         keyboard: [[SKIP]],
       };
 
+    case "priceMax": {
+      const floor = session.draft.price_pcm?.min;
+      return {
+        text: [
+          `Step 4 of ${TOTAL} — most you'd pay?`,
+          "",
+          "Send a number, for example 2200.",
+          floor !== undefined ? `Your minimum is £${floor.toLocaleString("en-GB")}.` : "",
+          "",
+          `Continue skips it — up to £${PRICE_CEILING.toLocaleString("en-GB")} a month.`,
+        ].filter((line, index, all) => line !== "" || all[index - 1] !== "").join("\n"),
+        keyboard: [[SKIP]],
+      };
+    }
+
     case "pets":
       return {
         text: [
-          "Step 4 of 5 — pets?",
+          `Step 5 of ${TOTAL} — pets?`,
           "",
           "This leaves out listings that say pets are not allowed.",
           "Listings that say nothing either way still come through, marked",
@@ -501,7 +554,7 @@ export function render(session: Session, context: Context): { text: string; keyb
 
     case "furnished":
       return {
-        text: "Step 5 of 5 — furnishing?",
+        text: `Step ${TOTAL} of ${TOTAL} — furnishing?`,
         keyboard: [
           ...rows(
             FURNISHED.map((value) => ({
@@ -531,6 +584,23 @@ export function render(session: Session, context: Context): { text: string; keyb
       };
   }
 }
+
+/** Two area names to show as an example, from the ones actually seen in listings. */
+function exampleNames(context: Context): string[] {
+  const names = Object.values(context.names ?? {});
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const [name, code] of Object.entries(context.names ?? {})) {
+    if (seen.has(code) || !context.districts.includes(code.toUpperCase())) continue;
+    seen.add(code);
+    // Title case: the map is keyed lower case for lookup, and "leytonstone" in an
+    // example reads as a typo.
+    out.push(name.replace(/\b[a-z]/g, (c) => c.toUpperCase()));
+    if (out.length === 2) break;
+  }
+  return names.length ? out : [];
+}
+
 
 function rows(buttons: Button[], perRow: number): Keyboard {
   const out: Keyboard = [];

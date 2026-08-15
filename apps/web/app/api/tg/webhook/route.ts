@@ -134,7 +134,9 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   if (command.kind === "help" && !command.reason) {
     const waiting = await loadSession(chatId);
     if (waiting?.step === "districts") return districtsTyped(chatId, waiting, text ?? "");
-    if (waiting?.step === "price") return priceTyped(chatId, waiting, text ?? "");
+    if (waiting?.step === "priceMin" || waiting?.step === "priceMax") {
+      return priceTyped(chatId, waiting, text ?? "");
+    }
   }
 
   if (command.kind === "update") return beginUpdate(chatId);
@@ -452,7 +454,7 @@ async function priceTyped(chatId: string, session: Session, text: string): Promi
   if (!result.ok) {
     // Sent as a message rather than edited into the prompt: the person typed, so
     // the correction belongs next to what they typed.
-    await sendMessage(chatId, `${result.reason}\n\nSend a range like 1500-2200, or tap Doesn't matter.`);
+    await sendMessage(chatId, `${result.reason}\n\nSend a number, or tap Continue.`);
     return;
   }
   const context = await wizardContext(session.userId);

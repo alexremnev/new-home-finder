@@ -52,7 +52,7 @@ function press(start: Session, ...taps: string[]): Session {
 describe("a full pass", () => {
   it("collects every answer and arrives at the confirmation", () => {
     let s = press(session(), "w:d:SE16", "w:d:E14", "w:dn", "w:b:2");
-    expect(s.step).toBe("price");
+    expect(s.step).toBe("priceMin");
 
     const priced = applyPriceText(s, "1500-2200");
     expect(priced.ok).toBe(true);
@@ -134,64 +134,60 @@ describe("districts", () => {
 
 // ── price ─────────────────────────────────────────────────────────────────
 
-describe("price", () => {
-  const at = () => session({ step: "price" });
+describe("price, asked as two numbers", () => {
+  // One field asking for "1500-2200" makes people guess the format. Two fields
+  // asking for one number each do not, and either end can be waved past.
+  const min = () => session({ step: "priceMin" });
+  const max = (floor?: number) =>
+    session({ step: "priceMax", draft: floor === undefined ? {} : { price_pcm: { min: floor } } });
 
-  it("reads the same formats the /price command accepts", () => {
-    expect(applyPriceText(at(), "1500-2200")).toMatchObject({
+  it("reads a plain number at each end", () => {
+    const low = applyPriceText(min(), "1500");
+    expect(low).toMatchObject({ ok: true, session: { draft: { price_pcm: { min: 1500 } } } });
+    if (!low.ok) return;
+    expect(low.session.step).toBe("priceMax");
+    expect(applyPriceText(low.session, "2200")).toMatchObject({
       ok: true,
       session: { draft: { price_pcm: { min: 1500, max: 2200 } } },
     });
-    // A bare number is a ceiling, which is what one number means to the person
-    // typing it.
-    expect(applyPriceText(at(), "2000")).toMatchObject({
-      ok: true,
-      session: { draft: { price_pcm: { max: 2000 } } },
-    });
-    expect(applyPriceText(at(), "£1,800-2,400")).toMatchObject({
-      ok: true,
-      session: { draft: { price_pcm: { min: 1800, max: 2400 } } },
+  });
+
+  it("tolerates the way people write money", () => {
+    expect(applyPriceText(min(), "£1,500")).toMatchObject({
+      ok: true, session: { draft: { price_pcm: { min: 1500 } } },
     });
   });
 
-  it("treats 'any' as the skip it is, rather than refusing it", () => {
-    const result = applyPriceText(at(), "any");
+  it("moves on without a bound when skipped", () => {
+    const result = applyPriceText(min(), "any");
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.session.draft.price_pcm).toBeUndefined();
-      expect(result.session.step).toBe("pets");
+      expect(result.session.step).toBe("priceMax");
     }
   });
 
-  it("refuses a rent below the floor, because it is a weekly figure or a typo", () => {
-    const result = applyPriceText(at(), "50-200");
+  it("refuses a maximum below the minimum, while they are looking at it", () => {
+    const result = applyPriceText(max(2000), "1500");
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain(String(PRICE_FLOOR));
+    if (!result.ok) expect(result.reason).toContain("2,000");
   });
 
-  it("refuses a rent above the ceiling", () => {
-    const result = applyPriceText(at(), `1500-${PRICE_CEILING + 1}`);
-    expect(result.ok).toBe(false);
+  it("keeps the floor and the ceiling", () => {
+    expect(applyPriceText(min(), String(PRICE_FLOOR)).ok).toBe(true);
+    expect(applyPriceText(max(), String(PRICE_CEILING)).ok).toBe(true);
+    expect(applyPriceText(min(), "50").ok).toBe(false);
+    expect(applyPriceText(max(), String(PRICE_CEILING + 1)).ok).toBe(false);
   });
 
-  it("accepts exactly the floor and the ceiling", () => {
-    expect(applyPriceText(at(), `${PRICE_FLOOR}-${PRICE_CEILING}`).ok).toBe(true);
-  });
-
-  it("refuses a range that is the wrong way round", () => {
-    const result = applyPriceText(at(), "2200-1500");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toContain("minimum is above");
-  });
-
-  it("refuses text that is not a price at all, quoting it back", () => {
-    const result = applyPriceText(at(), "cheap please");
+  it("refuses text that is not a number, quoting it back", () => {
+    const result = applyPriceText(min(), "cheap please");
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain("cheap please");
   });
 
-  it("is only answerable while the wizard is at that step", () => {
-    expect(applyPriceText(session({ step: "pets" }), "1500-2200").ok).toBe(false);
+  it("is only answerable at a price step", () => {
+    expect(applyPriceText(session({ step: "pets" }), "1500").ok).toBe(false);
   });
 });
 
@@ -269,7 +265,7 @@ describe("a tap from an earlier step", () => {
 describe("callback data", () => {
   it("stays inside Telegram's 64-byte limit for every button on every step", () => {
     const steps: Session["step"][] = [
-      "overwrite", "districts", "bedrooms", "price", "pets", "furnished", "confirm",
+      "overwrite", "districts", "bedrooms", "priceMin", "pets", "furnished", "confirm",
     ];
     const wide: Context = {
       districts: Array.from({ length: 40 }, (_, n) => `SE${n}`),
@@ -315,7 +311,7 @@ describe("the prompts", () => {
     for (const [step, label] of [
       ["districts", "Step 1 of 5"],
       ["bedrooms", "Step 2 of 5"],
-      ["price", "Step 3 of 5"],
+      ["priceMin", "Step 3 of 5"],
       ["pets", "Step 4 of 5"],
       ["furnished", "Step 5 of 5"],
     ] as const) {
@@ -352,7 +348,7 @@ describe("the prompts", () => {
 
 describe("cancel", () => {
   it("abandons from any step without writing", () => {
-    for (const step of ["districts", "price", "confirm"] as const) {
+    for (const step of ["districts", "priceMin", "confirm"] as const) {
       expect(apply(session({ step }), { kind: "cancel" }, CONTEXT).kind).toBe("abandon");
     }
   });
@@ -374,24 +370,49 @@ describe("typed districts", () => {
   // A keyboard cannot hold London — around 300 outward codes, and Telegram will
   // not render a hundred rows. Typing is how most of them are reached, so the
   // parsing has to be forgiving about form and strict about result.
-  const ALLOWED = ["SE16", "SE8", "E14", "E11", "N1", "SW17", "EC1A"];
+  const ALLOWED = ["SE16", "SE8", "E14", "E11", "N1", "NW1", "SW17", "EC1A"];
   const CTX: Context = { districts: ALLOWED, maxDistricts: 5 };
+
+  const NAMES = { leytonstone: "E11", "camden town": "NW1", "canary wharf": "E14" };
 
   it("reads commas, spaces and any case", () => {
     expect(readDistricts("SE16, E14 n1", ALLOWED).codes).toEqual(["SE16", "E14", "N1"]);
+  });
+
+  it("accepts an area name as readily as a code", () => {
+    // The name is what people know. "E11" is what the filter needs, and nobody
+    // should have to look it up.
+    expect(readDistricts("Leytonstone", ALLOWED, NAMES).codes).toEqual(["E11"]);
+    expect(readDistricts("leytonstone", ALLOWED, NAMES).codes).toEqual(["E11"]);
+  });
+
+  it("keeps a two-word name whole", () => {
+    // Splitting the whole input on whitespace — which the code-only version did —
+    // tore every two-word name in half.
+    expect(readDistricts("Camden Town", ALLOWED, NAMES).codes).toEqual(["NW1"]);
+  });
+
+  it("mixes names and codes in one message", () => {
+    expect(readDistricts("Leytonstone, SE16, Canary Wharf", ALLOWED, NAMES).codes)
+      .toEqual(["E11", "SE16", "E14"]);
+  });
+
+  it("reports a name it does not know as unknown, not as uncovered", () => {
+    // "Narnia isn't covered yet" implies it would be, one day.
+    expect(readDistricts("Narnia", ALLOWED, NAMES).unknown).toEqual(["Narnia"]);
   });
 
   it("takes the outward code from a full postcode, without complaining about the rest", () => {
     // Someone pasting their own postcode must not be told they got it wrong.
     const result = readDistricts("E11 4EG", ALLOWED);
     expect(result.codes).toEqual(["E11"]);
-    expect(result.badFormat).toEqual([]);
+    expect(result.unknown).toEqual([]);
   });
 
   it("separates what is not a district from what is not covered", () => {
     // Two different answers: one is a typo, the other is a coverage gap, and
     // telling someone "banana isn't covered yet" would be nonsense.
-    expect(readDistricts("banana", ALLOWED).badFormat).toEqual(["BANANA"]);
+    expect(readDistricts("banana", ALLOWED).unknown).toEqual(["BANANA"]);
     expect(readDistricts("ZZ99", ALLOWED).notCovered).toEqual(["ZZ99"]);
   });
 
