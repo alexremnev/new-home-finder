@@ -14,6 +14,10 @@
 tools/tg-mirror/state.json
 tools/tg-mirror/state.json.tmp
 tools/tg-mirror/logs/
+# Captured messages from a source bot. Useful for writing a parser, not for the
+# repository: it is somebody else's content, it goes stale, and the fixtures worth
+# keeping are pasted into tests/test_tg_feed.py where they can be read.
+tools/tg-mirror/dump*.json
 
 # Python
 __pycache__/
@@ -32,6 +36,9 @@ build/
 # Node / Next.js
 node_modules/
 .next/
+*.tsbuildinfo
+logs/
+next-env.d.ts
 out/
 .vercel/
 

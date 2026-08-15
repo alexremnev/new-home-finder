@@ -2,15 +2,24 @@
 
 One rule governs everything here, and it is worth stating before the code:
 
-    a criterion that is set requires a known value; unknown does not pass.
+    a criterion rejects a listing only on a value that contradicts it.
+    Unknown passes.
 
-A listing that does not say whether pets are allowed fails a "pets allowed"
-filter. So does one with no availability date against a "available before" filter.
-The alternative — treating unknown as acceptable — produces alerts the recipient
-cannot act on, and precision matters more than volume here: three relevant alerts
-a day are tolerated, fifteen noisy ones lose the user. That precision is the only
-thing limiting volume, because every match is delivered — a cap would withhold a
-listing that qualified, which the person waiting for it could never see.
+A listing that does not say whether pets are allowed still satisfies a "pets
+allowed" filter; one that says they are not does not.
+
+This is the opposite of what this file did originally, and the reversal was not a
+change of taste. The earlier rule — unknown fails — was defensible while every
+listing came from a scraped page where the field was either present or genuinely
+absent. It stopped being defensible once a feed arrived that never states pets or
+bills at all: under the old rule, anybody who ticked "pets allowed" in the wizard
+received nothing, for ever, with no error anywhere and no way to find out. A
+filter that silently matches zero listings is worse than a filter that occasionally
+includes one the person has to check themselves.
+
+What makes the reversal honest is the message: the renderer says "not stated"
+rather than staying silent, so the recipient can see which of their requirements
+this listing has not actually answered.
 
 Matching works on plain dictionaries rather than model instances, so it needs
 neither a database nor a validation layer to test.
@@ -81,7 +90,10 @@ def _range(name: str, wanted: Any, value: Any) -> Verdict:
     if low is None and high is None:
         return MATCH
     if value is None:
-        return Verdict(False, f"{name} unknown")
+        # Unknown passes, like everywhere else. In practice both price and
+        # bedrooms are refused at ingest when absent, so this is a guard rather
+        # than a path anything travels.
+        return MATCH
     if low is not None and value < low:
         return Verdict(False, f"{name} {value} below {low}")
     if high is not None and value > high:
@@ -98,7 +110,7 @@ def _check_property_type(criteria: Criteria, listing: ListingValues) -> Verdict:
         return MATCH
     value = listing.get("property_type")
     if value is None:
-        return Verdict(False, "property type unknown")
+        return MATCH  # unknown passes; the renderer says so
     if str(value).lower() not in {str(w).lower() for w in wanted}:
         return Verdict(False, f"property type {value} not in {sorted(wanted)}")
     return MATCH
@@ -110,7 +122,7 @@ def _check_furnished(criteria: Criteria, listing: ListingValues) -> Verdict:
         return MATCH
     value = listing.get("furnished") or "unknown"
     if value == "unknown":
-        return Verdict(False, "furnishing unknown")
+        return MATCH  # unknown passes; the renderer says so
     if str(value).lower() not in {str(w).lower() for w in wanted}:
         return Verdict(False, f"furnishing {value} not in {sorted(wanted)}")
     return MATCH
@@ -140,6 +152,10 @@ def _check_areas(criteria: Criteria, listing: ListingValues) -> Verdict:
         return MATCH
 
     if not district and listing.get("tfl_zone") is None:
+        # The one place unknown still fails, and deliberately: an area filter is
+        # the only criterion nobody sets by accident, and a listing of unknown
+        # location cannot be viewed, travelled to, or judged. Sending it would be
+        # noise rather than a judgement call the recipient can make.
         return Verdict(False, "location unknown")
     return Verdict(False, f"{district or 'zone ' + str(zone)} outside the requested areas")
 
@@ -150,11 +166,12 @@ _TRI_STATE = ("pets_allowed", "bills_included")
 
 
 def _check_tri_state(criteria: Criteria, listing: ListingValues) -> Verdict:
-    """A flag the user asked for must be stated on the listing.
+    """A flag the user asked for is only violated by a listing that contradicts it.
 
-    `pets_allowed: true` means the listing has to say pets are allowed. One that
-    is silent does not qualify: for someone with a pet, "unstated" is not an
-    answer they can act on.
+    `pets_allowed: true` excludes a listing that says pets are *not* allowed, and
+    keeps one that says nothing. Most sources say nothing most of the time — one
+    feed never mentions pets at all — so rejecting silence would turn this
+    criterion into a mute off switch for the whole subscription.
     """
     for name in _TRI_STATE:
         wanted = criteria.get(name)
@@ -162,7 +179,7 @@ def _check_tri_state(criteria: Criteria, listing: ListingValues) -> Verdict:
             continue
         value = listing.get(name)
         if value is None:
-            return Verdict(False, f"{name} not stated")
+            continue  # unknown passes; the renderer says so
         if bool(value) is not bool(wanted):
             return Verdict(False, f"{name} is {value}, wanted {wanted}")
     return MATCH
@@ -180,7 +197,7 @@ def _check_available_from(criteria: Criteria, listing: ListingValues) -> Verdict
         return MATCH
     value = _as_date(listing.get("available_from"))
     if value is None:
-        return Verdict(False, "availability date unknown")
+        return MATCH  # unknown passes; the renderer says so
     if before is not None and value > before:
         return Verdict(False, f"available {value}, wanted before {before}")
     if after is not None and value < after:
@@ -198,17 +215,24 @@ def _check_min_tenancy(criteria: Criteria, listing: ListingValues) -> Verdict:
         return MATCH
     value = listing.get("min_tenancy_months")
     if value is None:
-        return Verdict(False, "minimum tenancy unknown")
+        return MATCH  # unknown passes; the renderer says so
     if value > ceiling:
         return Verdict(False, f"minimum tenancy {value} months exceeds {ceiling}")
     return MATCH
 
 
 def _check_landlord_direct(criteria: Criteria, listing: ListingValues) -> Verdict:
+    """Three states, and the middle one is why this is not `is not True`.
+
+    `False` is a statement — an agency listing — and it contradicts the criterion.
+    `None` is silence, and under the rule at the top of this file silence passes.
+    Conflating them, as `is not True` did, rejected every source that does not
+    report agency status at all.
+    """
     if not criteria.get("landlord_direct_only"):
         return MATCH
-    if listing.get("is_landlord_direct") is not True:
-        return Verdict(False, "not stated as landlord-direct")
+    if listing.get("is_landlord_direct") is False:
+        return Verdict(False, "listed by an agency, not the landlord")
     return MATCH
 
 

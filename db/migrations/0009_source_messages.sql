@@ -41,14 +41,17 @@ BEGIN;
 -- which is also what lets it be disabled without a deploy.
 INSERT INTO sources (key, display_name, enabled, min_items, config)
 VALUES (
-    'homescout',
-    'HomeScout (Telegram)',
+    'tg_feed',
+    'Telegram feed',
     true,
     -- No health floor. The other sources are search pages where "fewer than five
     -- results" means something is wrong; here a quiet hour is just a quiet hour,
     -- and a floor would keep tripping the circuit breaker on nothing.
     0,
-    '{"kind": "telegram_bot", "handle": "HomeScoutUK_bot",
+    -- No handle. Which chat is read is the reader's configuration (`TG_WATCH` in
+    -- its untracked .env), not a fact about the pipeline, and naming a third party
+    -- in a migration puts it in the history for good.
+    '{"kind": "telegram_feed",
       "note": "read from a user account over MTProto; messages land in source_messages"}'::jsonb
 )
 ON CONFLICT (key) DO NOTHING;

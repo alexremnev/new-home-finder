@@ -393,8 +393,10 @@ export function render(session: Session, context: Context): { text: string; keyb
         text: [
           "Step 4 of 5 — pets?",
           "",
-          "Choosing this only keeps listings that say pets are allowed.",
-          "Listings that say nothing about it will be left out.",
+          "This leaves out listings that say pets are not allowed.",
+          "Listings that say nothing either way still come through, marked",
+          "\"not stated\" — most of them say nothing, and excluding those would",
+          "leave you with almost none.",
         ].join("\n"),
         keyboard: [
           [{ text: "Must allow pets", callback_data: "w:pe:1" }],

@@ -50,8 +50,8 @@ exit /b %CODE%
 REM What a day's log looks like, and how to read it:
 REM
 REM   ==== START 10.08.2026 15:07:01,23
-REM   mirror: @HomeScoutUK_bot 2 new
-REM   mirror: @HomeScoutUK_bot sent 2, cursor now 10629
+REM   mirror: @the_feed_bot 2 new
+REM   mirror: @the_feed_bot sent 2, cursor now 10629
 REM   mirror: SUMMARY started 2026-08-10 15:07:01 finished 2026-08-10 15:07:09 sent 2 failed 0
 REM   ==== END   10.08.2026 15:07:09,44 exit 0
 REM

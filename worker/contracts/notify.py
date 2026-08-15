@@ -47,6 +47,14 @@ class ListingView(BaseModel):
     source_display: str
     is_landlord_direct: bool | None = None
     url: str
+    # Added once a feed started supplying them. All optional, and all shown when
+    # present: the recipient decides what matters, and a field withheld because it
+    # seemed minor is a question they then have to open the listing to answer.
+    bathrooms: int | None = None
+    area: str | None = None           # the neighbourhood as the source names it
+    address: str | None = None
+    size_text: str | None = None      # "509 sq ft (47.29 sq m)", kept verbatim
+    deposit_pcm: float | None = None
 
 
 class Alert(BaseModel):

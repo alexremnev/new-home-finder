@@ -6,7 +6,9 @@
 //   * a field that is absent, blank, or unparseable is left out of the object
 //     rather than defaulted. The matcher treats an absent criterion as "no
 //     preference" and a present one as a requirement, so inventing a value here
-//     silently narrows someone's search;
+//     silently narrows someone's search. Note that a *listing* missing a value is
+//     a separate question, and the matcher answers it the other way: unknown
+//     passes, and the alert says which fields were not stated;
 //   * districts are checked against the ones actually enabled. A criterion naming
 //     a district nothing collects for would match nothing for ever, and the
 //     person would wait for alerts that cannot arrive.

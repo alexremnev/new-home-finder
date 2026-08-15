@@ -9,7 +9,7 @@ Why this exists at all, and why it cannot be a bot
 The Bot API cannot read another bot's traffic. A bot has no access to a second
 bot's updates, Telegram does not deliver one bot's messages to another even in a
 shared group, and a bot's *outgoing* messages are not exposed to anybody — not
-even to itself. So there is no bot-shaped solution to "copy what @HomeScoutUK_bot
+even to itself. So there is no bot-shaped solution to "copy what another bot
 sends me" when that bot belongs to someone else.
 
 What is left is the obvious thing: those messages are already in your account.
@@ -102,9 +102,19 @@ PAUSE_SECONDS = 1.1
 # Punctuation only, deliberately not `\s`: matching whitespace here would eat the
 # newline after the phrase and glue the replacement onto the first line of the
 # body — "NEW ALERT£1,950/mo".
-REWRITES: tuple[tuple[str, str], ...] = (
-    (r"A listing matching your criteria has just been posted[!.:]*", "NEW ALERT"),
-)
+# Read from TG_REWRITES as `pattern=>replacement`, separated by `;;`. In the
+# environment rather than here because the phrase being replaced belongs to
+# somebody else's product, and the repository has no business quoting it.
+#
+#   TG_REWRITES=A listing matching your criteria[^.]*\.=>NEW ALERT
+def _rewrites() -> tuple[tuple[str, str], ...]:
+    raw = os.environ.get("TG_REWRITES") or ""
+    pairs = []
+    for clause in raw.split(";;"):
+        pattern, _, replacement = clause.partition("=>")
+        if pattern.strip():
+            pairs.append((pattern.strip(), replacement.strip()))
+    return tuple(pairs)
 
 try:
     from telethon import TelegramClient, events
@@ -164,10 +174,13 @@ def credentials() -> tuple[int, str]:
 
 
 def watched() -> list[str]:
-    raw = os.environ.get("TG_WATCH") or "HomeScoutUK_bot"
+    """Which chats to read. No default on purpose: the handle of somebody else's
+    bot is the operator's configuration, and hard-coding one would put a third
+    party's name in the repository for good."""
+    raw = os.environ.get("TG_WATCH") or ""
     names = [name.strip().lstrip("@") for name in raw.split(",") if name.strip()]
     if not names:
-        raise Fault("TG_WATCH is empty. Name at least one chat, for example HomeScoutUK_bot")
+        raise Fault("TG_WATCH is not set. Name the chat to read, without the @.")
     return names
 
 
@@ -304,7 +317,7 @@ def media_label(message: Any) -> str | None:
 
 
 def rewritten(text: str) -> str:
-    for pattern, replacement in REWRITES:
+    for pattern, replacement in _rewrites():
         text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
     return text.strip()
 

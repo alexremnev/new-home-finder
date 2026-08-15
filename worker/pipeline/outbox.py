@@ -13,6 +13,7 @@ without a bot token.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -55,6 +56,28 @@ ALERT_KINDS: dict[str, AlertKind] = {
 }
 
 
+def in_share(user_id: int, listing_id: int, share: int) -> bool:
+    """Whether this listing is one of the share this subscriber receives.
+
+    Deterministic, and that is the whole point. A random draw would mean the same
+    listing was withheld on one run and delivered on the next, so "why did I not get
+    this one" would have no answer and the behaviour could not be tested. Hashing
+    the pair gives a stable, evenly spread yes or no.
+
+    The pair, not the listing alone: keyed on the listing only, every free
+    subscriber would receive the same tenth of the market, and a filter matching
+    only listings outside that tenth would deliver nothing at all.
+    """
+    if share >= 100:
+        return True
+    if share <= 0:
+        return False
+    digest = hashlib.sha256(f"{user_id}:{listing_id}".encode()).digest()
+    # First two bytes are plenty for a percentage and avoid the modulo bias that
+    # one byte would give against 100.
+    return (int.from_bytes(digest[:2], "big") % 100) < share
+
+
 # ── match ─────────────────────────────────────────────────────────────────
 
 
@@ -88,14 +111,23 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
                     stage.count("not_eligible")
                     continue
 
+                share = int(subscription.get("delivery_share") or 100)
+                withheld = not in_share(user_id, int(listing["id"]), share)
                 queued = store.queue_notification(
                     conn,
                     user_id=user_id,
                     subscription_id=int(subscription["id"]),
                     listing_id=int(listing["id"]),
                     channel=str(subscription["channel"]),
+                    # Recorded rather than merely not done: it is what the daily
+                    # "N more matched" count is read from, and what gives "why did I
+                    # not get this one" an answer.
+                    status="skipped" if withheld else "queued",
+                    error="share" if withheld else None,
                 )
-                if queued:
+                if queued and withheld:
+                    stage.count("withheld_by_share")
+                elif queued:
                     stage.count("queued")
                 else:
                     # Already sent to this user, most likely by another
@@ -378,6 +410,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
 
 __all__ = [
-    "alert_for", "drain", "interleave_by_user", "listing_view", "notify_plan_changes",
+    "alert_for", "drain", "in_share", "interleave_by_user", "listing_view",
+    "notify_plan_changes",
     "outcome_for", "queue_matches",
 ]

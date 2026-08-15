@@ -353,9 +353,15 @@ def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
 def active_subscriptions(conn: Conn) -> list[Row]:
     """Every filter that should currently receive alerts.
 
-    The plan is enforced here, in the query the matcher already runs, rather than
-    by a job that deactivates expired subscriptions. A job that fails to run keeps
-    sending; a condition in this query cannot.
+    The plan is resolved here, in the query the matcher already runs, rather than
+    by a job that rewrites entitlements. A job that fails to run leaves people on a
+    tier they are not paying for; a CASE in this query cannot.
+
+    An expired plan no longer removes the row. It resolves `delivery_share` to the
+    lapsed tier's instead, so a finished trial keeps receiving a share of its
+    matches. A share of 0 — which happens only if the lapsed tier is missing or
+    disabled — means nothing is delivered, which is the old behaviour and the way to
+    restore it deliberately.
 
     The address is deliberately not selected: matching does not need it, and a
     value that is never loaded cannot be logged by accident.
@@ -363,14 +369,23 @@ def active_subscriptions(conn: Conn) -> list[Row]:
     return list(
         conn.execute(
             """
-            SELECT s.id, s.user_id, s.criteria, s.backfill_from, uc.channel
+            SELECT s.id, s.user_id, s.criteria, s.backfill_from, uc.channel,
+                   -- The plan's own share while it is live, the lapsed tier's once
+                   -- it is not. Resolved here so an expired plan steps down instead
+                   -- of dropping out, and so no job has to rewrite `users.plan`.
+                   CASE
+                       WHEN u.plan_until IS NULL OR u.plan_until > now()
+                           THEN p.delivery_share
+                       ELSE coalesce(lapsed.delivery_share, 0)
+                   END AS delivery_share
               FROM subscriptions s
               JOIN users u          ON u.id = s.user_id
               JOIN plans p          ON p.key = u.plan
               JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
               JOIN channels c       ON c.key = uc.channel AND c.enabled
+              LEFT JOIN plan_settings ps ON ps.id
+              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
              WHERE s.active AND u.status = 'active'
-               AND (u.plan_until IS NULL OR u.plan_until > now())
              ORDER BY s.id
             """
         ).fetchall()
@@ -435,17 +450,24 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
 
 def queue_notification(
     conn: Conn, *, user_id: int, subscription_id: int, listing_id: int, channel: str,
-    kind: str = "new_listing",
+    kind: str = "new_listing", status: str = "queued", error: str | None = None,
 ) -> bool:
-    """Add one message to the outbox. False means this user already had it."""
+    """Add one row to the outbox. False means this user already had this listing.
+
+    `status='skipped'` writes the row without queuing a send, which is how a match
+    withheld by the plan's share is still recorded once and only once.
+    """
     row = conn.execute(
         """
-        INSERT INTO notifications (user_id, subscription_id, listing_id, channel, kind)
-        VALUES (%s, %s, %s, %s, %s)
+        INSERT INTO notifications
+               (user_id, subscription_id, listing_id, channel, kind, status, error,
+                sent_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s,
+                CASE WHEN %s = 'skipped' THEN now() ELSE NULL END)
         ON CONFLICT (user_id, listing_id) DO NOTHING
         RETURNING id
         """,
-        (user_id, subscription_id, listing_id, channel, kind),
+        (user_id, subscription_id, listing_id, channel, kind, status, error, status),
     ).fetchone()
     return row is not None
 
