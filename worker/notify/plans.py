@@ -89,3 +89,33 @@ def notice_for(plan: str, plan_until: datetime | None, stage: str) -> str:
     if stage == "expired":
         return expiry_notice(plan)
     return expiring_notice(plan, plan_until, stage)
+
+
+def withheld_notice(withheld: int) -> str:
+    """What the free tier did not send, said plainly once a day.
+
+    This message is the condition on which the share is defensible at all. 0007
+    removed a cap because "a cap silently withholds listings that matched, and the
+    person has no way to know it happened" — the arithmetic was never the objection,
+    the silence was. So the number is named, and it is the reason to upgrade rather
+    than a defect to be discovered.
+
+    No listing details. A digest that summarised the ones being held back would be a
+    worse version of the alerts themselves, and it would make the withholding feel
+    like a tease rather than a plan.
+    """
+    # Agreement matters in a message this short: "1 more listing … were not sent"
+    # is the sort of seam that makes an automated message read as one.
+    one = withheld == 1
+    listings = "listing" if one else "listings"
+    was = "was" if one else "were"
+    return "\n".join(
+        [
+            f"{withheld} more {listings} matched your filter today and {was} not sent.",
+            "",
+            "You're on the free plan, which sends a share of what matches.",
+            "The paid plan sends everything, as it appears.",
+            "",
+            "/pay — 2 weeks of every match",
+        ]
+    )

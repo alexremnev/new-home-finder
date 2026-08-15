@@ -205,6 +205,84 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
     )
 
 
+def queue_notifications(conn: Conn, rows: list[dict[str, Any]]) -> set[tuple[int, int]]:
+    """Queue a whole batch. Returns the (user_id, listing_id) pairs actually written.
+
+    One round trip instead of one per match, and that is the difference between a
+    tick that takes seconds and one that takes minutes: at 500 subscribers a busy
+    hour produces thousands of matches, and each `INSERT` was a separate journey to
+    Supabase — about 20ms of network for a millisecond of work.
+
+    The returned set is what distinguishes a fresh row from one the unique index
+    rejected, which the caller needs in order to count "already notified" without
+    asking again.
+    """
+    if not rows:
+        return set()
+    columns = ("user_id", "subscription_id", "listing_id", "channel", "kind", "status", "error")
+    # One placeholder group per row. Built rather than looped so that the whole batch
+    # is one statement; `ON CONFLICT DO NOTHING` then makes a repeat harmless.
+    groups = ", ".join(
+        "(" + ", ".join(f"%({name}_{i})s" for name in columns)
+        + f", CASE WHEN %(status_{i})s = 'skipped' THEN now() ELSE NULL END)"
+        for i in range(len(rows))
+    )
+    params: dict[str, Any] = {}
+    for i, row in enumerate(rows):
+        for name in columns:
+            params[f"{name}_{i}"] = row.get(name)
+    written = conn.execute(
+        f"""
+        INSERT INTO notifications
+               ({", ".join(columns)}, sent_at)
+        VALUES {groups}
+        ON CONFLICT (user_id, listing_id) DO NOTHING
+        RETURNING user_id, listing_id
+        """,  # noqa: S608 - placeholders only; column names are the fixed tuple above
+        params,
+    ).fetchall()
+    return {(int(r["user_id"]), int(r["listing_id"])) for r in written}
+
+
+def withheld_digests(conn: Conn, *, limit: int = 200) -> list[Row]:
+    """People whose plan held listings back today, claimed so each is told once.
+
+    The INSERT is the claim — the primary key on (user_id, day) means a second drain
+    the same day inserts nothing and returns nothing, so no flag has to be read and
+    there is no window between deciding to send and recording it.
+
+    Counted over the last 24 hours rather than since the previous digest: the claim
+    already guarantees at most one message a day, and a watermark would add a column
+    to be kept correct for a number that is approximate by nature — "about fourteen"
+    is the useful fact, not fourteen exactly.
+    """
+    return list(
+        conn.execute(
+            """
+            WITH due AS (
+                SELECT n.user_id, count(*) AS withheld
+                  FROM notifications n
+                  JOIN users u ON u.id = n.user_id AND u.status = 'active'
+                 WHERE n.status = 'skipped' AND n.error = 'share'
+                   AND n.created_at > now() - interval '24 hours'
+                 GROUP BY n.user_id
+                 LIMIT %s
+            ),
+            claimed AS (
+                INSERT INTO daily_digests (user_id, day, withheld)
+                SELECT user_id, current_date, withheld FROM due
+                ON CONFLICT (user_id, day) DO NOTHING
+                RETURNING user_id, withheld
+            )
+            SELECT c.user_id, c.withheld, uc.channel, uc.address
+              FROM claimed c
+              JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
+            """,
+            (limit,),
+        ).fetchall()
+    )
+
+
 def queue_notification(
     conn: Conn, *, user_id: int, subscription_id: int, listing_id: int, channel: str,
     kind: str = "new_listing", status: str = "queued", error: str | None = None,

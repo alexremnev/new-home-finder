@@ -22,7 +22,7 @@ import psycopg
 from worker import store
 from worker.contracts.notify import Alert, AlertKind, ListingView, Recipient, SendResult
 from worker.notify import build_notifier
-from worker.notify.plans import notice_for
+from worker.notify.plans import notice_for, withheld_notice
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -95,6 +95,7 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
             return
 
         listings = store.listings_for_matching(conn, listing_ids)
+        pending: list[dict[str, Any]] = []
 
         for subscription in subscriptions:
             user_id = int(subscription["user_id"])
@@ -113,27 +114,35 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
 
                 share = int(subscription.get("delivery_share") or 100)
                 withheld = not in_share(user_id, int(listing["id"]), share)
-                queued = store.queue_notification(
-                    conn,
-                    user_id=user_id,
-                    subscription_id=int(subscription["id"]),
-                    listing_id=int(listing["id"]),
-                    channel=str(subscription["channel"]),
+                # Collected, not written: one round trip for the batch instead of
+                # one per match. At 500 subscribers a busy hour is thousands of
+                # matches, and each insert was 20ms of network for a millisecond of
+                # work — minutes per tick spent waiting.
+                pending.append({
+                    "user_id": user_id,
+                    "subscription_id": int(subscription["id"]),
+                    "listing_id": int(listing["id"]),
+                    "channel": str(subscription["channel"]),
+                    "kind": "new_listing",
                     # Recorded rather than merely not done: it is what the daily
                     # "N more matched" count is read from, and what gives "why did I
                     # not get this one" an answer.
-                    status="skipped" if withheld else "queued",
-                    error="share" if withheld else None,
-                )
-                if queued and withheld:
-                    stage.count("withheld_by_share")
-                elif queued:
-                    stage.count("queued")
-                else:
-                    # Already sent to this user, most likely by another
-                    # subscription of theirs. The unique constraint is what makes
-                    # overlapping filters harmless.
-                    stage.count("already_notified")
+                    "status": "skipped" if withheld else "queued",
+                    "error": "share" if withheld else None,
+                })
+
+        written = store.queue_notifications(conn, pending)
+        for row in pending:
+            key = (row["user_id"], row["listing_id"])
+            if key not in written:
+                # Already sent to this user, most likely by another subscription of
+                # theirs. The unique constraint is what makes overlapping filters
+                # harmless.
+                stage.count("already_notified")
+            elif row["status"] == "skipped":
+                stage.count("withheld_by_share")
+            else:
+                stage.count("queued")
 
 
 # ── notify ────────────────────────────────────────────────────────────────
@@ -390,6 +399,17 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
         if dry_run:
             stage.set("suppressed", True)
             return
+        for row in store.withheld_digests(conn):
+            notifier = build_notifier(str(row["channel"]))
+            if notifier is None or not row["address"]:
+                stage.count("digest_unreachable")
+                continue
+            result = notifier.send(
+                Recipient(channel=str(row["channel"]), address=str(row["address"])),
+                Alert(kind="expiring", text=withheld_notice(int(row["withheld"]))),
+            )
+            stage.count("digest_sent" if result.ok else "digest_failed")
+
         due = store.claim_plan_notices(conn)
         stage.set("notices", len(due))
         for row in due:

@@ -88,6 +88,15 @@ uv run python -m worker drain --dry-run        # посмотреть сколь
 -- очередь и её состояние
 SELECT status, count(*) FROM notifications GROUP BY status;
 
+-- сколько придержала доля бесплатного тарифа и кому
+SELECT user_id, count(*) FROM notifications
+ WHERE status = 'skipped' AND error = 'share'
+   AND created_at > now() - interval '24 hours'
+ GROUP BY 1 ORDER BY 2 DESC;
+
+-- кому уже отправлена дневная сводка (одна строка на человека в день)
+SELECT user_id, day, withheld, sent_at FROM daily_digests ORDER BY sent_at DESC LIMIT 20;
+
 -- почему не ушло
 SELECT id, user_id, attempts, error FROM notifications
  WHERE status IN ('queued','failed') ORDER BY created_at DESC LIMIT 20;
