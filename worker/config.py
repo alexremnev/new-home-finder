@@ -22,9 +22,7 @@ class Config:
     database_url: str
     telegram_token: str | None
     telegram_ops_chat: str | None
-    anthropic_api_key: str | None
     run_url: str | None
-    proxy_url: str | None
     dry_run: bool
 
     @classmethod
@@ -40,16 +38,10 @@ class Config:
             database_url=database_url,
             telegram_token=_opt("TELEGRAM_TOKEN"),
             telegram_ops_chat=_opt("TELEGRAM_OPS_CHAT"),
-            anthropic_api_key=_opt("ANTHROPIC_API_KEY"),
             run_url=_opt("RUN_URL"),
-            proxy_url=_opt("PROXY_URL"),
             dry_run=dry_run,
         )
 
-    def require_anthropic(self) -> str:
-        if not self.anthropic_api_key:
-            raise ConfigError("ANTHROPIC_API_KEY is required to infer an extraction schema")
-        return self.anthropic_api_key
 
     def require_telegram(self) -> str:
         if not self.telegram_token:

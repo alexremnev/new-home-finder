@@ -11,7 +11,6 @@ Full design: `london-rent-alerts-spec.md`.
 
 | Component | State |
 |---|---|
-| Reachability probe (`scripts/probe.py`) | ready — **not yet run** |
 | Database schema (`db/migrations/0001_init.sql`) | ready — **not yet applied** |
 | Stage contracts (`worker/contracts/`) | complete |
 | Run logging, scheduling, CLI (`worker/obs`, `worker/db`, `worker/__main__`) | complete |
@@ -43,10 +42,6 @@ There are three ways to trigger a job, and they exist for different purposes.
 whether the page is served to this machine, and whether robots.txt permits
 fetching it. A disallowed path is skipped rather than fetched.
 
-```bash
-python scripts/probe.py                       # openrent, rightmove, zoopla
-python scripts/probe.py --site openrent --save tests/fixtures
-```
 
 Reachability is not permission, and neither is terms of service: see the legal
 section of the spec before adopting a source.
@@ -55,7 +50,6 @@ section of the spec before adopting a source.
 beyond the run log:
 
 ```bash
-python -m worker hot --source openrent --dry-run
 python -m worker schedules              # show what is due and when
 ```
 
@@ -63,17 +57,9 @@ python -m worker schedules              # show what is due and when
 environment, which a local run cannot:
 
 ```bash
-gh workflow run scrape.yml -f command=hot -f source=openrent
 gh run watch
 ```
 
-**On a schedule.** The cron trigger in `.github/workflows/scrape.yml` is
-commented out on purpose until the pipeline works end to end: a schedule that
-fails every few minutes produces noise, and against a live site it also risks a
-rate limit for nothing. Uncomment it when the manual run is green.
-
-Both `schedule` and `workflow_dispatch` only take effect from the repository's
-default branch, currently `develop`.
 
 ### Frequency is data, not cron
 
@@ -127,7 +113,6 @@ as authoritative once extracted.
 ## Layout
 
 ```
-scripts/probe.py            reachability probe
 scripts/seed_locations.py   districts and coverage scope
 db/migrations/              schema
 worker/contracts/           data passed between stages; imports nothing else
@@ -136,5 +121,4 @@ worker/normalize/           units, dates, postcodes
 worker/fetch/               robots.txt matching (RFC 9309)
 worker/pipeline/            stage orchestration
 worker/__main__.py          CLI entry point
-.github/workflows/          probe, scrape
 ```

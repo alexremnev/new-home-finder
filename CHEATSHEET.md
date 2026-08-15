@@ -5,25 +5,24 @@
 
 ## Воркер
 
+Две джобы, и разделены они не для порядка: у них разные причины падать. `ingest`
+зависит от одного хоста, одной сессии Telegram и чужого формата сообщений; `drain`
+— только от того, принимает ли Telegram отправку. Сломанный источник не должен
+останавливать доставку того, что уже подошло.
+
 ```bash
-uv run python -m worker schedules              # что запланировано и когда следующий запуск
-uv run python -m worker hot                    # прогнать основной цикл сейчас, минуя расписание
-uv run python -m worker hot --dry-run          # то же, без записи куда-либо кроме журнала прогона
-uv run python -m worker hot --source openrent  # один источник
-uv run python -m worker hot --districts SE16   # один район, в пределах включённого охвата
-uv run python -m worker sweep                  # полный обход; только он помечает объявления снятыми
-uv run python -m worker drain                  # отправить то, что стоит в очереди notifications
-uv run python -m worker tick                   # то, что вызывает планировщик: только подошедшее по сроку
-uv run python -m worker ingest                 # прочитать телеграм-фид, разобрать, сматчить
+uv run python -m worker ingest                 # прочитать фид, разобрать, сматчить
+uv run python -m worker ingest --dry-run       # только обвязка: без сети и без TG_*
+uv run python -m worker drain                  # отправить очередь notifications
+uv run python -m worker drain --dry-run        # сколько ждёт, не отправляя
+uv run python -m worker tick                   # то, что вызывает планировщик
+uv run python -m worker schedules              # таблица расписаний
 ```
 
-`ingest` — три шага в одной команде: читатель кладёт сырьё в `source_messages`,
-разбор превращает его в `listings`, матчер ставит совпадения в очередь. Отправка
-остаётся за `drain`: она должна работать, даже когда источник сломан.
-
-Нужен `uv sync --extra ingest` (Telethon) и переменные `TG_*` из `.env.example`.
-**`TG_READER` обязателен и уникален на аккаунт** — курсор и дедупликация по нему
-ключуются, два хоста с одним именем будут пропускать прочитанное друг другом.
+Для `ingest` нужны `uv sync --extra ingest` (Telethon) и переменные `TG_*` из
+`.env.example`. **`TG_READER` обязателен и уникален на аккаунт** — по нему ключуются
+курсор в `ingest_cursors` и уникальность по читателю, так что два хоста с одним
+именем будут пропускать прочитанное друг другом.
 
 ```sql
 -- дошло ли сырьё и разбирается ли оно
@@ -36,17 +35,13 @@ SELECT parse_error, count(*) FROM source_messages
 -- где остановился каждый читатель
 SELECT reader, source_key, last_external_id, updated_at FROM ingest_cursors;
 
--- перепрогнать разбор после правки парсера
+-- перепрогнать разбор после правки парсера: сообщения никуда не делись
 UPDATE source_messages SET status = 'new', parse_error = NULL WHERE status = 'unparseable';
 ```
 
-Разница между `tick` и `hot`: `tick` смотрит в `schedules` и молча выходит, если
-срок не наступил — поэтому частый триггер почти ничего не стоит. `hot` запускает
-принудительно.
-
-`--districts` умеет только сужать. Район, не включённый в `source_locations`,
-отклоняется с ошибкой, а не добавляется молча — иначе разовый запуск мог бы
-выйти за настроенный охват.
+Скрапинга больше нет. Объявления приходят из фида и пишутся под порталом, который
+их хостит (`rightmove`, `zoopla`), поэтому `UNIQUE (source_key, external_id)`
+по-прежнему отсекает одно и то же объявление, пришедшее дважды.
 
 ## Тесты
 
@@ -104,7 +99,7 @@ SELECT id, user_id, attempts, error FROM notifications
 cd apps/web
 npm install
 npm run dev          # http://localhost:3000
-npm test             # парсер формы и парсер команд бота
+npm test             # парсеры формы, команд бота и визарда
 npm run typecheck
 ```
 
@@ -237,12 +232,6 @@ SELECT provider, count(*), sum(amount_pence)/100.0 AS pounds FROM payments GROUP
 
 ## Доступность источников и фикстуры
 
-```bash
-python scripts/probe.py                                   # все сайты
-python scripts/probe.py --site openrent                   # один
-python scripts/probe.py --site openrent --save snapshots  # сохранить страницы
-python scripts/probe.py --url https://example.com/x       # один адрес, все профили клиента
-```
 
 Проба сообщает две независимые вещи: отдаёт ли сайт страницу этой машине и
 разрешает ли `robots.txt` её запрашивать. Запрещённый путь не запрашивается, а
@@ -251,32 +240,11 @@ python scripts/probe.py --url https://example.com/x       # один адрес,
 ```bash
 # Сохранённая страница -> фикстура для коммита. Сохраняет структуру, классы,
 # иконки и форматы значений; убирает прозу, фотографии и ссылки.
-python scripts/reduce_fixture.py snapshots/openrent/detail.plain_honest.html \
     -o tests/fixtures/openrent/detail.html
 ```
 
 `snapshots/` в `.gitignore` — сырые страницы остаются на той машине, где скачаны.
 Коммитятся только урезанные фикстуры.
-
-## Источники
-
-```bash
-uv run python -m worker hot --source openrent --districts SE16
-uv run python -m worker hot --source rightmove --districts SE16
-uv run python -m worker hot                     # все включённые источники
-```
-
-Rightmove читает обычную страницу поиска `/property-to-rent/SE16.html?sortType=6`
-— район это сам слаг URL, сортировка «новые сначала», поэтому hot-прогон берёт
-одну страницу на район. JSON-эндпоинт `/api/*` запрещён `robots.txt` и не
-используется. Минимальный срок аренды там за модалкой, поэтому остаётся
-неизвестным: подписка с `min_tenancy_max_months` объявления Rightmove не
-получит — это правило «заданный критерий требует известного значения», а не баг.
-
-```sql
--- выключить источник целиком, без деплоя
-UPDATE sources SET enabled = false WHERE key = 'rightmove';
-```
 
 ## Частота и охват — это данные, не код
 
@@ -363,7 +331,6 @@ uv run pytest -q
 
 ```bash
 uv run python scripts/seed_locations.py --enable SE16,SE8,E14
-uv run python -m worker hot --dry-run
 ```
 
 ## Секреты

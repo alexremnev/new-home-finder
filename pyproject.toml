@@ -5,11 +5,7 @@ description = "Cross-portal London rental monitor with schema-driven, self-heali
 requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.9",
-    "curl-cffi>=0.7",        # TLS/JA3 impersonation; see spec, anti-bot section
-    "selectolax>=0.3.21",    # fast HTML parsing for the dom extraction strategy
-    "jsonpath-ng>=1.6",      # json_path / next_data / api_json strategies
     "psycopg[binary]>=3.2",
-    "anthropic>=0.40",       # AI schema inference (Haiku 4.5)
     "python-dateutil>=2.9",
 ]
 
@@ -24,7 +20,6 @@ dev = [
     "pytest-cov>=5.0",
     "mypy>=1.13",
     "ruff>=0.8",
-    "requests>=2.32",        # probe script baseline profile only
 ]
 
 [build-system]
@@ -52,9 +47,6 @@ strict = true
 warn_unreachable = true
 exclude = "^tools/"
 
-[[tool.mypy.overrides]]
-module = ["selectolax.*", "jsonpath_ng.*", "curl_cffi.*"]
-ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

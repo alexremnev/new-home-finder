@@ -61,6 +61,33 @@ MEDIA_KINDS = (
     "photo", "video", "document", "audio", "voice", "sticker", "gif", "poll",
 )
 
+# What the stored body says instead of the source's own brand. Every message the
+# feed sends signs itself — "upgrade to X Premium" — and that name would otherwise
+# sit in our database, in backups, and in every report drawn from them. It is no use
+# to the parser and no business of ours to keep.
+REDACTED = "hs"
+
+
+def redact(body: str | None) -> str:
+    """Replace the source's names with a placeholder before storing.
+
+    The words come from `TG_REDACT` in the environment, comma-separated, so the code
+    never names them — same reasoning as `TG_WATCH`. Longest first, because a brand
+    and its bot handle overlap ("X" inside "XUK_bot") and replacing the short one
+    first would leave the tail behind.
+
+    Applied on the way in rather than on the way out: a value scrubbed at read time
+    is still in the row, and the row is what gets backed up.
+    """
+    text = body or ""
+    words = sorted(
+        (w.strip() for w in (os.environ.get("TG_REDACT") or "").split(",") if w.strip()),
+        key=len, reverse=True,
+    )
+    for word in words:
+        text = re.sub(re.escape(word), REDACTED, text, flags=re.IGNORECASE)
+    return text
+
 
 def content_hash(body: str | None, links: list[str]) -> str:
     """The identity of a message's content, for deduplicating across readers.
@@ -217,7 +244,10 @@ async def collect(
                         continue
 
                     links = urls_of(message)
-                    body = message.text or ""
+                    # Redacted before the hash is taken, so two readers agree on the
+                    # identity of a message and a change to TG_REDACT does not make
+                    # everything look new.
+                    body = redact(message.text)
                     if not body and not links:
                         continue
 
@@ -251,4 +281,7 @@ async def collect(
     return stored
 
 
-__all__ = ["BATCH", "collect", "content_hash", "media_of", "reader_name", "urls_of", "watched"]
+__all__ = [
+    "BATCH", "REDACTED", "collect", "content_hash", "media_of", "reader_name",
+    "redact", "urls_of", "watched",
+]

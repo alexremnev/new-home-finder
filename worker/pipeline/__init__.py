@@ -1,9 +1,7 @@
-"""Pipeline stages.
+"""The stages a run is made of.
 
-Nothing is re-exported here on purpose. `reconcile` holds decisions and needs no
-database driver, while `run` orchestrates and does; importing the package should
-not drag the driver in behind a pure module.
-
-    from worker.pipeline.reconcile import decide_seen
-    from worker.pipeline.run import run_job
+Nothing is re-exported here on purpose: `match` holds decisions and needs no
+database, `outbox` holds the queue, and `run` wires them into the two jobs. Import
+what you need directly, so a reader can see which half of the pipeline a caller
+touches.
 """
