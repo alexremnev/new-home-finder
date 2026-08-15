@@ -640,6 +640,7 @@ async def do_dump(args: argparse.Namespace) -> int:
     """
     api_id, api_hash = credentials()
     client = await connect(api_id, api_hash)
+    collected: list[dict[str, Any]] = []
     try:
         for source in watched():
             try:
@@ -649,6 +650,52 @@ async def do_dump(args: argparse.Namespace) -> int:
                 continue
 
             messages = await client.get_messages(entity, limit=args.limit)
+            if args.json:
+                # Written to a file rather than printed, because a console mangles
+                # exactly what a parser depends on: wrapping a long line inserts a
+                # break that survives copy-and-paste, so the text arrives subtly
+                # different from what Telegram sent. JSON escaping plus a file keeps
+                # the bytes intact.
+                for message in [m for m in reversed(messages) if not m.out]:
+                    try:
+                        pairs = message.get_entities_text()
+                    except Exception:  # noqa: BLE001
+                        pairs = []
+                    collected.append({
+                        "source": source,
+                        "id": message.id,
+                        "date": message.date.isoformat() if message.date else None,
+                        "grouped_id": getattr(message, "grouped_id", None),
+                        "text": message.text or "",
+                        "entities": [
+                            {
+                                "type": type(entity_obj).__name__,
+                                "text": covered,
+                                "offset": getattr(entity_obj, "offset", None),
+                                "length": getattr(entity_obj, "length", None),
+                                "url": getattr(entity_obj, "url", None),
+                            }
+                            for entity_obj, covered in pairs
+                        ],
+                        "buttons": [
+                            {
+                                "row": row_index,
+                                "text": getattr(button, "text", None),
+                                "url": getattr(button, "url", None),
+                            }
+                            for row_index, row in enumerate(
+                                getattr(getattr(message, "reply_markup", None), "rows", None) or []
+                            )
+                            for button in (getattr(row, "buttons", None) or [])
+                        ],
+                        "media": [
+                            key for key in (
+                                "photo", "video", "document", "voice", "sticker", "web_preview",
+                            )
+                            if getattr(message, key, None)
+                        ],
+                    })
+                continue
             # Oldest first, and only what the bot sent: your own replies are not
             # what the parser will see.
             incoming = [m for m in reversed(messages) if not m.out]
@@ -712,6 +759,14 @@ async def do_dump(args: argparse.Namespace) -> int:
     finally:
         await client.disconnect()
 
+    if args.json:
+        pathlib.Path(args.json).write_text(
+            json.dumps(collected, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        print(f"mirror: wrote {len(collected)} message(s) to {args.json}")
+        print("Open it in an editor and copy from there, not from this console.")
+        return 0
+
     print("\n" + "=" * 72)
     print("Copy everything above, from the first ===== line.")
     return 0
@@ -766,6 +821,10 @@ def main() -> int:
         "dump", help="print recent messages in full, for writing a parser against")
     dump.add_argument("--limit", type=int, default=5, metavar="N",
                       help="how many recent messages to print (default 5)")
+    dump.add_argument("--json", metavar="FILE",
+                      help="write exact message data to FILE as JSON instead of printing. "
+                           "Use this when the text has to survive being copied: a console "
+                           "wraps long lines and the break comes along with the paste")
 
     for name, help_text in (("once", "forward what is new, then exit"),
                             ("watch", "stay connected and forward live")):
