@@ -562,3 +562,63 @@ def ensure_district(conn: Conn, code: str, *, source_key: str) -> bool:
         (source_key, int(row["id"]), code.upper()),
     )
     return created
+
+
+# ── the starter batch ─────────────────────────────────────────────────────
+
+
+def unseeded_subscriptions(conn: Conn) -> list[Row]:
+    """Subscriptions owed their first handful of listings.
+
+    The same joins as `active_subscriptions`, so a subscription with no delivery
+    channel or a disabled one is not offered a batch it could never receive. The
+    share is *not* selected: the starter batch is somebody's first impression of the
+    product, and throttling it to a tenth would be an odd way to sell the rest.
+    """
+    return list(
+        conn.execute(
+            """
+            SELECT s.id, s.user_id, s.criteria, uc.channel
+              FROM subscriptions s
+              JOIN users u          ON u.id = s.user_id AND u.status = 'active'
+              JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
+              JOIN channels c       ON c.key = uc.channel AND c.enabled
+             WHERE s.active AND s.seeded_at IS NULL
+             ORDER BY s.created_at
+            """
+        ).fetchall()
+    )
+
+
+def recent_listings(conn: Conn, *, days: int, limit: int) -> list[Row]:
+    """Listings from the last few days, newest first, for seeding.
+
+    Newest first because that is the order a starter batch should arrive in, and
+    because rental listings go stale in days — a fortnight-old flat is usually gone,
+    and offering it as a first impression is worse than offering nothing.
+    """
+    columns = ", ".join(_LISTING_VIEW_COLUMNS)
+    return list(
+        conn.execute(
+            f"""
+            SELECT id, first_seen_at, {columns} FROM listings
+             WHERE status = 'active'
+               AND first_seen_at > now() - make_interval(days => %s)
+             ORDER BY first_seen_at DESC
+             LIMIT %s
+            """,  # noqa: S608 - column names are a fixed tuple in this module
+            (days, limit),
+        ).fetchall()
+    )
+
+
+def mark_seeded(conn: Conn, subscription_id: int) -> None:
+    """Stamped whether or not anything matched.
+
+    Retrying an empty batch every few minutes for ever would mean a subscription in
+    a quiet district is re-examined against the same listings until one appears —
+    and then sent five at once days later, as if they were new.
+    """
+    conn.execute(
+        "UPDATE subscriptions SET seeded_at = now() WHERE id = %s", (subscription_id,)
+    )

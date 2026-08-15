@@ -25,7 +25,12 @@ import psycopg
 
 from worker.config import Config
 from worker.obs import Run
-from worker.pipeline.outbox import drain, notify_plan_changes, queue_matches
+from worker.pipeline.outbox import (
+    drain,
+    notify_plan_changes,
+    queue_matches,
+    seed_new_subscriptions,
+)
 
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
@@ -47,9 +52,11 @@ def run_job(
 ) -> str:
     """Execute one job. Returns the run status."""
     if job == "drain":
-        # Plan expiries are noticed here because this is the job that runs on a short
-        # interval regardless of whether anything was ingested, so a warning goes out
-        # within minutes of being due rather than at the next read.
+        # A new subscription is seeded here for the same reason plan expiries are
+        # noticed here: this job runs on a short interval whether or not anything was
+        # ingested, so somebody who just finished the wizard gets their first
+        # listings within minutes rather than at the next read.
+        seed_new_subscriptions(conn, run, dry_run=cfg.dry_run)
         notify_plan_changes(conn, run, dry_run=cfg.dry_run)
         return drain(conn, run, suppress=suppress_delivery, dry_run=cfg.dry_run)
 

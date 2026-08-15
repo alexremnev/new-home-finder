@@ -145,6 +145,77 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
                 stage.count("queued")
 
 
+# How many listings a new subscription is given, and how far back to look.
+#
+# Five is enough to show what an alert looks like and to be useful, and few enough
+# that nobody mistakes it for a backlog being dumped on them. Three days because
+# rental listings go stale in days — offering a fortnight-old flat as a first
+# impression is worse than offering nothing.
+SEED_COUNT = 5
+SEED_DAYS = 3
+
+# How many recent listings to consider per run. A ceiling so that a busy feed does
+# not make seeding the most expensive thing a tick does; the newest are the ones
+# worth offering anyway.
+SEED_POOL = 400
+
+
+def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
+    """Give each new subscription its first few matches.
+
+    Here rather than in the webhook because the matcher lives here. Deciding what
+    suits a filter in TypeScript as well would be a second definition of the word
+    "matches", and the two would drift — which is the one thing this project has
+    consistently refused.
+
+    `is_eligible` is deliberately not consulted. It exists to enforce
+    `backfill_from`, and stepping over that once, under a cap, is the entire point:
+    everything after this batch obeys it as before.
+    """
+    with run.stage("seed") as stage:
+        owed = store.unseeded_subscriptions(conn)
+        stage.set("subscriptions", len(owed))
+        if not owed:
+            return
+        if dry_run:
+            stage.set("suppressed", True)
+            return
+
+        # One query for the pool, however many subscriptions are owed a batch: the
+        # candidates are the same for all of them.
+        pool = store.recent_listings(conn, days=SEED_DAYS, limit=SEED_POOL)
+        stage.set("pool", len(pool))
+
+        rows: list[dict[str, Any]] = []
+        for subscription in owed:
+            criteria = subscription["criteria"] or {}
+            chosen = 0
+            for listing in pool:            # newest first
+                if chosen >= SEED_COUNT:
+                    break
+                if not matches(criteria, listing):
+                    continue
+                rows.append({
+                    "user_id": int(subscription["user_id"]),
+                    "subscription_id": int(subscription["id"]),
+                    "listing_id": int(listing["id"]),
+                    "channel": str(subscription["channel"]),
+                    "kind": "new_listing",
+                    "status": "queued",
+                    "error": None,
+                })
+                chosen += 1
+            # Stamped either way. Retrying an empty batch for ever would mean a
+            # quiet district is re-examined until something appears, and then sent
+            # five at once days later as though they were new.
+            store.mark_seeded(conn, int(subscription["id"]))
+            stage.count("seeded")
+            stage.count("offered", chosen)
+
+        written = store.queue_notifications(conn, rows)
+        stage.set("queued", len(written))
+
+
 # ── notify ────────────────────────────────────────────────────────────────
 
 
