@@ -54,10 +54,13 @@ describe("a full pass", () => {
     let s = press(session(), "w:d:SE16", "w:d:E14", "w:dn", "w:b:2");
     expect(s.step).toBe("priceMin");
 
-    const priced = applyPriceText(s, "1500-2200");
-    expect(priced.ok).toBe(true);
-    if (!priced.ok) return;
-    s = press(priced.session, "w:pe:1", "w:f:f");
+    const low = applyPriceText(s, "1500");
+    expect(low.ok).toBe(true);
+    if (!low.ok) return;
+    const high = applyPriceText(low.session, "2200");
+    expect(high.ok).toBe(true);
+    if (!high.ok) return;
+    s = press(high.session, "w:pe:1", "w:f:f");
 
     expect(s.step).toBe("confirm");
     expect(s.draft).toEqual({
@@ -195,7 +198,9 @@ describe("price, asked as two numbers", () => {
 
 describe("skipping", () => {
   it("leaves no criterion behind", () => {
-    const s = press(session({ step: "bedrooms" }), "w:sk", "w:sk", "w:sk", "w:sk");
+    // Five skippable steps now that rent is two of them: bedrooms, both price
+    // bounds, pets, furnishing.
+    const s = press(session({ step: "bedrooms" }), "w:sk", "w:sk", "w:sk", "w:sk", "w:sk");
     expect(s.step).toBe("confirm");
     expect(s.draft).toEqual({});
   });
@@ -309,11 +314,12 @@ describe("callback data", () => {
 describe("the prompts", () => {
   it("number the steps, so the end is visible", () => {
     for (const [step, label] of [
-      ["districts", "Step 1 of 5"],
-      ["bedrooms", "Step 2 of 5"],
-      ["priceMin", "Step 3 of 5"],
-      ["pets", "Step 4 of 5"],
-      ["furnished", "Step 5 of 5"],
+      ["districts", "Step 1 of 6"],
+      ["bedrooms", "Step 2 of 6"],
+      ["priceMin", "Step 3 of 6"],
+      ["priceMax", "Step 4 of 6"],
+      ["pets", "Step 5 of 6"],
+      ["furnished", "Step 6 of 6"],
     ] as const) {
       expect(render(session({ step }), CONTEXT).text).toContain(label);
     }
@@ -412,7 +418,7 @@ describe("typed districts", () => {
   it("separates what is not a district from what is not covered", () => {
     // Two different answers: one is a typo, the other is a coverage gap, and
     // telling someone "banana isn't covered yet" would be nonsense.
-    expect(readDistricts("banana", ALLOWED).unknown).toEqual(["BANANA"]);
+    expect(readDistricts("banana", ALLOWED).unknown).toEqual(["banana"]);
     expect(readDistricts("ZZ99", ALLOWED).notCovered).toEqual(["ZZ99"]);
   });
 
@@ -444,7 +450,7 @@ describe("typed districts", () => {
                       draft: {}, promptMsgId: null };
     const result = applyDistrictText(session, "somewhere nice", CTX);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.reason).toMatch(/not a district/);
+    if (!result.ok) expect(result.reason).toMatch(/don't know/);
   });
 
   it("shows a handful of buttons however many districts are covered", () => {
@@ -456,7 +462,7 @@ describe("typed districts", () => {
                           draft: {}, promptMsgId: null }, many);
     const buttons = view.keyboard.flat().filter((b) => b.callback_data?.startsWith("w:d:"));
     expect(buttons.length).toBeLessThanOrEqual(DISTRICT_BUTTONS + 1);
-    expect(view.text).toMatch(/Type them and send/);
+    expect(view.text).toMatch(/Send an area name or a postcode/);
   });
 
   it("keeps a chosen district visible even when it is outside the sample", () => {
