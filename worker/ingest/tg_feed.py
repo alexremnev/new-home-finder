@@ -122,12 +122,24 @@ class Unparseable(Exception):
 
 
 def fields_in(text: str) -> dict[str, str]:
-    """Every `Label: value` pair in the message, keyed by lower-case label."""
+    """Every `Label: value` pair in the message, keyed by lower-case label.
+
+    The value is stripped of asterisks as well as whitespace, because the source
+    puts the colon on either side of them and both forms occur in the same feed:
+
+        **Bedrooms**: 2 Bedrooms     ->  "2 Bedrooms"
+        **Bedrooms:** 2 Bedrooms     ->  "2 Bedrooms", not "** 2 Bedrooms"
+
+    The second form cost 125 of 300 messages before this was here — the label still
+    matched, so nothing looked wrong, and every numeric value simply failed to read.
+    Stripping is safe: no value in this feed legitimately begins or ends with an
+    asterisk, and a listing whose price is "**£1700" is not a listing.
+    """
     found: dict[str, str] = {}
     for line in (text or "").splitlines():
         match = FIELD.match(line.strip())
         if match:
-            found[match.group(1).lower()] = match.group(2).strip()
+            found[match.group(1).lower()] = match.group(2).strip().strip("*").strip()
     return found
 
 

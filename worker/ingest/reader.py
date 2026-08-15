@@ -131,32 +131,53 @@ async def collect(
     dry_run: bool = False,
 ) -> int:
     """Read what is new into `source_messages`. Returns how many rows were stored."""
-    try:
-        from telethon import TelegramClient
-        from telethon.sessions import StringSession
-    except ModuleNotFoundError as missing:  # pragma: no cover - a setup error
-        raise RuntimeError(
-            "Telethon is not installed. It is an optional extra so that hosts which "
-            "only scrape need not have it: uv sync --extra ingest"
-        ) from missing
-
-    api_id = os.environ.get("TG_API_ID", "").strip()
-    api_hash = os.environ.get("TG_API_HASH", "").strip()
-    session = os.environ.get("TG_SESSION", "").strip()
-    if not (api_id.isdigit() and api_hash and session):
-        raise RuntimeError(
-            "TG_API_ID, TG_API_HASH and TG_SESSION must all be set. The session is "
-            "produced once by `python tools/tg-mirror/mirror.py login`."
-        )
-
-    reader = reader_name()
     stored = 0
-
     with run.stage("read", source_key=source_key) as stage:
-        stage.set("reader", reader)
+        # Before the credentials, so that --dry-run exercises the wiring — the job
+        # dispatch, the stage, the database connection — on a host that has no
+        # session at all. Checking them first made a dry run impossible to use for
+        # the one thing it is for.
         if dry_run:
             stage.set("suppressed", True)
             return 0
+
+        api_id = os.environ.get("TG_API_ID", "").strip()
+        api_hash = os.environ.get("TG_API_HASH", "").strip()
+        session = os.environ.get("TG_SESSION", "").strip()
+        missing = [
+            name for name, value in (
+                ("TG_API_ID", api_id if api_id.isdigit() else ""),
+                ("TG_API_HASH", api_hash),
+                ("TG_SESSION", session),
+                ("TG_WATCH", os.environ.get("TG_WATCH", "").strip()),
+                ("TG_READER", os.environ.get("TG_READER", "").strip()),
+            ) if not value
+        ]
+        if missing:
+            # All of them at once, in the worker's own .env rather than the
+            # mirror's: naming one at a time turns setting this up into five runs.
+            raise RuntimeError(
+                f"not set in the worker's .env: {', '.join(missing)}. "
+                "TG_API_ID/HASH/SESSION come from tools/tg-mirror/.env (the session "
+                "is printed once by `mirror.py login`); TG_WATCH is the chat to read "
+                "without the @; TG_READER names this reader and must differ between "
+                "accounts, because the cursor is keyed by it."
+            )
+
+        reader = reader_name()
+        stage.set("reader", reader)
+
+        # Imported here, not at module scope, so that neither --dry-run nor merely
+        # importing this module requires an MTProto client. A host that only scrapes
+        # has no reason to install one.
+        try:
+            from telethon import TelegramClient
+            from telethon.sessions import StringSession
+        except ModuleNotFoundError as absent:  # pragma: no cover - a setup error
+            raise RuntimeError(
+                "Telethon is not installed. It is an optional extra so that hosts "
+                "which only scrape need not have it: uv sync --extra ingest"
+            ) from absent
 
         client = TelegramClient(StringSession(session), int(api_id), api_hash)
         await client.connect()
