@@ -6,9 +6,19 @@ earlier plan, which called for MarkdownV2 with escaping: a listing line contains
 single missed escape is a rejected message rather than an ugly one. Plain text
 removes that failure mode entirely, and Telegram links bare URLs by itself.
 
-Link previews are disabled. A preview would pull the site's own photograph into
-our message, which is the one thing the content rules say not to do — facts and a
-link to the original, nothing reproduced.
+Link previews are enabled for listing alerts and off for everything else, and the
+distinction is the whole point.
+
+The content rule is that we do not reproduce the site's material: no copying its
+photographs into our storage and re-uploading them under our own bot. A preview is
+not that. Telegram fetches the portal's own `og:image` from the link, exactly as it
+would for a link anybody pasted by hand, and the picture is served by the portal to
+the reader. Nothing is copied, nothing is stored, and the image stops appearing the
+moment the portal takes the listing down — which is the correct behaviour and the
+opposite of what a stored copy would do.
+
+Off for plan notices and confirmations because there is no listing in them, and a
+preview of the site's home page under "your trial ends tomorrow" is noise.
 
 Two things are separated on purpose: rendering is a pure function of an `Alert`,
 and sending is injectable. The wording can therefore be tested without a network
@@ -225,7 +235,9 @@ class TelegramNotifier:
         payload = {
             "chat_id": to.address,
             "text": render(alert),
-            "disable_web_page_preview": True,
+            # The listing's own photograph, served by the portal from the link. See
+            # the module docstring for why this is not a reproduction.
+            "disable_web_page_preview": alert.kind != "listing",
         }
         try:
             response = self.sender(API.format(token=self.token), payload)
