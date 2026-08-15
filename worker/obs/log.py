@@ -41,6 +41,10 @@ class Run:
     ) -> None:
         self.conn = conn
         self.job = job
+        # Kept because the summary line names it. Without it a scheduled run reads
+        # identically to one typed by hand, which is the question a log is opened to
+        # answer in the first place.
+        self.trigger = trigger
         self.dry_run = dry_run
         self.counters: dict[str, int] = {}
         row = conn.execute(
@@ -128,6 +132,23 @@ class Run:
             else "error"
         )
         self.event(level, f"run finished: {status}", **self.counters)
+
+        # One plain line per run, alongside the structured event above, because the
+        # two are read by different things. The JSON is for querying; this is for a
+        # person opening a log file on a Windows box at midnight and wanting to know
+        # whether the scheduler fired and how much it moved.
+        #
+        # `SUMMARY` as a fixed prefix so a week of logs answers that with one
+        # `findstr SUMMARY` instead of scrolling. The trigger is included because
+        # without it a scheduled run is indistinguishable from one typed by hand,
+        # which is exactly the question being asked of the log.
+        counts = " ".join(f"{name}={value}" for name, value in sorted(self.counters.items()))
+        print(
+            f"SUMMARY {datetime.now(UTC).astimezone():%Y-%m-%d %H:%M:%S} "
+            f"run={self.id} job={self.job} trigger={self.trigger} status={status}"
+            + (f" {counts}" if counts else " (nothing to do)"),
+            flush=True,
+        )
 
 
 class Stage:
