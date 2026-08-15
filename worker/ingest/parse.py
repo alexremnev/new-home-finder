@@ -106,6 +106,16 @@ def run_parse(
                 stage.count("invalid")
                 continue
 
+            # Before the listing, so that a district arriving for the first time is
+            # nameable in the wizard from the moment its first listing exists. The
+            # feed reaches outer London, which the zone 1-3 reference data does not,
+            # and a listing nobody can filter for is a listing nobody receives.
+            if listing.postcode_district:
+                if store.ensure_district(
+                    conn, listing.postcode_district, source_key=source_key
+                ):
+                    stage.count("district_discovered")
+
             listing_id = store.insert_listing(conn, listing)
             store.mark_parsed(conn, message_id, listing_id)
             # Deduplicated by the insert, not by us: two messages about one listing

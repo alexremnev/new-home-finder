@@ -713,3 +713,46 @@ def set_ingest_cursor(conn: Conn, *, reader: str, source_key: str, last_external
         """,
         (reader, source_key, last_external_id),
     )
+
+
+def ensure_district(conn: Conn, code: str, *, source_key: str) -> bool:
+    """Register a district a feed has actually delivered. True if it was new.
+
+    The reference data covers zones 1-3, because that is the scope a scraper was
+    given. A feed answers to nobody's scope: it sent HA1 on the first day, and a
+    listing in a district nobody can name is a listing that matches nobody — stored,
+    counted, and invisible.
+
+    So coverage follows the data rather than a hand-kept list. The zone is left null
+    because it is genuinely unknown here and guessing it would put a wrong number
+    where a filter can read it; `approx` says so out loud.
+
+    Safe to call per listing: both statements are upserts, and the common case is
+    two index probes that change nothing.
+    """
+    row = conn.execute(
+        """
+        INSERT INTO locations (kind, code, city, approx)
+        VALUES ('postcode_district', %s, 'London', true)
+        ON CONFLICT (kind, code) DO NOTHING
+        RETURNING id
+        """,
+        (code.upper(),),
+    ).fetchone()
+    created = row is not None
+    if row is None:
+        row = conn.execute(
+            "SELECT id FROM locations WHERE kind = 'postcode_district' AND code = %s",
+            (code.upper(),),
+        ).fetchone()
+    if row is None:
+        return False
+    conn.execute(
+        """
+        INSERT INTO source_locations (source_key, location_id, external_id, enabled)
+        VALUES (%s, %s, %s, true)
+        ON CONFLICT (source_key, location_id) DO UPDATE SET enabled = true
+        """,
+        (source_key, int(row["id"]), code.upper()),
+    )
+    return created
