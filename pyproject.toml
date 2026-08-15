@@ -14,6 +14,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# The MTProto reader only. A host that scrapes has no business installing a
+# Telegram client, and the base install stays the same size for it.
+ingest = [
+    "telethon>=1.36,<2",
+]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",

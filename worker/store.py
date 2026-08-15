@@ -329,6 +329,10 @@ _LISTING_VIEW_COLUMNS = (
     "price_pcm", "bedrooms", "property_type", "postcode_district", "tfl_zone",
     "available_from", "furnished", "pets_allowed", "bills_included",
     "min_tenancy_months", "is_landlord_direct", "url",
+    # Shown in the alert too. `raw` carries what has no column of its own — the
+    # neighbourhood name, the street, the floor area as the source worded it — and
+    # the renderer decides what to do with them.
+    "bathrooms", "deposit_pcm", "raw",
 )
 
 
@@ -608,4 +612,104 @@ def save_validators(
     conn.execute(
         "UPDATE sources SET config = jsonb_set(config, '{validators}', %s::jsonb) WHERE key = %s",
         (json.dumps(payload), source_key),
+    )
+
+# ── inbound messages from a feed ──────────────────────────────────────────
+
+
+def store_source_message(
+    conn: Conn, *, source_key: str, reader: str, external_id: str, received_at: Any,
+    body: str | None, links: list[str], media_kinds: list[str], content_hash: str,
+) -> bool:
+    """Keep one raw message. False means it was already known.
+
+    Two unique indexes can reject it, and they answer different questions: the
+    per-reader one means this reader has read it before, the content one means
+    another reader already has. `ON CONFLICT DO NOTHING` without naming a column
+    covers both, which is what makes a second account safe to add.
+    """
+    row = conn.execute(
+        """
+        INSERT INTO source_messages
+               (source_key, reader, external_id, received_at, body, links,
+                media_kinds, content_hash)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT DO NOTHING
+        RETURNING id
+        """,
+        (source_key, reader, external_id, received_at, body, links,
+         media_kinds, content_hash),
+    ).fetchone()
+    return row is not None
+
+
+def unparsed_messages(conn: Conn, *, source_key: str, limit: int = 500) -> list[Row]:
+    """The parser's queue, oldest first.
+
+    Oldest first so a backlog is worked through in the order it arrived, and capped
+    so a first run over months of history does not load all of it into memory. What
+    is left is simply picked up by the next run.
+    """
+    return list(
+        conn.execute(
+            """
+            SELECT id, external_id, received_at, body, links
+              FROM source_messages
+             WHERE source_key = %s AND status = 'new'
+             ORDER BY received_at, id
+             LIMIT %s
+            """,
+            (source_key, limit),
+        ).fetchall()
+    )
+
+
+def mark_parsed(conn: Conn, message_id: int, listing_id: int) -> None:
+    conn.execute(
+        "UPDATE source_messages SET status = 'parsed', parsed_at = now(), "
+        "listing_id = %s, parse_error = NULL WHERE id = %s",
+        (listing_id, message_id),
+    )
+
+
+def mark_unparseable(conn: Conn, message_id: int, reason: str) -> None:
+    """Recorded, not deleted, and not retried.
+
+    The reason is stored because a rising count of one particular reason is how a
+    format change announces itself — and because the message is still here, a fixed
+    parser can be run over the backlog by setting these rows back to 'new'.
+    """
+    conn.execute(
+        "UPDATE source_messages SET status = 'unparseable', parsed_at = now(), "
+        "parse_error = %s WHERE id = %s",
+        (reason[:500], message_id),
+    )
+
+
+def ingest_cursor(conn: Conn, *, reader: str, source_key: str) -> int:
+    row = conn.execute(
+        "SELECT last_external_id FROM ingest_cursors WHERE reader = %s AND source_key = %s",
+        (reader, source_key),
+    ).fetchone()
+    return 0 if row is None else int(row["last_external_id"])
+
+
+def set_ingest_cursor(conn: Conn, *, reader: str, source_key: str, last_external_id: int) -> None:
+    """Move a reader's cursor forward, never back.
+
+    `greatest` rather than assignment: two runs of the same reader can overlap, and
+    the later-finishing one may hold the older value. Rewinding would re-read
+    messages that are already stored — harmless, because the unique indexes reject
+    them, but it would also make the cursor useless as a progress signal.
+    """
+    conn.execute(
+        """
+        INSERT INTO ingest_cursors (reader, source_key, last_external_id)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (reader, source_key) DO UPDATE
+           SET last_external_id = greatest(ingest_cursors.last_external_id,
+                                           EXCLUDED.last_external_id),
+               updated_at = now()
+        """,
+        (reader, source_key, last_external_id),
     )

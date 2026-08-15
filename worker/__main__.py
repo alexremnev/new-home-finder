@@ -27,7 +27,10 @@ from worker.obs import Run
 from worker.pipeline.run import run_job
 
 Row = dict[str, Any]
-JOBS = ("hot", "sweep", "drain")
+# `ingest` reads a Telegram feed, parses what it stored, and queues the
+# matches. Separate from `hot` because it needs no HTTP and no schema, and
+# because it is the one job tied to a single host and a single session.
+JOBS = ("hot", "sweep", "drain", "ingest")
 
 
 def main(argv: list[str] | None = None) -> int:

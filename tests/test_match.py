@@ -72,18 +72,19 @@ def test_a_studio_is_zero_bedrooms_not_a_missing_value() -> None:
         ({"min_tenancy_max_months": 12}, "min_tenancy_months"),
     ],
 )
-def test_a_set_criterion_requires_a_known_value(
+def test_a_set_criterion_passes_a_value_it_cannot_check(
     criteria: dict[str, Any], unknown_field: str
 ) -> None:
-    """The single rule that governs matching.
+    """The single rule that governs matching: only a contradicting value rejects.
 
-    Treating unknown as acceptable produces alerts the recipient cannot act on,
-    and precision matters more than volume: three relevant alerts a day are
-    tolerated, fifteen noisy ones lose the user.
+    This is the reverse of what this file asserted originally, and the reversal was
+    forced by data rather than taste. One feed never states pets or bills at all, so
+    under the old rule anybody who asked for "pets allowed" received nothing, for
+    ever, with no error anywhere. A filter that silently matches zero listings is
+    worse than one that occasionally includes a listing the recipient has to check —
+    and the alert now says which fields were not stated, so they can.
     """
-    verdict = matches(criteria, listing(**{unknown_field: None}))
-    assert not verdict
-    assert "unknown" in verdict.reason or "not stated" in verdict.reason
+    assert matches(criteria, listing(**{unknown_field: None}))
 
 
 def test_an_unset_criterion_ignores_an_unknown_value() -> None:
@@ -91,18 +92,35 @@ def test_an_unset_criterion_ignores_an_unknown_value() -> None:
     assert matches({}, listing(pets_allowed=None, available_from=None, furnished="unknown"))
 
 
-def test_furnishing_unknown_is_not_a_furnishing_state() -> None:
-    assert not matches({"furnished": ["furnished"]}, listing(furnished="unknown"))
+def test_furnishing_unknown_is_not_a_reason_to_withhold() -> None:
+    assert matches({"furnished": ["furnished"]}, listing(furnished="unknown"))
+
+
+def test_a_value_that_contradicts_the_criterion_still_rejects() -> None:
+    """The other half of the rule, and the half that makes filters mean anything."""
+    assert not matches({"furnished": ["furnished"]}, listing(furnished="unfurnished"))
+    assert not matches({"pets_allowed": True}, listing(pets_allowed=False))
+    assert not matches({"price_pcm": {"max": 2000}}, listing(price_pcm=2500))
+    assert not matches({"bedrooms": {"min": 2}}, listing(bedrooms=1))
+
+
+def test_an_agency_listing_still_fails_a_landlord_direct_filter() -> None:
+    """`False` is a statement and rejects; `None` is silence and passes. Conflating
+    them rejected every source that does not report agency status."""
+    assert not matches({"landlord_direct_only": True}, listing(is_landlord_direct=False))
+    assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=None))
 
 
 # ── tri-state flags ───────────────────────────────────────────────────────
 
 
-def test_pets_wanted_requires_the_listing_to_say_so() -> None:
+def test_pets_wanted_excludes_only_a_stated_no() -> None:
     assert matches({"pets_allowed": True}, listing(pets_allowed=True))
     assert not matches({"pets_allowed": True}, listing(pets_allowed=False))
-    # Silent is not a yes. For someone with a pet it is not an answer they can act on.
-    assert not matches({"pets_allowed": True}, listing(pets_allowed=None))
+    # Silence passes, and the alert says "Pets not stated" so the recipient knows
+    # this is the one thing the listing has not answered. Rejecting silence made
+    # this criterion a mute off switch for sources that never mention pets.
+    assert matches({"pets_allowed": True}, listing(pets_allowed=None))
 
 
 def test_a_flag_can_be_required_to_be_false() -> None:
@@ -179,7 +197,9 @@ def test_minimum_tenancy_is_a_ceiling_on_the_landlords_demand() -> None:
 
 def test_landlord_direct_only() -> None:
     assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=True))
-    assert not matches({"landlord_direct_only": True}, listing(is_landlord_direct=None))
+    # None is silence and passes; False is "listed by an agency" and does not.
+    assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=None))
+    assert not matches({"landlord_direct_only": True}, listing(is_landlord_direct=False))
     assert matches({"landlord_direct_only": False}, listing(is_landlord_direct=None))
 
 

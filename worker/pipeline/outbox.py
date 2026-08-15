@@ -192,6 +192,14 @@ def listing_view(row: Row) -> ListingView:
         source_display=row["source_display"],
         is_landlord_direct=row["is_landlord_direct"],
         url=row["url"],
+        bathrooms=row.get("bathrooms"),
+        deposit_pcm=row.get("deposit_pcm"),
+        # From `raw` because these have no column: a source that supplies them is
+        # not a reason to widen `listings` for one that never will. `.get` on both
+        # levels so a row written before the parser existed renders unchanged.
+        area=(row.get("raw") or {}).get("location"),
+        address=(row.get("raw") or {}).get("address"),
+        size_text=(row.get("raw") or {}).get("size"),
     )
 
 

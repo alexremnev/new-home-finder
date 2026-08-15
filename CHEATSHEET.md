@@ -14,6 +14,30 @@ uv run python -m worker hot --districts SE16   # один район, в пре�
 uv run python -m worker sweep                  # полный обход; только он помечает объявления снятыми
 uv run python -m worker drain                  # отправить то, что стоит в очереди notifications
 uv run python -m worker tick                   # то, что вызывает планировщик: только подошедшее по сроку
+uv run python -m worker ingest                 # прочитать телеграм-фид, разобрать, сматчить
+```
+
+`ingest` — три шага в одной команде: читатель кладёт сырьё в `source_messages`,
+разбор превращает его в `listings`, матчер ставит совпадения в очередь. Отправка
+остаётся за `drain`: она должна работать, даже когда источник сломан.
+
+Нужен `uv sync --extra ingest` (Telethon) и переменные `TG_*` из `.env.example`.
+**`TG_READER` обязателен и уникален на аккаунт** — курсор и дедупликация по нему
+ключуются, два хоста с одним именем будут пропускать прочитанное друг другом.
+
+```sql
+-- дошло ли сырьё и разбирается ли оно
+SELECT status, count(*) FROM source_messages GROUP BY status;
+
+-- на чём спотыкается парсер (растущий счётчик = формат сменился)
+SELECT parse_error, count(*) FROM source_messages
+ WHERE status = 'unparseable' GROUP BY 1 ORDER BY 2 DESC LIMIT 10;
+
+-- где остановился каждый читатель
+SELECT reader, source_key, last_external_id, updated_at FROM ingest_cursors;
+
+-- перепрогнать разбор после правки парсера
+UPDATE source_messages SET status = 'new', parse_error = NULL WHERE status = 'unparseable';
 ```
 
 Разница между `tick` и `hot`: `tick` смотрит в `schedules` и молча выходит, если

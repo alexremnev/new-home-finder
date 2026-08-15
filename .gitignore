@@ -45,6 +45,10 @@ out/
 # Local snapshots of fetched pages (debug artifacts, may be large)
 snapshots/
 
+# Delivery reports from scripts/report.py. Generated, dated, and they name
+# subscribers — useful on disk, not in history.
+reports/
+
 # IDE
 .idea/
 .vscode/

@@ -75,6 +75,23 @@ def run_job(
     `transport` is injectable so the whole path can be exercised against a fixture
     without touching a live site.
     """
+    if job == "ingest":
+        # Read, parse, match — in that order and in one job, because each step is
+        # only useful once the previous one has run and the whole thing is short.
+        # Delivery is deliberately still `drain`: it is the part that has to keep
+        # running when a source is broken.
+        import asyncio
+
+        from worker.ingest.parse import run_parse
+        from worker.ingest.reader import collect
+
+        source = source_key or "tg_feed"
+        asyncio.run(collect(conn, run, source_key=source, dry_run=cfg.dry_run))
+        listing_ids = run_parse(conn, run, source_key=source, dry_run=cfg.dry_run)
+        if listing_ids:
+            queue_matches(conn, run, source_key=source, listing_ids=listing_ids)
+        return "ok"
+
     if job == "drain":
         # A separate job so that a delivery failure can be retried without
         # scraping anything again, and so quiet hours can hold messages and a

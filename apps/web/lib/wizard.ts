@@ -61,6 +61,93 @@ export const PRICE_CEILING = 20_000;
 // buttons that all get used beat ten where six never do.
 export const MAX_BEDROOMS_CHOICE = 4;
 
+// How many districts get a button. The rest are typed, because a keyboard cannot
+// hold London: there are around 300 outward codes and Telegram will not render a
+// hundred rows — and nobody scrolls three hundred buttons to find SE16.
+export const DISTRICT_BUTTONS = 3;
+
+// A UK outward code: E1, E11, SW17, EC1A, W1A. Deliberately not the full postcode
+// pattern — a subscription names a district, and "E11 4EG" is reduced to "E11"
+// before it gets here so that someone who pastes their whole postcode is not told
+// they are wrong.
+const OUTWARD = /^[A-Z]{1,2}\d{1,2}[A-Z]?$/;
+
+/**
+ * Read a typed list of districts: "SE16, E14 N1" or a pasted "E11 4EG".
+ *
+ * Returns what was recognised and what was not, separately, so the reply can name
+ * the rejects. Silently dropping one would hand back a filter that is not the one
+ * they asked for — the same reasoning as `districtList` in criteria.ts.
+ */
+export function readDistricts(
+  text: string,
+  allowed: string[],
+): { codes: string[]; badFormat: string[]; notCovered: string[] } {
+  const codes: string[] = [];
+  const badFormat: string[] = [];
+  const notCovered: string[] = [];
+  const permitted = new Set(allowed.map((code) => code.toUpperCase()));
+
+  // Split on commas and whitespace, then take the outward code off anything that
+  // looks like a full postcode: "E11 4EG" arrives as two tokens, and "4EG" alone
+  // is not a district.
+  const tokens = text.toUpperCase().split(/[,;\s]+/).map((t) => t.trim()).filter(Boolean);
+  for (const token of tokens) {
+    const cleaned = token.replace(/[^A-Z0-9]/g, "");
+    if (!cleaned) continue;
+    // An inward code — "4EG", "2ED" — is the second half of a postcode whose first
+    // half we have already taken. Skipped rather than reported: complaining about
+    // it would make pasting a full postcode feel like an error.
+    if (/^\d[A-Z]{2}$/.test(cleaned)) continue;
+    if (!OUTWARD.test(cleaned)) {
+      badFormat.push(token);
+    } else if (!permitted.has(cleaned)) {
+      notCovered.push(cleaned);
+    } else if (!codes.includes(cleaned)) {
+      codes.push(cleaned);
+    }
+  }
+  return { codes, badFormat, notCovered };
+}
+
+/** Districts typed at the first step, merged with whatever was already chosen. */
+export function applyDistrictText(
+  session: Session,
+  text: string,
+  context: Context,
+): { ok: true; session: Session; added: string[] } | { ok: false; reason: string } {
+  if (session.step !== "districts") return { ok: false, reason: "not at the district step" };
+
+  const { codes, badFormat, notCovered } = readDistricts(text, context.districts);
+  const complaints: string[] = [];
+  if (badFormat.length) complaints.push(`not a district: ${badFormat.join(", ")}`);
+  if (notCovered.length) complaints.push(`not covered yet: ${notCovered.join(", ")}`);
+
+  if (!codes.length) {
+    return {
+      ok: false,
+      reason: complaints.join("\n") || `I couldn't find a district in "${text.trim()}".`,
+    };
+  }
+
+  const chosen = session.draft.areas?.postcode_districts ?? [];
+  const merged = [...chosen];
+  const added: string[] = [];
+  for (const code of codes) {
+    if (merged.includes(code)) continue;
+    if (merged.length >= context.maxDistricts) {
+      complaints.push(`your plan covers ${context.maxDistricts}, so ${code} was not added`);
+      continue;
+    }
+    merged.push(code);
+    added.push(code);
+  }
+  if (!added.length) {
+    return { ok: false, reason: complaints.join("\n") || "those are already chosen." };
+  }
+  return { ok: true, session: { ...session, draft: withDistricts(session.draft, merged) }, added };
+}
+
 // ── actions, and the callback data that encodes them ──────────────────────
 
 export type Action =
@@ -330,23 +417,30 @@ export function render(session: Session, context: Context): { text: string; keyb
         ],
       };
 
-    case "districts":
+    case "districts": {
+      // A sample, not the list. Any already chosen come first so they stay visible
+      // and removable once the sample no longer contains them.
+      const sample = [
+        ...chosen,
+        ...context.districts.filter((code) => !chosen.includes(code)).slice(0, DISTRICT_BUTTONS),
+      ];
       return {
         text: [
-          `Step 1 of 5 — where?`,
+          "Step 1 of 5 — where?",
           "",
           chosen.length
             ? `Chosen: ${chosen.join(", ")}  (${chosen.length} of ${context.maxDistricts})`
-            : `Tap the districts you want, up to ${context.maxDistricts}.`,
+            : `Choose up to ${context.maxDistricts} districts.`,
           "",
-          // Said here rather than left to be discovered: these are the districts
-          // actually being collected, and a person wondering why their own is
-          // missing deserves the reason rather than the silence.
-          "Only districts being covered are listed. Tap again to remove.",
+          "Type them and send — for example:",
+          `${sample.slice(0, 2).join(", ") || "SE16, E14"}`,
+          "",
+          "A full postcode works too: E11 4EG counts as E11.",
+          "Or tap one below. Tapping again removes it.",
         ].join("\n"),
         keyboard: [
           ...rows(
-            context.districts.map((code) => ({
+            sample.map((code) => ({
               text: chosen.includes(code) ? `✓ ${code}` : code,
               callback_data: `w:d:${code}`,
             })),
@@ -355,6 +449,7 @@ export function render(session: Session, context: Context): { text: string; keyb
           [{ text: chosen.length ? "Done →" : "Choose at least one", callback_data: "w:dn" }],
         ],
       };
+    }
 
     case "bedrooms":
       return {

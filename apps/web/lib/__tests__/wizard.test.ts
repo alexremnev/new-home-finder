@@ -8,7 +8,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   apply,
+  applyDistrictText,
   applyPriceText,
+  DISTRICT_BUTTONS,
+  readDistricts,
   MAX_BEDROOMS_CHOICE,
   parseCallback,
   PRICE_CEILING,
@@ -362,5 +365,88 @@ describe("cancel", () => {
       expect(outcome.session.step).toBe("districts");
       expect(outcome.session.draft).toEqual({});
     }
+  });
+});
+
+// ── districts typed rather than tapped ────────────────────────────────────
+
+describe("typed districts", () => {
+  // A keyboard cannot hold London — around 300 outward codes, and Telegram will
+  // not render a hundred rows. Typing is how most of them are reached, so the
+  // parsing has to be forgiving about form and strict about result.
+  const ALLOWED = ["SE16", "SE8", "E14", "E11", "N1", "SW17", "EC1A"];
+  const CTX: Context = { districts: ALLOWED, maxDistricts: 5 };
+
+  it("reads commas, spaces and any case", () => {
+    expect(readDistricts("SE16, E14 n1", ALLOWED).codes).toEqual(["SE16", "E14", "N1"]);
+  });
+
+  it("takes the outward code from a full postcode, without complaining about the rest", () => {
+    // Someone pasting their own postcode must not be told they got it wrong.
+    const result = readDistricts("E11 4EG", ALLOWED);
+    expect(result.codes).toEqual(["E11"]);
+    expect(result.badFormat).toEqual([]);
+  });
+
+  it("separates what is not a district from what is not covered", () => {
+    // Two different answers: one is a typo, the other is a coverage gap, and
+    // telling someone "banana isn't covered yet" would be nonsense.
+    expect(readDistricts("banana", ALLOWED).badFormat).toEqual(["BANANA"]);
+    expect(readDistricts("ZZ99", ALLOWED).notCovered).toEqual(["ZZ99"]);
+  });
+
+  it("collapses duplicates", () => {
+    expect(readDistricts("SE16 se16 SE16", ALLOWED).codes).toEqual(["SE16"]);
+  });
+
+  it("adds to what was already chosen rather than replacing it", () => {
+    const session = { chatId: "1", userId: null, step: "districts" as const,
+                      draft: { areas: { postcode_districts: ["N1"] } }, promptMsgId: null };
+    const result = applyDistrictText(session, "SE8", CTX);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.session.draft.areas?.postcode_districts).toEqual(["N1", "SE8"]);
+  });
+
+  it("stops at the plan's limit and names what it did not add", () => {
+    const session = { chatId: "1", userId: null, step: "districts" as const,
+                      draft: {}, promptMsgId: null };
+    const result = applyDistrictText(session, "SE16, E14, N1, SE8", { ...CTX, maxDistricts: 2 });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.session.draft.areas?.postcode_districts).toHaveLength(2);
+      expect(result.added).toHaveLength(2);
+    }
+  });
+
+  it("refuses text with no district in it, saying why", () => {
+    const session = { chatId: "1", userId: null, step: "districts" as const,
+                      draft: {}, promptMsgId: null };
+    const result = applyDistrictText(session, "somewhere nice", CTX);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/not a district/);
+  });
+
+  it("shows a handful of buttons however many districts are covered", () => {
+    const many: Context = {
+      districts: Array.from({ length: 300 }, (_, n) => `E${n + 1}`),
+      maxDistricts: 5,
+    };
+    const view = render({ chatId: "1", userId: null, step: "districts",
+                          draft: {}, promptMsgId: null }, many);
+    const buttons = view.keyboard.flat().filter((b) => b.callback_data?.startsWith("w:d:"));
+    expect(buttons.length).toBeLessThanOrEqual(DISTRICT_BUTTONS + 1);
+    expect(view.text).toMatch(/Type them and send/);
+  });
+
+  it("keeps a chosen district visible even when it is outside the sample", () => {
+    // Otherwise a district reached by typing could never be removed.
+    const many: Context = {
+      districts: Array.from({ length: 300 }, (_, n) => `E${n + 1}`),
+      maxDistricts: 5,
+    };
+    const view = render({ chatId: "1", userId: null, step: "districts",
+                          draft: { areas: { postcode_districts: ["E250"] } },
+                          promptMsgId: null }, many);
+    expect(view.keyboard.flat().some((b) => b.text === "✓ E250")).toBe(true);
   });
 });

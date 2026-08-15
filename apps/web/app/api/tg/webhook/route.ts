@@ -67,6 +67,7 @@ import {
 } from "@/lib/telegram";
 import {
   apply,
+  applyDistrictText,
   applyPriceText,
   commitSession,
   type Context as WizardContext,
@@ -126,11 +127,13 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   if (command.kind === "start") return start(chatId, command.token);
   if (command.kind === "menu") return pushMenu(chatId);
 
-  // The price step is the one part of the wizard answered by typing, so plain text
-  // that is not a command belongs to it when a wizard is waiting. Checked before
-  // the help fallback, or "1500-2200" would be answered with a list of commands.
+  // Two steps are answered by typing rather than tapping — districts and price —
+  // so plain text that is not a command belongs to whichever one is waiting.
+  // Checked before the help fallback, or "SE16, E14" would be answered with a list
+  // of commands.
   if (command.kind === "help" && !command.reason) {
     const waiting = await loadSession(chatId);
+    if (waiting?.step === "districts") return districtsTyped(chatId, waiting, text ?? "");
     if (waiting?.step === "price") return priceTyped(chatId, waiting, text ?? "");
   }
 
@@ -428,6 +431,20 @@ async function tapped(
     }
   }
 }
+
+/** Districts typed rather than tapped, which is the only way to reach most of them. */
+async function districtsTyped(chatId: string, session: Session, text: string): Promise<void> {
+  const context = await wizardContext(session.userId);
+  const result = applyDistrictText(session, text, context);
+  if (!result.ok) {
+    // Named rather than silently dropped: a filter that quietly covers less than
+    // was asked for is worse than a refusal, because nobody finds out.
+    await sendMessage(chatId, `${result.reason}\n\nTry again, or tap one below.`);
+    return;
+  }
+  await saveSession(await showStep(result.session, context));
+}
+
 
 /** The price step's typed answer. */
 async function priceTyped(chatId: string, session: Session, text: string): Promise<void> {
