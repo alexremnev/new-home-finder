@@ -58,6 +58,7 @@ def matches(criteria: Criteria, listing: ListingValues) -> Verdict:
     for check in (
         _check_price,
         _check_bedrooms,
+        _check_bathrooms,
         _check_property_type,
         _check_areas,
         _check_furnished,
@@ -81,6 +82,17 @@ def _check_price(criteria: Criteria, listing: ListingValues) -> Verdict:
 
 def _check_bedrooms(criteria: Criteria, listing: ListingValues) -> Verdict:
     return _range("bedrooms", criteria.get("bedrooms"), listing.get("bedrooms"))
+
+
+def _check_bathrooms(criteria: Criteria, listing: ListingValues) -> Verdict:
+    """Bathrooms, as a range like bedrooms.
+
+    Unlike bedrooms, this one genuinely travels the unknown path: the feed states
+    bathrooms on most listings but not all, and `insert_listing` does not refuse a
+    listing without them. So the shared `_range` letting `None` through is what keeps
+    a bathroom filter from quietly discarding perfectly good flats.
+    """
+    return _range("bathrooms", criteria.get("bathrooms"), listing.get("bathrooms"))
 
 
 def _range(name: str, wanted: Any, value: Any) -> Verdict:

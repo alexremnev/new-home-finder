@@ -19,6 +19,10 @@
 export type Criteria = {
   price_pcm?: { min?: number; max?: number };
   bedrooms?: { min?: number; max?: number };
+  // A range, like bedrooms, and for the same reason: "at least two" and "no more
+  // than two" are different searches, and somebody who wants a two-bed does not
+  // want a five-bed at five times the rent.
+  bathrooms?: { min?: number; max?: number };
   property_types?: string[];
   areas?: { postcode_districts?: string[] };
   furnished?: string[];
@@ -67,6 +71,8 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
 
   const bedrooms = range(form.bedrooms_min, form.bedrooms_max, BEDROOM_LIMIT);
   if (bedrooms) criteria.bedrooms = bedrooms;
+  const bathrooms = range(form.bathrooms_min, form.bathrooms_max, BEDROOM_LIMIT);
+  if (bathrooms) criteria.bathrooms = bathrooms;
 
   const types = subset(form.property_types, PROPERTY_TYPES);
   if (types.length) criteria.property_types = types;
@@ -200,6 +206,9 @@ export function describeCriteria(criteria: Criteria): string {
     `Districts: ${(criteria.areas?.postcode_districts ?? []).join(", ") || "any"}`,
     `Rent: ${rangeText(criteria.price_pcm, "£")}`,
     `Bedrooms: ${rangeText(criteria.bedrooms, "")}`,
+    // Only when asked for. Most people do not care, and "Bathrooms: any" on every
+    // confirmation is a line that never carries information.
+    ...(criteria.bathrooms ? [`Bathrooms: ${rangeText(criteria.bathrooms, "")}`] : []),
     `Type: ${(criteria.property_types ?? []).join(", ") || "any"}`,
     `Furnishing: ${(criteria.furnished ?? []).join(", ") || "any"}`,
   ];
