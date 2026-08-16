@@ -138,6 +138,18 @@ export async function editMessageText(
   });
 }
 
+/**
+ * Remove one of our own messages.
+ *
+ * Used to keep exactly one live wizard prompt in the chat. Telegram allows a bot to
+ * delete its own messages for 48 hours, which is far longer than a wizard lives, and
+ * a failure is ignored: a leftover prompt is untidy, not broken.
+ */
+export async function deleteMessage(chatId: string, messageId: string): Promise<boolean> {
+  return call("deleteMessage", { chat_id: chatId, message_id: Number(messageId) });
+}
+
+
 /** Take the keyboard away, leaving the text. Used when a wizard is finished or abandoned. */
 export async function clearKeyboard(chatId: string, messageId: string): Promise<boolean> {
   return call("editMessageReplyMarkup", {

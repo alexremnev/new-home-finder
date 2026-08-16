@@ -79,7 +79,7 @@ def _listing_values(listing: Listing) -> dict[str, Any]:
 # stage runs twice.
 
 _LISTING_VIEW_COLUMNS = (
-    "price_pcm", "bedrooms", "property_type", "postcode_district", "tfl_zone",
+    "price_pcm", "bedrooms", "property_type", "postcode", "postcode_district", "tfl_zone",
     "available_from", "furnished", "pets_allowed", "bills_included",
     "min_tenancy_months", "is_landlord_direct", "url",
     # Shown in the alert too. `raw` carries what has no column of its own — the

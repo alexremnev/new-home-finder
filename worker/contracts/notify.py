@@ -38,6 +38,10 @@ class ListingView(BaseModel):
     bedrooms: int
     property_type: str | None = None
     district: str | None = None
+    # The full postcode, not just the outward code. "E11" locates a neighbourhood;
+    # "E11 4EG" locates a street, which is what somebody deciding whether to view a
+    # flat actually wants — and it is what the source states.
+    postcode: str | None = None
     zone: int | None = None
     available_from: date | None = None
     furnished: str = "unknown"

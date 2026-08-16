@@ -461,21 +461,23 @@ export function render(session: Session, context: Context): { text: string; keyb
         ...context.districts.filter((code) => !chosen.includes(code)).slice(0, DISTRICT_BUTTONS),
       ];
       return {
+        // Three lines, not eight. This is the first thing anybody sees, and the
+        // longer version explained comma separation, postcode truncation and the
+        // toggling of buttons before the person had chosen anything at all. The
+        // examples carry all of it: a name, two codes, a full postcode. What the
+        // buttons do is discoverable by pressing one.
         text: [
-          `Step 1 of ${TOTAL} — where?`,
+          `Step 1 of ${TOTAL} — where do you want to live?`,
           "",
           chosen.length
             ? `Chosen: ${chosen.join(", ")}  (${chosen.length} of ${context.maxDistricts})`
-            : `Choose up to ${context.maxDistricts} areas.`,
+            : `Up to ${context.maxDistricts} areas.`,
           "",
-          "Send an area name or a postcode — either works:",
-          exampleNames(context).length
-            ? `${exampleNames(context).join(", ")}`
-            : "Leytonstone, Camden Town",
-          `${sample.slice(0, 2).join(", ") || "SE16, E14"}   ·   E11 4EG`,
-          "",
-          "Several at once, separated by commas. Or tap one below;",
-          "tapping again removes it.",
+          `Type them, or tap below.  e.g. ${[
+            exampleNames(context)[0] ?? "Leytonstone",
+            sample[0] ?? "SE16",
+            "E11 4EG",
+          ].join(", ")}`,
         ].join("\n"),
         keyboard: [
           ...rows(

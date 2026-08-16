@@ -462,7 +462,7 @@ describe("typed districts", () => {
                           draft: {}, promptMsgId: null }, many);
     const buttons = view.keyboard.flat().filter((b) => b.callback_data?.startsWith("w:d:"));
     expect(buttons.length).toBeLessThanOrEqual(DISTRICT_BUTTONS + 1);
-    expect(view.text).toMatch(/Send an area name or a postcode/);
+    expect(view.text).toMatch(/Type them, or tap below/);
   });
 
   it("keeps a chosen district visible even when it is outside the sample", () => {

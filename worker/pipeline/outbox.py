@@ -262,6 +262,7 @@ def listing_view(row: Row) -> ListingView:
         price_pcm=int(row["price_pcm"]),
         bedrooms=int(row["bedrooms"]),
         property_type=row["property_type"],
+        postcode=row.get("postcode"),
         district=row["postcode_district"],
         zone=row["tfl_zone"],
         available_from=row["available_from"],

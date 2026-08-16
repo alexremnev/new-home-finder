@@ -58,6 +58,7 @@ import {
   answerCallback,
   chatIdOf,
   clearKeyboard,
+  deleteMessage,
   editMessageText,
   type Keyboard,
   sendMessage,
@@ -364,9 +365,32 @@ async function beginUpdate(chatId: string): Promise<void> {
   );
 }
 
-/** Redraw the wizard in place, falling back to a new message if the edit is refused. */
-async function showStep(session: Session, context: WizardContext): Promise<Session> {
+/**
+ * Show the session's current step.
+ *
+ * `fresh` decides where it appears, and the distinction matters more than it looks.
+ * A tap is answered by editing in place: the person just touched that message, it is
+ * on screen, and a new one would leave a dead copy above it.
+ *
+ * Typing is answered by a new message at the bottom. An edited message stays where
+ * it was, so after two or three typed answers the prompt has scrolled out of sight
+ * above the person's own replies — they are left looking at their own text with no
+ * question visible. The old prompt is deleted rather than merely stripped of its
+ * keyboard, so the chat holds one live wizard and not a column of stale ones.
+ */
+async function showStep(
+  session: Session,
+  context: WizardContext,
+  fresh = false,
+): Promise<Session> {
   const view = render(session, context);
+  if (fresh) {
+    if (session.promptMsgId) {
+      await deleteMessage(session.chatId, session.promptMsgId).catch(() => undefined);
+    }
+    const messageId = await sendMessageReturningId(session.chatId, view.text, view.keyboard);
+    return { ...session, promptMsgId: messageId };
+  }
   if (session.promptMsgId) {
     const edited = await editMessageText(
       session.chatId,
@@ -444,11 +468,11 @@ async function districtsTyped(chatId: string, session: Session, text: string): P
     await sendMessage(chatId, `${result.reason}\n\nTry again, or tap one below.`);
     return;
   }
-  await saveSession(await showStep(result.session, context));
+  await saveSession(await showStep(result.session, context, true));
 }
 
 
-/** The price step's typed answer. */
+/** The price steps' typed answer. */
 async function priceTyped(chatId: string, session: Session, text: string): Promise<void> {
   const result = applyPriceText(session, text);
   if (!result.ok) {
@@ -458,7 +482,7 @@ async function priceTyped(chatId: string, session: Session, text: string): Promi
     return;
   }
   const context = await wizardContext(session.userId);
-  await saveSession(await showStep(result.session, context));
+  await saveSession(await showStep(result.session, context, true));
 }
 
 async function finishWizard(session: Session): Promise<void> {

@@ -112,11 +112,15 @@ def render_listing(view: ListingView) -> str:
     if view.bathrooms:
         lines[-1] += " · " + plural(view.bathrooms, LABELS["bathroom"])
 
-    # The neighbourhood name first, then the code. "Leytonstone · E11 · Zone 3"
-    # reads as a place; "E11 · Zone 3" reads as a database row.
+    # The neighbourhood name, then the full postcode, then the zone. The full code
+    # rather than the outward one: "E11" is a neighbourhood, "E11 4EG" is a street,
+    # and the street is what somebody deciding whether to view it wants. Falls back
+    # to the district when the source did not state the rest.
     where = [
         part for part in (
-            view.area, view.district, f"{LABELS['zone']} {view.zone}" if view.zone else None
+            view.area,
+            view.postcode or view.district,
+            f"{LABELS['zone']} {view.zone}" if view.zone else None,
         ) if part
     ]
     if where:
@@ -141,28 +145,23 @@ def render_listing(view: ListingView) -> str:
     if money_lines:
         lines.append("📐 " + " · ".join(money_lines))
 
-    # Everything the recipient filtered on is named, including what the listing did
-    # not say. This is the other half of the matcher letting unknown values pass: a
-    # listing can now reach someone whose filter it has not actually answered, and
-    # they can only judge that if the gap is on the page rather than implied by its
-    # absence.
+    # Only what the listing actually says. Naming the gaps was tried and removed:
+    # this feed never states pets or bills, so "Pets not stated · Bills not stated"
+    # appeared on every single alert — three words of nothing on every line, which
+    # trains people to skip the line that does carry a fact.
+    #
+    # The matcher still lets unknown values through, which is the reason a listing
+    # can arrive without answering a criterion. Absence of the line is how that
+    # reads now: what is here is stated, what is missing was not.
     flags: list[str] = []
-    flags.append(
-        "🛋 " + (view.furnished.capitalize()
-                if view.furnished and view.furnished != "unknown"
-                else f"Furnishing {LABELS['not_stated']}")
-    )
-    flags.append(
-        LABELS["pets_yes"] if view.pets_allowed
-        else LABELS["pets_no"] if view.pets_allowed is False
-        else f"🐾 Pets {LABELS['not_stated']}"
-    )
-    flags.append(
-        LABELS["bills_yes"] if view.bills_included
-        else LABELS["bills_no"] if view.bills_included is False
-        else f"💡 Bills {LABELS['not_stated']}"
-    )
-    lines.append("   ".join(flags))
+    if view.furnished and view.furnished != "unknown":
+        flags.append("🛋 " + view.furnished.capitalize())
+    if view.pets_allowed is not None:
+        flags.append(LABELS["pets_yes"] if view.pets_allowed else LABELS["pets_no"])
+    if view.bills_included is not None:
+        flags.append(LABELS["bills_yes"] if view.bills_included else LABELS["bills_no"])
+    if flags:
+        lines.append("   ".join(flags))
 
     lines.append("🔗 " + view.url)
 
