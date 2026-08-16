@@ -1,5 +1,10 @@
 import type { ReactNode } from "react";
 
+// Imported here because this is the only place every page passes through. It was
+// missing, which is why the site rendered as unstyled HTML: the stylesheet existed
+// and nothing ever loaded it.
+import "./globals.css";
+
 export const metadata = {
   title: "London Rent Alerts",
   description: "New London rental listings, in Telegram, minutes after they appear.",
@@ -8,16 +13,7 @@ export const metadata = {
 export default function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body
-        style={{
-          fontFamily: "system-ui, -apple-system, sans-serif",
-          maxWidth: "34rem",
-          margin: "0 auto",
-          padding: "2rem 1.25rem 4rem",
-          lineHeight: 1.5,
-          color: "#111",
-        }}
-      >
+      <body>
         {children}
       </body>
     </html>

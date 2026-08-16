@@ -1,2 +1,265 @@
-/* Intentionally minimal: the form is the product, and every stylesheet is
-   something else to keep working. */
+/* The look.
+ *
+ * Element selectors rather than a class per node, because the markup is a form and
+ * a form is already semantic: an input is an input, a legend is a legend. Styling
+ * what things *are* means a new field arrives dressed without anybody remembering
+ * to dress it — which is the failure mode a class-per-node system has and this
+ * does not.
+ *
+ * The previous version of this file was two lines of comment saying a stylesheet is
+ * something else to keep working. That was true and it was still wrong: the page it
+ * produced looked broken rather than plain, and a rental service that looks broken
+ * does not get given a phone number. */
+
+:root {
+  --ink: #16181d;
+  --ink-soft: #5b6472;
+  --line: #e2e6ec;
+  --bg: #f6f7f9;
+  --card: #fff;
+  --brand: #0a7c5f;
+  --brand-dim: #086a51;
+  --brand-wash: #eaf6f1;
+  --bad: #b4232a;
+  --bad-wash: #fdf1f1;
+  --radius: 10px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 2.5rem 1.25rem 5rem;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* One column, centred, and narrow on purpose: every line of this page is either a
+   question or the answer to one, and long measure makes both harder to scan. */
+body > * {
+  max-width: 36rem;
+  margin-inline: auto;
+}
+
+h1 {
+  font-size: 1.55rem;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  margin: 0 0 0.35rem;
+}
+
+a { color: var(--brand-dim); }
+
+/* ── the sheet the form sits on ─────────────────────────────────────────── */
+
+form, .panel {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 1.6rem 1.5rem 1.75rem;
+  box-shadow: 0 1px 2px rgb(16 24 40 / 4%), 0 8px 24px rgb(16 24 40 / 4%);
+}
+
+form > div,
+form > label {
+  display: block;
+  margin-bottom: 1.25rem;
+}
+
+/* The bold line above a field. A span rather than a class so the markup stays
+   plain, and `label > span:first-child` is exactly "the caption of this field". */
+label > span:first-child,
+legend {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.4rem;
+}
+
+/* Help text. Every <p> inside a field is one — there is nothing else it could be. */
+form p,
+.hint {
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  margin: 0.35rem 0 0;
+}
+
+/* ── inputs ─────────────────────────────────────────────────────────────── */
+
+input[type="text"],
+input[type="number"],
+input[type="date"],
+input[type="email"],
+select {
+  appearance: none;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  transition: border-color 120ms, box-shadow 120ms;
+}
+
+input[type="text"] { width: 100%; }
+input[type="number"] { width: 7rem; }
+input[type="date"] { width: 11rem; }
+
+input:focus-visible,
+select:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-wash);
+}
+
+input::placeholder { color: #9aa3af; }
+
+/* Checkboxes keep the platform control and gain room. A custom checkbox is a lot
+   of CSS to reimplement something every device already draws correctly. */
+input[type="checkbox"] {
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0 0.45rem 0 0;
+  accent-color: var(--brand);
+  vertical-align: -0.15rem;
+}
+
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem 1rem;
+  margin: 0 0 1.25rem;
+}
+
+fieldset label {
+  display: inline-flex;
+  align-items: center;
+  margin: 0.15rem 1.1rem 0.15rem 0;
+  font-size: 0.95rem;
+}
+
+/* ── buttons ────────────────────────────────────────────────────────────── */
+
+button[type="submit"],
+.cta {
+  display: inline-block;
+  padding: 0.7rem 1.3rem;
+  border: none;
+  border-radius: var(--radius);
+  background: var(--brand);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms;
+}
+
+button[type="submit"]:hover:not(:disabled),
+.cta:hover { background: var(--brand-dim); }
+
+button[type="submit"]:disabled {
+  background: #c3c9d2;
+  cursor: not-allowed;
+}
+
+/* The "More filters" disclosure. A plain button, so it is keyboard-reachable and
+   announces itself, but it should not look like the one that submits. */
+.disclosure {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0 0 1.25rem;
+  color: var(--brand-dim);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.disclosure:hover { text-decoration: underline; }
+
+/* What the disclosure reveals. Indented by a rule rather than boxed, so it reads as
+   a continuation of the form and not as a second form. */
+.more {
+  border-left: 2px solid var(--line);
+  padding-left: 1rem;
+  margin-bottom: 1.25rem;
+}
+
+.soon {
+  display: inline-block;
+  padding: 0.7rem 1.3rem;
+  border-radius: var(--radius);
+  background: #eef0f3;
+  color: #8b93a1;
+  font-weight: 600;
+  cursor: not-allowed;
+}
+
+/* ── district chips ─────────────────────────────────────────────────────── */
+
+.chips { margin-top: 0.6rem; }
+
+.chip {
+  display: inline-block;
+  padding: 0.32rem 0.7rem;
+  margin: 0 0.4rem 0.4rem 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 0.88rem;
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 120ms, background 120ms;
+}
+
+.chip:hover { border-color: #c8cfd8; }
+
+.chip.on {
+  border-color: var(--brand);
+  background: var(--brand-wash);
+  color: var(--brand-dim);
+  font-weight: 600;
+}
+
+.chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-wash);
+}
+
+/* ── notices ────────────────────────────────────────────────────────────── */
+
+.note {
+  background: var(--brand-wash);
+  border-radius: var(--radius);
+  padding: 0.75rem 0.9rem;
+  margin: 0 0 1.25rem;
+  font-size: 0.92rem;
+}
+
+.error,
+form p.error {
+  background: var(--bad-wash);
+  border-radius: var(--radius);
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 1rem;
+  color: var(--bad);
+  font-size: 0.92rem;
+}
+
+.footnote {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  margin-top: 2rem;
+}
+
+@media (max-width: 30rem) {
+  body { padding: 1.5rem 1rem 4rem; }
+  form, .panel { padding: 1.2rem 1.1rem 1.4rem; }
+  h1 { font-size: 1.35rem; }
+  /* Stacked, and full width, because two 7rem fields side by side on a narrow
+     phone leave neither wide enough to read the value being typed. */
+  input[type="number"] { width: 100%; margin-bottom: 0.4rem; }
+}

@@ -34,27 +34,17 @@ type Props = {
   names?: Record<string, string>;
 };
 
-const row: React.CSSProperties = { display: "block", marginBottom: "1.1rem" };
-const label: React.CSSProperties = { display: "block", fontWeight: 600, marginBottom: "0.3rem" };
-const hint: React.CSSProperties = { color: "#777", fontSize: "0.85rem", margin: "0.2rem 0 0" };
-const input: React.CSSProperties = {
-  padding: "0.4rem 0.5rem",
-  border: "1px solid #ccc",
-  borderRadius: 4,
-  width: "8rem",
-};
-const wide: React.CSSProperties = { ...input, width: "100%", maxWidth: "28rem" };
-const chip = (on: boolean): React.CSSProperties => ({
-  display: "inline-block",
-  padding: "0.3rem 0.6rem",
-  marginRight: "0.4rem",
-  marginBottom: "0.4rem",
-  borderRadius: 14,
-  border: on ? "1px solid #0a7" : "1px solid #ccc",
-  background: on ? "#e6f7f1" : "#fff",
-  cursor: "pointer",
-  fontSize: "0.9rem",
-});
+// Empty on purpose. Every rule that used to live here is in app/globals.css, and
+// the reason for moving it is that inline styles cannot express a hover, a focus
+// ring, or a phone-sized layout — the three things that made the page look unfinished.
+const row: React.CSSProperties = {};
+const label: React.CSSProperties = {};
+const hint: React.CSSProperties = {};
+const input: React.CSSProperties = {};
+const wide: React.CSSProperties = {};
+
+/** "chip" or "chip on" — a class, so :hover and :focus-visible are reachable. */
+const chip = (on: boolean) => (on ? "chip on" : "chip");
 
 // How many districts to offer as buttons. The feed reaches every London district,
 // which is roughly 240 of them — a page of 240 buttons is not a choice, it is a
@@ -199,7 +189,7 @@ export function SubscribeForm({
           An area name or a postcode — either works, several separated by commas.
           Up to {maxDistricts}.
         </p>
-        <div style={{ marginTop: "0.5rem" }}>
+        <div className="chips">
           {sample.map((code) => (
             <span
               key={code}
@@ -207,7 +197,7 @@ export function SubscribeForm({
               tabIndex={0}
               onClick={() => toggle(code)}
               onKeyDown={(event) => event.key === "Enter" && toggle(code)}
-              style={chip(chosen.includes(code))}
+              className={chip(chosen.includes(code))}
             >
               {chosen.includes(code) ? `✓ ${code}` : code}
             </span>
@@ -219,7 +209,7 @@ export function SubscribeForm({
           </p>
         )}
         {typedError && (
-          <p style={{ ...hint, color: "#900" }}>{typedError}</p>
+          <p className="error">{typedError}</p>
         )}
       </div>
 
@@ -254,21 +244,13 @@ export function SubscribeForm({
       <button
         type="button"
         onClick={() => setAdvanced((open) => !open)}
-        style={{
-          background: "none",
-          border: "none",
-          padding: 0,
-          marginBottom: "1rem",
-          color: "#0a7",
-          cursor: "pointer",
-          fontSize: "0.95rem",
-        }}
+        className="disclosure"
       >
         {advanced ? "▾" : "▸"} More filters (optional)
       </button>
 
       {advanced && (
-        <div style={{ borderLeft: "2px solid #eee", paddingLeft: "0.9rem" }}>
+        <div className="more">
           <p style={{ ...hint, marginTop: 0 }}>
             All optional. A listing that does not state one of these is still sent —
             most listings leave several unstated, and excluding them would leave you
@@ -283,7 +265,7 @@ export function SubscribeForm({
 
           <label style={row}>
             <span style={label}>Move-in date</span>
-            <input style={{ ...input, width: "11rem" }} type="date" name="available_on" />
+            <input style={input} type="date" name="available_on" />
             <p style={hint}>Listings available within about ten days of it.</p>
           </label>
 
@@ -324,23 +306,13 @@ export function SubscribeForm({
       )}
 
       {error && (
-        <p style={{ background: "#fff4f4", padding: "0.6rem", borderRadius: 4, color: "#900" }}>
-          {error}
-        </p>
+        <p className="error">{error}</p>
       )}
 
       <button
         type="submit"
         disabled={busy || chosen.length === 0 || chosen.length > maxDistricts}
-        style={{
-          padding: "0.6rem 1.1rem",
-          fontSize: "1rem",
-          borderRadius: 5,
-          border: "none",
-          background: busy || chosen.length === 0 ? "#999" : "#0a7",
-          color: "#fff",
-          cursor: busy ? "default" : "pointer",
-        }}
+
       >
         {busy ? "One moment…" : "Save my search"}
       </button>
@@ -374,15 +346,7 @@ function ChannelStep({ url }: { url: string }) {
 
       <a
         href={url}
-        style={{
-          display: "inline-block",
-          padding: "0.7rem 1.2rem",
-          borderRadius: 5,
-          background: "#0a7",
-          color: "#fff",
-          textDecoration: "none",
-          fontSize: "1rem",
-        }}
+        className="cta"
       >
         Connect Telegram
       </a>
@@ -391,15 +355,7 @@ function ChannelStep({ url }: { url: string }) {
       <div style={{ marginTop: "1.6rem" }}>
         <span
           aria-disabled="true"
-          style={{
-            display: "inline-block",
-            padding: "0.7rem 1.2rem",
-            borderRadius: 5,
-            background: "#f2f2f2",
-            color: "#888",
-            fontSize: "1rem",
-            cursor: "not-allowed",
-          }}
+          className="soon"
         >
           WhatsApp — coming soon
         </span>
