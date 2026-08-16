@@ -23,8 +23,6 @@
 
 import { useState } from "react";
 
-import { readDistricts } from "../lib/districts";
-
 type Props = {
   districts: string[];
   maxDistricts: number;
@@ -46,11 +44,6 @@ const wide: React.CSSProperties = {};
 /** "chip" or "chip on" — a class, so :hover and :focus-visible are reachable. */
 const chip = (on: boolean) => (on ? "chip on" : "chip");
 
-// How many districts to offer as buttons. The feed reaches every London district,
-// which is roughly 240 of them — a page of 240 buttons is not a choice, it is a
-// wall. So a handful are offered and the rest are typed.
-const SAMPLE = 12;
-
 export function SubscribeForm({
   districts, maxDistricts, propertyTypes, furnished, names = {},
 }: Props) {
@@ -58,20 +51,50 @@ export function SubscribeForm({
   const [busy, setBusy] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [chosen, setChosen] = useState<string[]>([]);
-  const [typed, setTyped] = useState("");
-  const [typedError, setTypedError] = useState<string | null>(null);
+  const [tooMany, setTooMany] = useState(false);
+  // Which of the two lists is shown. Neighbourhood first because it is the one
+  // people can answer without looking anything up — a postcode district is
+  // something you know or you don't, and being asked for one first reads as a
+  // demand for information rather than a question about where you want to live.
+  const [mode, setMode] = useState<"name" | "postcode">("name");
   // Set once the subscription exists. Until then there is nothing to connect a
   // channel to; afterwards the token is the only thing standing between this page
   // and a live filter, which is why it is held in memory and not in the URL.
   const [link, setLink] = useState<string | null>(null);
 
-  const sample = [
-    ...chosen,
-    ...districts.filter((code) => !chosen.includes(code)).slice(0, SAMPLE),
-  ];
+  // Two lists, never one. A single list mixing "Canary Wharf · E14" with bare
+  // "SE8" asks the person to hold two different ideas of what a place is at the
+  // same time, and the mixed entries look like an oversight rather than a choice.
+  const { named, codes: allCodes } = (() => {
+    const byCode = new Map<string, string>();
+    for (const [name, code] of Object.entries(names)) {
+      const upper = code.toUpperCase();
+      if (!districts.includes(upper)) continue;
+      // First name wins per district: the query ordered them by the most recent
+      // listing, and a second name for the same code is the same place.
+      if (!byCode.has(upper)) {
+        byCode.set(upper, name.replace(/\b[a-z]/g, (c) => c.toUpperCase()));
+      }
+    }
+    return {
+      named: [...byCode]
+        .map(([code, name]) => ({ code, name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      codes: [...districts].sort(),
+    };
+  })();
+
+  const options =
+    mode === "name"
+      ? named
+      : allCodes.map((code) => ({ code, name: code }));
+
+  /** What to call a district on a chip, in whichever way it was being chosen. */
+  const nameOf = (code: string) =>
+    mode === "name" ? (named.find((one) => one.code === code)?.name ?? code) : code;
 
   function toggle(code: string) {
-    setTypedError(null);
+    setTooMany(false);
     setChosen((current) =>
       current.includes(code)
         ? current.filter((one) => one !== code)
@@ -79,31 +102,6 @@ export function SubscribeForm({
           ? current
           : [...current, code],
     );
-  }
-
-  /** Add whatever was typed — names, codes, full postcodes, mixed. */
-  function addTyped() {
-    if (!typed.trim()) return;
-    // The same parser the bot used, imported rather than reimplemented: "Camden
-    // Town" and "E11 4EG" have to mean here exactly what they meant there, and two
-    // copies of that rule would drift.
-    const { codes, unknown, notCovered } = readDistricts(typed, districts, names);
-    const complaints: string[] = [];
-    if (unknown.length) complaints.push(`I don't know: ${unknown.join(", ")}`);
-    if (notCovered.length) complaints.push(`not covered yet: ${notCovered.join(", ")}`);
-
-    const merged = [...chosen];
-    let full = false;
-    for (const code of codes) {
-      if (merged.includes(code)) continue;
-      if (merged.length >= maxDistricts) { full = true; continue; }
-      merged.push(code);
-    }
-    if (full) complaints.push(`your plan covers ${maxDistricts}`);
-
-    setChosen(merged);
-    setTypedError(complaints.length ? complaints.join(" · ") : null);
-    if (codes.length) setTyped("");
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -165,51 +163,89 @@ export function SubscribeForm({
         Four questions, then where to send the alerts. A minute, no account.
       </p>
 
+      <fieldset style={row}>
+        <legend>How would you like to search?</legend>
+        {(
+          [
+            ["name", "By neighbourhood"],
+            ["postcode", "By postcode"],
+          ] as const
+        ).map(([value, text]) => (
+          <label key={value}>
+            <input
+              type="radio"
+              name="search_by"
+              value={value}
+              checked={mode === value}
+              onChange={() => {
+                setMode(value);
+                setTooMany(false);
+              }}
+            />
+            {text}
+          </label>
+        ))}
+        {named.length === 0 && mode === "name" && (
+          <p className="hint">
+            No area names have come through yet — search by postcode for now.
+          </p>
+        )}
+      </fieldset>
+
       <div style={row}>
-        <span style={label}>Where do you want to live?</span>
+        <label htmlFor="district" style={label}>
+          {mode === "name" ? "Which neighbourhood?" : "Which postcode district?"}
+        </label>
         {chosen.map((code) => (
           <input key={code} type="hidden" name="districts" value={code} />
         ))}
-        <input
-          style={wide}
-          value={typed}
-          placeholder="Leytonstone, SE16, E11 4EG"
-          onChange={(event) => setTyped(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              // Otherwise Enter in this field submits the whole form with no
-              // districts chosen, which reads as the form rejecting itself.
-              event.preventDefault();
-              addTyped();
-            }
+        <select
+          id="district"
+          value=""
+          onChange={(event) => {
+            const code = event.target.value;
+            if (!code) return;
+            if (chosen.length >= maxDistricts) { setTooMany(true); return; }
+            toggle(code);
           }}
-          onBlur={addTyped}
-        />
-        <p style={hint}>
-          An area name or a postcode — either works, several separated by commas.
-          Up to {maxDistricts}.
+        >
+          <option value="">
+            {mode === "name" ? "Choose a neighbourhood…" : "Choose a district…"}
+          </option>
+          {options
+            .filter((one) => !chosen.includes(one.code))
+            .map((one) => (
+              <option key={one.code} value={one.code}>
+                {one.name}
+              </option>
+            ))}
+        </select>
+        <p className="hint">
+          {mode === "name"
+            ? `Up to ${maxDistricts} — add them one at a time.`
+            : `The outward part only, like E14. Up to ${maxDistricts}.`}
         </p>
-        <div className="chips">
-          {sample.map((code) => (
-            <span
-              key={code}
-              role="button"
-              tabIndex={0}
-              onClick={() => toggle(code)}
-              onKeyDown={(event) => event.key === "Enter" && toggle(code)}
-              className={chip(chosen.includes(code))}
-            >
-              {chosen.includes(code) ? `✓ ${code}` : code}
-            </span>
-          ))}
-        </div>
         {chosen.length > 0 && (
-          <p style={hint}>
-            Chosen: {chosen.join(", ")} ({chosen.length} of {maxDistricts})
-          </p>
+          <div className="chips">
+            {chosen.map((code) => (
+              <span
+                key={code}
+                role="button"
+                tabIndex={0}
+                title="Remove"
+                onClick={() => toggle(code)}
+                onKeyDown={(event) => event.key === "Enter" && toggle(code)}
+                className="chip on"
+              >
+                {nameOf(code)} ✕
+              </span>
+            ))}
+          </div>
         )}
-        {typedError && (
-          <p className="error">{typedError}</p>
+        {tooMany && (
+          <p className="error">
+            Your plan covers {maxDistricts} areas. Remove one to add another.
+          </p>
         )}
       </div>
 
