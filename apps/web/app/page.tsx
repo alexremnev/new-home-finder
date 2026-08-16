@@ -7,7 +7,7 @@
 // was ever looked at".
 
 import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
-import { enabledDistricts, signupPlan } from "@/lib/plans";
+import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
 import { SubscribeForm } from "./form";
 
 export const dynamic = "force-dynamic";
@@ -17,6 +17,9 @@ export default async function Page() {
   // than showing a stack trace to someone who only wanted to sign up.
   const codes = await enabledDistricts().catch(() => []);
   const plan = await signupPlan().catch(() => null);
+  // Empty on failure rather than fatal: without it the form still takes postcodes,
+  // and a page that renders without name lookup beats a page that does not render.
+  const names = await districtNames().catch(() => ({}));
 
   return (
     <main>
@@ -45,6 +48,7 @@ export default async function Page() {
             maxDistricts={plan?.max_districts ?? 1}
             propertyTypes={[...PROPERTY_TYPES]}
             furnished={[...FURNISHED]}
+            names={names}
           />
         </>
       )}

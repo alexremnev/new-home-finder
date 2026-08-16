@@ -88,6 +88,39 @@ export async function enabledDistricts(): Promise<string[]> {
   return rows.map((r) => r.code.toUpperCase());
 }
 
+/**
+ * Neighbourhood name to district code — "leytonstone" -> "E11".
+ *
+ * Drawn from listings already seen rather than from a hand-kept gazetteer, for the
+ * same reason `enabledDistricts` is: the feed states a location name on every
+ * message, so the names people recognise arrive with the data and cannot go stale
+ * against it. A name nobody has posted a listing for is absent here, which is the
+ * honest answer — nothing would match it anyway.
+ *
+ * `DISTINCT ON` because one name reaches several districts over time ("Hackney" is
+ * E5, E8 and E9); the most-recent listing decides, which is as good a tie-break as
+ * any and is at least stable between page loads.
+ */
+export async function districtNames(): Promise<Record<string, string>> {
+  const rows = await query<{ name: string; code: string }>(
+    `SELECT DISTINCT ON (lower(raw->>'location'))
+            raw->>'location' AS name, postcode_district AS code
+       FROM listings
+      WHERE raw->>'location' IS NOT NULL
+        AND postcode_district IS NOT NULL
+        AND status = 'active'
+      ORDER BY lower(raw->>'location'), first_seen_at DESC`,
+  );
+  const map: Record<string, string> = {};
+  for (const row of rows) {
+    // Collapsed whitespace, lower case: the lookup in `readDistricts` normalises
+    // the same way, and "Camden  Town" typed with two spaces has to find it.
+    const key = row.name.trim().toLowerCase().replace(/\s+/g, " ");
+    if (key) map[key] = row.code.toUpperCase();
+  }
+  return map;
+}
+
 // ── tokens ────────────────────────────────────────────────────────────────
 
 const TOKEN_BYTES = 24;
