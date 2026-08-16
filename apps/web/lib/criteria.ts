@@ -16,6 +16,12 @@
 // The shape must stay in step with worker/pipeline/match.py. That coupling is
 // deliberate — one vocabulary, checked by the worker's tests.
 
+/** An ISO date, or undefined. Anything unparseable is dropped rather than guessed. */
+function day(value: unknown): string | undefined {
+  const text = String(value ?? "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined;
+}
+
 export type Criteria = {
   price_pcm?: { min?: number; max?: number };
   bedrooms?: { min?: number; max?: number };
@@ -27,6 +33,7 @@ export type Criteria = {
   areas?: { postcode_districts?: string[] };
   furnished?: string[];
   pets_allowed?: boolean;
+  available_from?: { after?: string; before?: string };
   bills_included?: boolean;
   min_tenancy_max_months?: number;
   landlord_direct_only?: boolean;
@@ -73,6 +80,16 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
   if (bedrooms) criteria.bedrooms = bedrooms;
   const bathrooms = range(form.bathrooms_min, form.bathrooms_max, BEDROOM_LIMIT);
   if (bathrooms) criteria.bathrooms = bathrooms;
+
+  // A window, not a day. The form turns a chosen move-in date into ten days either
+  // side before it gets here, because an advertised availability date is a
+  // landlord's intention rather than a fact — a filter demanding the exact day
+  // would reject the same flat for being ready a week early.
+  const after = day(form.available_after);
+  const before = day(form.available_before);
+  if (after || before) {
+    criteria.available_from = { ...(after && { after }), ...(before && { before }) };
+  }
 
   const types = subset(form.property_types, PROPERTY_TYPES);
   if (types.length) criteria.property_types = types;

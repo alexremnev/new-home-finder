@@ -140,13 +140,13 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
     }
   }
 
-  if (command.kind === "update") return beginUpdate(chatId);
+  if (command.kind === "update") return sendToForm(chatId, true);
 
   const account = await accountForChat(chatId);
   if (!account) {
     // No account and no wizard: the useful answer is to start one, not to explain
     // that they have nothing.
-    return beginWizard(chatId, null, "districts", {});
+    return sendToForm(chatId, false);
   }
 
   switch (command.kind) {
@@ -249,8 +249,8 @@ async function start(chatId: string, token: string | null): Promise<void> {
     // of the wizard existing. Someone who already has a filter is asked before it
     // is replaced — /start from a subscriber is usually curiosity, not intent.
     const account = await accountForChat(chatId);
-    if (account?.subscription_id != null) return beginUpdate(chatId);
-    return beginWizard(chatId, account?.user_id ?? null, "districts", {});
+    if (account?.subscription_id != null) return sendToForm(chatId, true);
+    return sendToForm(chatId, false);
   }
 
   const claimed = await transaction(async (run) => {
@@ -321,6 +321,38 @@ async function wizardContext(userId: number | null): Promise<WizardContext> {
 }
 
 /** Start, or restart, a wizard and show its first step. */
+/**
+ * Send somebody to the form instead of asking here.
+ *
+ * The wizard that used to live at these two commands is still in the file and
+ * still reachable by an in-flight session, but nothing new is routed to it. It is
+ * left in place on purpose: the form is the replacement, and deleting the working
+ * path before the replacement has been used by a real person is how you end up
+ * with neither.
+ *
+ * Once the form has taken a few real sign-ups, `beginWizard`, `beginUpdate`,
+ * `showStep`, the typed-answer handlers and `lib/wizard.ts` come out in one commit,
+ * along with `wizard_sessions`.
+ */
+async function sendToForm(chatId: string, existing: boolean): Promise<void> {
+  const where = `${siteUrl()}/`;
+  await sendMessage(
+    chatId,
+    [
+      existing
+        ? "Set your search up again here:"
+        : "Set your search up here — it takes a minute:",
+      "",
+      where,
+      "",
+      existing
+        ? "Saving replaces your current filter. Until you do, it keeps working as it is."
+        : "Then press Connect Telegram at the end and the alerts start.",
+    ].join("\n"),
+    [[{ text: existing ? "Change my search" : "Set up my search", url: where }]],
+  );
+}
+
 async function beginWizard(
   chatId: string,
   userId: number | null,
