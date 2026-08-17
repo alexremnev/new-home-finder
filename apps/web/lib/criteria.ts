@@ -219,16 +219,29 @@ function boundedRange(
 
 /** The filter in words, for /show. Says "any" rather than leaving a line out. */
 export function describeCriteria(criteria: Criteria): string {
-  const lines = [
-    `Districts: ${(criteria.areas?.postcode_districts ?? []).join(", ") || "any"}`,
-    `Rent: ${rangeText(criteria.price_pcm, "£")}`,
-    `Bedrooms: ${rangeText(criteria.bedrooms, "")}`,
-    // Only when asked for. Most people do not care, and "Bathrooms: any" on every
-    // confirmation is a line that never carries information.
-    ...(criteria.bathrooms ? [`Bathrooms: ${rangeText(criteria.bathrooms, "")}`] : []),
-    `Type: ${(criteria.property_types ?? []).join(", ") || "any"}`,
-    `Furnishing: ${(criteria.furnished ?? []).join(", ") || "any"}`,
-  ];
+  // Only what was actually chosen. A line saying "any" is a line that carries no
+  // information, and a list of them buries the two or three that do — which is the
+  // opposite of what somebody sending /current wants, since they are checking what
+  // they asked for and not reading a schema.
+  //
+  // Districts are the exception and are always shown: a filter with no district is
+  // not a filter, so if that line is ever missing something is wrong and seeing
+  // nothing there is the fastest way to find out.
+  const districts = criteria.areas?.postcode_districts ?? [];
+  const lines = [`Districts: ${districts.join(", ") || "none"}`];
+  if (criteria.price_pcm) lines.push(`Rent: ${rangeText(criteria.price_pcm, "£")}`);
+  if (criteria.bedrooms) lines.push(`Bedrooms: ${rangeText(criteria.bedrooms, "")}`);
+  if (criteria.bathrooms) lines.push(`Bathrooms: ${rangeText(criteria.bathrooms, "")}`);
+  if (criteria.property_types?.length) {
+    lines.push(`Type: ${criteria.property_types.join(", ")}`);
+  }
+  if (criteria.furnished?.length) {
+    lines.push(`Furnishing: ${criteria.furnished.join(", ")}`);
+  }
+  if (criteria.available_from) {
+    const { after, before } = criteria.available_from;
+    lines.push(`Available: ${[after && `from ${after}`, before && `to ${before}`].filter(Boolean).join(" ")}`);
+  }
   const musts = [
     criteria.pets_allowed && "pets allowed",
     criteria.bills_included && "bills included",

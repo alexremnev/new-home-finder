@@ -177,16 +177,16 @@ function onOff(text: string): boolean | null {
   return null;
 }
 
+// What /current and the help fallback show. Four commands, and the shorthand is
+// deliberately not among them.
+//
+// `/price 1500-2200`, `/areas SE16, SE8` and the rest still work — they are three
+// lines of parser and somebody may have them in their chat history — but listing
+// them made this the longest message the bot sends, and it advertised a second way
+// of doing what the form now does properly. A person checking their filter wants to
+// see the filter, not a syntax reference.
 export const COMMAND_HELP = [
   "/current — the filter I'm using for you",
-  "/update — set it up again, step by step",
-  "",
-  "Quick changes, if you'd rather not go through the steps:",
-  "/price 1500-2200 · /price 2000 · /price any",
-  "/beds 1-2",
-  "/areas SE16, SE8",
-  "/pets on · /bills on · /direct on",
-  "/edit — change everything on one screen",
   "",
   "/pay — 2 weeks of alerts",
   "/stop — delete my filter and stop the messages",

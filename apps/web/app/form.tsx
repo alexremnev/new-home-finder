@@ -23,6 +23,8 @@
 
 import { useState } from "react";
 
+import { neighbourhoodNames } from "../lib/neighbourhoods";
+
 type Props = {
   districts: string[];
   maxDistricts: number;
@@ -63,26 +65,14 @@ export function SubscribeForm({
   const [link, setLink] = useState<string | null>(null);
 
   // Two lists, never one. A single list mixing "Canary Wharf · E14" with bare
-  // "SE8" asks the person to hold two different ideas of what a place is at the
-  // same time, and the mixed entries look like an oversight rather than a choice.
-  const { named, codes: allCodes } = (() => {
-    const byCode = new Map<string, string>();
-    for (const [name, code] of Object.entries(names)) {
-      const upper = code.toUpperCase();
-      if (!districts.includes(upper)) continue;
-      // First name wins per district: the query ordered them by the most recent
-      // listing, and a second name for the same code is the same place.
-      if (!byCode.has(upper)) {
-        byCode.set(upper, name.replace(/\b[a-z]/g, (c) => c.toUpperCase()));
-      }
-    }
-    return {
-      named: [...byCode]
-        .map(([code, name]) => ({ code, name }))
-        .sort((a, b) => a.name.localeCompare(b.name)),
-      codes: [...districts].sort(),
-    };
-  })();
+  // "SE8" asks the person to hold two different ideas of what a place is at the same
+  // time, and the mixed entries look like an oversight rather than a choice.
+  //
+  // Names come from the gazetteer with observed names laid over it, so a place is
+  // offered before the feed has ever mentioned it — otherwise the list grows as
+  // listings arrive and looks like the service covers less than it does.
+  const named = neighbourhoodNames(names, districts);
+  const allCodes = [...districts].sort();
 
   const options =
     mode === "name"
