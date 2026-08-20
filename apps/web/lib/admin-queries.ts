@@ -197,7 +197,9 @@ export type Problem = {
 export async function problems(): Promise<Problem[]> {
   return query<Problem>(
     `SELECT 'run failed' AS kind,
-            job || coalesce(' · ' || source_key, '') AS detail,
+            -- job_runs records the job and the error, and no source: a run is a
+            -- job, and which source it touched is a property of its stages.
+            job || coalesce(' · ' || left(error, 90), '') AS detail,
             count(*)::int AS count,
             max(started_at)::text AS last_at
        FROM job_runs
@@ -205,13 +207,17 @@ export async function problems(): Promise<Problem[]> {
       GROUP BY 1, 2
 
      UNION ALL
-     SELECT 'error logged', left(message, 120), count(*)::int, max(created_at)::text
+     -- The column here is ts, not created_at. Every other table uses created_at,
+     -- which is exactly why this one is easy to get wrong.
+     SELECT 'error logged',
+            coalesce(stage || ': ', '') || left(message, 110),
+            count(*)::int, max(ts)::text
        FROM job_events
-      WHERE level IN ('warn', 'error') AND created_at > now() - interval '48 hours'
+      WHERE level IN ('warn', 'error') AND ts > now() - interval '48 hours'
       GROUP BY 1, 2
 
      UNION ALL
-     SELECT 'unparseable', coalesce(left(parse_error, 120), 'no reason recorded'),
+     SELECT 'unparseable', coalesce(left(parse_error, 110), 'no reason recorded'),
             count(*)::int, max(received_at)::text
        FROM source_messages
       WHERE status = 'unparseable' AND received_at > now() - interval '7 days'
@@ -219,10 +225,15 @@ export async function problems(): Promise<Problem[]> {
 
      UNION ALL
      -- Silence. Not an error anywhere, and the most likely thing to be wrong.
+     --
+     -- Measured on stored_at rather than received_at: the first is when we
+     -- stored something, the second is when the feed posted it. A broken reader
+     -- leaves stored_at old while the feed carries on, and that is the failure
+     -- worth catching — the one nothing else reports.
      SELECT 'nothing read', 'no message stored in the last 6 hours', 1,
-            max(received_at)::text
+            max(stored_at)::text
        FROM source_messages
-      HAVING max(received_at) < now() - interval '6 hours'
+      HAVING max(stored_at) < now() - interval '6 hours'
 
      UNION ALL
      SELECT 'delivery stalled', 'queued and waiting', count(*)::int, min(created_at)::text
