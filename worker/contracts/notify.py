@@ -59,6 +59,10 @@ class ListingView(BaseModel):
     address: str | None = None
     size_text: str | None = None      # "509 sq ft (47.29 sq m)", kept verbatim
     deposit_pcm: float | None = None
+    # The percentage of matches this person's plan actually delivers, or None when
+    # it delivers all of them. Carried on the view rather than looked up by the
+    # renderer because the renderer has no database and should not grow one.
+    share: int | None = None
 
 
 class Alert(BaseModel):

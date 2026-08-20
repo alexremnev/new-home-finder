@@ -337,10 +337,23 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
         conn.execute(
             f"""
             SELECT n.id, n.user_id, n.channel, n.kind, n.attempts,
-                   uc.address, src.display_name AS source_display, {columns}
+                   uc.address, src.display_name AS source_display, {columns},
+                   -- The same CASE as `active_subscriptions`, for the same reason:
+                   -- the live plan's share while it is live, the lapsed tier's once
+                   -- it is not. Selected here so the renderer can name the share in
+                   -- the message without a second query per notification.
+                   CASE
+                       WHEN u.plan_until IS NULL OR u.plan_until > now()
+                           THEN p.delivery_share
+                       ELSE coalesce(lapsed.delivery_share, 0)
+                   END AS delivery_share
               FROM notifications n
               JOIN listings l  ON l.id = n.listing_id
               JOIN sources src ON src.key = l.source_key
+              JOIN users u     ON u.id = n.user_id
+              JOIN plans p     ON p.key = u.plan
+              LEFT JOIN plan_settings ps ON ps.id
+              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
               LEFT JOIN user_channels uc
                      ON uc.user_id = n.user_id AND uc.channel = n.channel
              WHERE n.id = ANY(%s)

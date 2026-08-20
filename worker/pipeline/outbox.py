@@ -281,6 +281,11 @@ def listing_view(row: Row) -> ListingView:
         area=(row.get("raw") or {}).get("location"),
         address=(row.get("raw") or {}).get("address"),
         size_text=(row.get("raw") or {}).get("size"),
+        # None when the plan delivers everything, so the renderer can tell "all of
+        # them" from "all of them, as far as you know".
+        share=(lambda v: int(v) if v is not None and int(v) < 100 else None)(
+            row.get("delivery_share")
+        ),
     )
 
 

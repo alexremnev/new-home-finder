@@ -1,32 +1,39 @@
-/* The look, borrowed from Apple's own pages.
+/* The look, in the spirit of the UK property portals — Rightmove above all.
  *
- * Four things do most of the work there, and none of them is decoration:
+ * What those sites do, and why each of it is load-bearing rather than decorative:
  *
- *   1. One typeface at many weights. SF on Apple hardware, and the stack below
- *      lands on it without shipping a font — a webfont would be 40kB to look
- *      slightly less native than the system already does.
- *   2. Large, tight headlines. -0.02em and 600 weight at display sizes; the
- *      letter-spacing is what stops a big heading looking like big body text.
- *   3. Space instead of lines. Sections are separated by distance and by a very
- *      light background shift, hardly ever by a border. Borders are what make a
- *      page look like a form; whitespace is what makes it look considered.
- *   4. Exactly one accent, #0071e3, used only on things you can act on.
+ *   1. A deep near-navy for text and headers, never pure black. It reads as
+ *      considered where black reads as a default, and it lets the accent sit on it
+ *      without vibrating.
+ *   2. One loud accent, used only on the thing you are meant to press. Rightmove's
+ *      is a bright teal-green; everything else on their page is navy, white or grey.
+ *   3. White cards on a soft grey field. The card is what makes a form feel like a
+ *      short task rather than an endless page.
+ *   4. Generous, even vertical rhythm and 8px-ish radii everywhere.
+ *
+ * Said plainly: this is *in the spirit of*, not a copy. I cannot open their site
+ * from here, so the exact hexes are from memory of the brand rather than sampled,
+ * and the layout is ours. If a colour looks off against the real thing, it is one
+ * line in the block below.
  *
  * Element selectors rather than a class per node, because this markup is a form and
  * a form is already semantic. Styling what things *are* means a field added next
  * month arrives dressed without anybody remembering to dress it. */
 
 :root {
-  --ink: #1d1d1f;          /* Apple's near-black; true black is harsher on white */
-  --ink-soft: #6e6e73;
-  --line: #d2d2d7;
-  --bg: #fff;
-  --bg-soft: #f5f5f7;      /* the grey their section bands use */
-  --accent: #0071e3;
-  --accent-dim: #0077ed;
-  --bad: #b3261e;
-  --radius: 12px;
-  --radius-pill: 980px;    /* their button radius, which is effectively a pill */
+  --ink: #262637;          /* navy-plum: headings and body */
+  --ink-soft: #6a6a7c;
+  --line: #e4e4ea;
+  --line-strong: #cfcfda;
+  --bg: #f6f6f8;           /* the field the cards sit on */
+  --card: #fff;
+  --accent: #00a884;       /* the press-me colour */
+  --accent-dim: #008e70;
+  --accent-wash: #e6f7f2;
+  --bad: #c0392b;
+  --radius: 8px;
+  --radius-lg: 14px;
+  --shadow: 0 1px 2px rgb(38 38 55 / 6%), 0 8px 28px rgb(38 38 55 / 6%);
 }
 
 * { box-sizing: border-box; }
@@ -35,81 +42,83 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  padding: 4rem 1.5rem 6rem;
+  padding: 3rem 1.25rem 5rem;
   background: var(--bg);
   color: var(--ink);
-  font: 400 17px/1.47 -apple-system, BlinkMacSystemFont, "SF Pro Text",
-    "Helvetica Neue", Helvetica, Arial, sans-serif;
-  letter-spacing: -0.011em;
+  font: 400 16px/1.55 "Segoe UI", system-ui, -apple-system, Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-body > * {
-  max-width: 37.5rem;
-  margin-inline: auto;
+/* One box, centred once. Everything inside inherits its width, which is what
+   stops a wide screen pulling the pieces apart. */
+.shell {
+  width: 100%;
+  max-width: 40rem;
+  margin: 0 auto;
 }
 
 h1 {
   margin: 0 0 0.5rem;
-  font-size: 2.5rem;
-  font-weight: 600;
-  line-height: 1.08;
-  letter-spacing: -0.022em;
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.18;
+  letter-spacing: -0.015em;
 }
 
-h2 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.02em;
+.lede {
+  margin: 0 0 2rem;
+  color: var(--ink-soft);
+  font-size: 1.0625rem;
+  line-height: 1.5;
 }
 
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
+a { color: var(--accent-dim); }
 
-a:hover { text-decoration: underline; }
+/* ── the card ───────────────────────────────────────────────────────────── */
 
-/* ── the form ───────────────────────────────────────────────────────────── */
-
-/* No card and no border. A boxed form reads as paperwork; the page itself is the
-   surface, and the fields are held together by rhythm instead. */
 form, .panel {
-  background: none;
-  border: none;
-  padding: 0;
+  padding: 1.75rem 1.75rem 2rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
 }
 
+/* Each question is a band, separated by a rule that stops short of the card edge
+   so the card still reads as one object. */
 form > div,
-form > label {
+form > label,
+form > fieldset {
   display: block;
-  padding: 1.75rem 0;
+  padding: 1.5rem 0;
+  margin: 0;
+  border: none;
   border-bottom: 1px solid var(--line);
 }
 
-/* The last field before the button owns no rule — otherwise the page ends on a
-   line, which looks like something failed to load. */
+form > *:first-child { padding-top: 0; }
 form > div:last-of-type,
 form > label:last-of-type { border-bottom: none; }
 
 label > span:first-child,
 label[for],
-legend {
+legend,
+.field-label {
   display: block;
   margin-bottom: 0.6rem;
-  font-size: 1.0625rem;
+  padding: 0;
+  font-size: 1rem;
   font-weight: 600;
-  letter-spacing: -0.014em;
+  letter-spacing: -0.006em;
 }
 
 form p,
 .hint {
-  margin: 0.6rem 0 0;
+  margin: 0.5rem 0 0;
   color: var(--ink-soft);
   font-size: 0.8125rem;
-  line-height: 1.35;
-  letter-spacing: -0.005em;
+  line-height: 1.4;
 }
 
 /* ── controls ───────────────────────────────────────────────────────────── */
@@ -117,144 +126,149 @@ form p,
 input[type="text"],
 input[type="number"],
 input[type="date"],
-input[type="email"],
 select {
   appearance: none;
-  padding: 0.75rem 0.95rem;
-  border: 1px solid var(--line);
+  width: 100%;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  background: var(--bg);
+  background: var(--card);
   color: inherit;
   font: inherit;
-  transition: border-color 150ms ease, box-shadow 150ms ease;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
-select {
-  width: 100%;
-  cursor: pointer;
-  /* The chevron is drawn rather than left to the platform, because a native select
-     arrow is the one part of a form that looks different on every machine. */
-  background-image:
-    url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='none' stroke='%236e6e73' stroke-width='1.6' stroke-linecap='round' d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 1rem center;
-  padding-right: 2.6rem;
-}
-
-input[type="text"] { width: 100%; }
 input[type="number"] { width: 7.5rem; }
 input[type="date"] { width: 12rem; }
 
-/* Their focus treatment: a ring in the accent colour, and the border darkened
-   underneath so the field still reads as a field at high contrast. */
 input:focus-visible,
 select:focus-visible {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 4px rgb(0 113 227 / 20%);
+  box-shadow: 0 0 0 3px var(--accent-wash);
 }
 
-input::placeholder { color: #86868b; }
+input::placeholder { color: #9a9aa8; }
 
-input[type="checkbox"] {
+input[type="checkbox"],
+input[type="radio"] {
   width: 1.1rem;
   height: 1.1rem;
-  margin: 0 0.55rem 0 0;
+  margin: 0 0.6rem 0 0;
   accent-color: var(--accent);
-  vertical-align: -0.18rem;
+  flex: none;
 }
 
-/* Grouped choices sit on the grey band instead of inside a ruled box. */
-fieldset {
-  margin: 0;
-  padding: 1.1rem 1.25rem 1.2rem;
-  border: none;
-  border-radius: var(--radius);
-  background: var(--bg-soft);
-}
+/* Choices read as rows you can hit, which matters more on a phone than a tidy
+   inline list does on a desktop. */
+.choices { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
 
-fieldset legend {
-  padding: 0;
-  margin-bottom: 0.5rem;
-}
-
+.choices label,
 fieldset label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.9375rem;
+  font-weight: 400;
+  margin: 0;
+}
+
+/* ── the rent slider ────────────────────────────────────────────────────── */
+
+.slider { margin-top: 0.35rem; }
+
+.slider-value {
+  font-size: 1.125rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.slider-row {
   display: flex;
   align-items: center;
-  margin: 0.5rem 0;
-  font-size: 1rem;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.slider-row > span {
+  width: 2.6rem;
+  flex: none;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+input[type="range"] {
+  appearance: none;
+  flex: 1;
+  height: 1.5rem;
+  margin: 0;
+  background: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line-strong);
+}
+
+/* The thumb is deliberately large: this is the one control people drag, and a
+   16px target is a miss on a phone. */
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.4rem;
+  height: 1.4rem;
+  margin-top: -0.55rem;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 1.4rem;
+  height: 1.4rem;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
+}
+
+input[type="range"]:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px var(--accent-wash);
 }
 
 /* ── buttons ────────────────────────────────────────────────────────────── */
 
 button[type="submit"],
 .cta {
-  display: inline-block;
-  min-width: 8rem;
-  padding: 0.8rem 1.5rem;
+  display: block;
+  width: 100%;
+  margin-top: 1.75rem;
+  padding: 0.9rem 1.5rem;
   border: none;
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius);
   background: var(--accent);
   color: #fff;
   font: inherit;
   font-size: 1.0625rem;
-  font-weight: 400;
+  font-weight: 700;
   text-align: center;
   text-decoration: none;
   cursor: pointer;
-  transition: background 150ms ease;
+  transition: background 140ms ease;
 }
 
 button[type="submit"]:hover:not(:disabled),
-.cta:hover {
-  background: var(--accent-dim);
-  text-decoration: none;
-}
+.cta:hover { background: var(--accent-dim); text-decoration: none; }
 
 button[type="submit"]:disabled {
-  background: rgb(0 113 227 / 40%);
-  cursor: not-allowed;
-}
-
-/* Their secondary action is a link with a chevron, never an outlined button. */
-.disclosure {
-  display: inline-block;
-  margin: 1.75rem 0;
-  padding: 0;
-  border: none;
-  background: none;
-  color: var(--accent);
-  font: inherit;
-  font-size: 1.0625rem;
-  cursor: pointer;
-}
-
-.disclosure:hover { text-decoration: underline; }
-
-.more {
-  padding: 0.25rem 0 0;
-  margin-bottom: 1.5rem;
-  border: none;
-}
-
-.more > label,
-.more > div {
-  display: block;
-  padding: 1.5rem 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.more > *:last-child { border-bottom: none; }
-
-.soon {
-  display: inline-block;
-  min-width: 8rem;
-  padding: 0.8rem 1.5rem;
-  border-radius: var(--radius-pill);
-  background: var(--bg-soft);
-  color: #86868b;
-  font-size: 1.0625rem;
-  text-align: center;
+  background: #c2c2ce;
   cursor: not-allowed;
 }
 
@@ -265,83 +279,137 @@ button[type="submit"]:disabled {
 .chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.3rem;
-  padding: 0.42rem 0.85rem;
+  gap: 0.4rem;
+  padding: 0.4rem 0.85rem;
   margin: 0 0.5rem 0.5rem 0;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-pill);
-  background: var(--bg);
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
   font-size: 0.9375rem;
   cursor: pointer;
   user-select: none;
-  transition: background 150ms ease, border-color 150ms ease;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
-.chip:hover { background: var(--bg-soft); }
+.chip:hover { border-color: var(--accent); background: var(--accent-wash); }
 
 .chip.on {
-  border-color: transparent;
-  background: var(--bg-soft);
-  color: var(--ink);
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent-dim);
+  font-weight: 600;
 }
 
-.chip:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 4px rgb(0 113 227 / 20%);
+.chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-wash); }
+
+/* Four quick picks, offered above the field so somebody with no idea where to
+   start has one. */
+.quick { margin-bottom: 0.75rem; }
+
+.quick .chip { font-size: 0.875rem; }
+
+/* ── the done screen ────────────────────────────────────────────────────── */
+
+.done-tick {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  margin-bottom: 1rem;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  color: var(--accent-dim);
+  font-size: 1.4rem;
+}
+
+.vote {
+  margin-top: 1.5rem;
+  padding: 1.25rem 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+}
+
+.vote h2 {
+  margin: 0 0 0.3rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+
+.vote-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+
+.vote-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1.1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9375rem;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, transform 120ms ease;
+}
+
+.vote-button:hover { border-color: var(--accent); background: var(--accent-wash); }
+
+.vote-button:active { transform: scale(0.97); }
+
+.vote-button.voted {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent-dim);
+  font-weight: 600;
+}
+
+/* The heart fills rather than appearing, so the press has somewhere to land. */
+.vote-button .heart { font-size: 1.05rem; line-height: 1; }
+
+.vote-button.voted .heart { animation: pop 260ms ease; }
+
+@keyframes pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.35); }
+  100% { transform: scale(1); }
 }
 
 /* ── notices ────────────────────────────────────────────────────────────── */
 
 .note {
-  padding: 1rem 1.15rem;
-  margin: 0 0 2rem;
+  padding: 0.9rem 1.1rem;
+  margin: 0 0 1.5rem;
   border-radius: var(--radius);
-  background: var(--bg-soft);
+  background: var(--accent-wash);
   font-size: 0.9375rem;
 }
 
 .error,
 form p.error {
-  margin: 0.6rem 0 0;
+  margin: 0.5rem 0 0;
   color: var(--bad);
   font-size: 0.8125rem;
-  background: none;
-  padding: 0;
 }
 
 .footnote {
-  margin-top: 3rem;
+  margin-top: 2.5rem;
   color: var(--ink-soft);
   font-size: 0.75rem;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* ── narrow screens ─────────────────────────────────────────────────────── */
 
 @media (max-width: 34rem) {
-  body { padding: 2.5rem 1.25rem 4rem; }
-  h1 { font-size: 2rem; letter-spacing: -0.02em; }
-  /* Full width and stacked: two 7.5rem fields side by side on a phone leave
-     neither wide enough to read the number being typed into it. */
-  input[type="number"],
-  input[type="date"] { width: 100%; margin-bottom: 0.5rem; }
-  button[type="submit"],
-  .cta,
-  .soon { display: block; width: 100%; }
-}
-
-@media (prefers-color-scheme: dark) {
-  /* Their dark mode is a different palette, not an inversion: the background is a
-     near-black that is still warmer than the text is cold, and the accent gets
-     lighter because #0071e3 on black loses contrast. */
-  :root {
-    --ink: #f5f5f7;
-    --ink-soft: #a1a1a6;
-    --line: #424245;
-    --bg: #000;
-    --bg-soft: #1d1d1f;
-    --accent: #2997ff;
-    --accent-dim: #47a9ff;
-    --bad: #ff6961;
-  }
+  body { padding: 1.75rem 1rem 4rem; }
+  h1 { font-size: 1.6rem; }
+  form, .panel { padding: 1.25rem 1.15rem 1.5rem; }
+  input[type="number"], input[type="date"] { width: 100%; }
+  .choices { gap: 0.5rem 1rem; }
 }

@@ -27,6 +27,10 @@ and without a bot token.
 
 from __future__ import annotations
 
+import re
+from html import escape
+from urllib.parse import quote
+
 import json
 import os
 import urllib.error
@@ -80,98 +84,124 @@ def money(amount: int) -> str:
     return f"£{amount:,}".replace(",", ",")
 
 
+def long_date(value: date) -> str:
+    """"1 October 2026". Spelled out because an alert is read once, at a glance,
+    and "01/10/26" is a puzzle in a country that writes dates both ways."""
+    return f"{value.day} {value:%B %Y}"
+
+
 def short_date(value: date) -> str:
     return f"{value.day} {MONTHS[value.month - 1]}"
 
 
-def render_listing(view: ListingView) -> str:
-    """Render one listing.
+def maps_link(view: ListingView) -> str | None:
+    """A Google Maps search for where this flat is.
 
-    A line whose values are all unknown is omitted rather than filled with
-    "unknown": the message is shorter and it does not claim to know things it does
-    not.
+    The address is folded into the query when there is one, because a UK postcode
+    alone pins to a street but an address pins to the door. What is *shown* stays
+    the postcode: it is short, and a whole address as link text reads as a wall.
     """
-    lines: list[str] = []
+    if not view.postcode:
+        return None
+    where = f"{view.address}, {view.postcode}" if view.address else view.postcode
+    return "https://www.google.com/maps/search/?api=1&query=" + quote(where)
 
-    # A studio and a room already name the property type, so repeating it would
-    # read as "studio · studio".
-    if view.bedrooms == 0:
-        rooms, type_is_implied = LABELS["studio"], True
-    elif view.property_type == "room":
-        rooms, type_is_implied = LABELS["room"], True
-    else:
-        rooms = plural(view.bedrooms, LABELS["bedroom"])
-        type_is_implied = False
-    head = [f"{money(view.price_pcm)}{LABELS['per_month']}", rooms]
-    if view.property_type and not type_is_implied:
-        head.append(view.property_type)
-    lines.append("🏠 " + " · ".join(head))
 
-    # Bathrooms belong beside the rooms, not in the flags: it is a count, and it
-    # is the second thing people look for after the bedroom count.
-    if view.bathrooms:
-        lines[-1] += " · " + plural(view.bathrooms, LABELS["bathroom"])
+def size_of(text: str | None) -> str | None:
+    """The source's own size string, with the metric half made readable.
 
-    # The neighbourhood name, then the full postcode, then the zone. The full code
-    # rather than the outward one: "E11" is a neighbourhood, "E11 4EG" is a street,
-    # and the street is what somebody deciding whether to view it wants. Falls back
-    # to the district when the source did not state the rest.
-    where = [
-        part for part in (
-            view.area,
-            view.postcode or view.district,
-            f"{LABELS['zone']} {view.zone}" if view.zone else None,
-        ) if part
-    ]
+    "47.29 sq m" becomes "47 m²". The unit is a symbol because that is how it is
+    written everywhere else, and the decimals go because two of them on a floor area
+    is a precision the measurement does not have.
+
+    Kept as a transformation of the source's text rather than a recalculation: the
+    square footage is theirs, and converting it ourselves would invent a number.
+    """
+    if not text:
+        return None
+    return re.sub(
+        r"(\d+(?:\.\d+)?)\s*sq\.?\s*m\b",
+        lambda m: f"{round(float(m.group(1)))} m²",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+
+def render_listing(view: ListingView) -> str:
+    """Render one listing, as HTML.
+
+    ── why HTML and not plain text ──────────────────────────────────────────
+    This used to be plain text with no parse mode, because a listing line is full of
+    MarkdownV2 syntax characters and one missed escape is a rejected message rather
+    than an ugly one. That reasoning was sound and it was about *MarkdownV2*: HTML
+    needs three characters escaped, not eighteen, and `escape` below does it to
+    every interpolated value.
+    
+    What HTML buys is the two things the message needed and could not have: a price
+    that stands out at a glance, and a postcode that opens a map. Both are things
+    somebody scanning alerts on a phone actually uses.
+
+    ── the order of the lines ───────────────────────────────────────────────
+    Where, then what it costs, then the rooms. Location first because it is the
+    field that disqualifies a listing fastest — no amount of good price fixes the
+    wrong end of London — and price second because it is the next one that does.
+
+    A line whose value is unknown is omitted rather than filled in. Nothing here
+    says "not stated": that was tried, and on a feed that never states pets or bills
+    it put three words of nothing on every message.
+    """
+    lines = ["🏠 <b>New listing spotted!</b>", ""]
+
+    where = ", ".join(part for part in (view.area, view.address) if part)
     if where:
-        lines.append("📍 " + " · ".join(where))
-    if view.address:
-        lines.append("   " + view.address)
-
-    when: list[str] = []
-    if view.available_from is not None:
-        when.append(f"{LABELS['available']} {short_date(view.available_from)}")
-    if view.min_tenancy_months:
-        term = plural(view.min_tenancy_months, LABELS["month"])
-        when.append(f"{LABELS['min_term']} {term}")
-    if when:
-        lines.append("📅 " + " · ".join(when))
-
-    money_lines: list[str] = []
-    if view.deposit_pcm:
-        money_lines.append(f"{LABELS['deposit']} {money(int(view.deposit_pcm))}")
-    if view.size_text:
-        money_lines.append(f"{LABELS['size']} {view.size_text}")
-    if money_lines:
-        lines.append("📐 " + " · ".join(money_lines))
-
-    # Only what the listing actually says. Naming the gaps was tried and removed:
-    # this feed never states pets or bills, so "Pets not stated · Bills not stated"
-    # appeared on every single alert — three words of nothing on every line, which
-    # trains people to skip the line that does carry a fact.
-    #
-    # The matcher still lets unknown values through, which is the reason a listing
-    # can arrive without answering a criterion. Absence of the line is how that
-    # reads now: what is here is stated, what is missing was not.
-    flags: list[str] = []
-    if view.furnished and view.furnished != "unknown":
-        flags.append("🛋 " + view.furnished.capitalize())
-    if view.pets_allowed is not None:
-        flags.append(LABELS["pets_yes"] if view.pets_allowed else LABELS["pets_no"])
-    if view.bills_included is not None:
-        flags.append(LABELS["bills_yes"] if view.bills_included else LABELS["bills_no"])
-    if flags:
-        lines.append("   ".join(flags))
-
-    lines.append("🔗 " + view.url)
-
-    origin = view.source_display
-    if view.is_landlord_direct:
-        origin += " · " + LABELS["landlord_direct"]
-    lines.append("— " + origin)
+        lines.append("📍 " + escape(where))
+    link = maps_link(view)
+    if view.postcode and link:
+        lines.append(f'📮 <a href="{escape(link)}">{escape(view.postcode)}</a>')
+    elif view.district:
+        lines.append("📮 " + escape(view.district))
 
     lines.append("")
-    lines.append(LABELS["unsubscribe"])
+    lines.append(f"💷 <b>{money(view.price_pcm)}/month</b>")
+
+    # A studio names itself; "0 Bedrooms" is arithmetic, not a description.
+    if view.bedrooms == 0:
+        lines.append("🛏️ Studio")
+    else:
+        lines.append(f"🛏️ {plural(view.bedrooms, 'Bedroom')}")
+    if view.bathrooms:
+        lines.append(f"🛁 {plural(view.bathrooms, 'Bathroom')}")
+
+    size = size_of(view.size_text)
+    if size:
+        lines.append("📐 " + escape(size))
+    if view.available_from is not None:
+        lines.append("📅 Available from " + long_date(view.available_from))
+
+    # Only when the listing says yes. `False` is not shown either: "pets not
+    # allowed" is the common case and printing it on most messages would bury the
+    # line on the few where it is good news.
+    if view.pets_allowed:
+        lines.append("🐾 Pets allowed")
+    if view.furnished and view.furnished != "unknown":
+        lines.append("🛋 " + escape(view.furnished.capitalize()))
+
+    # Bare, on its own line, and last of the facts: Telegram takes the preview
+    # image from the first link it finds, and this is the only link that has one.
+    lines.append("")
+    lines.append(escape(view.url))
+
+    # The share, named. Without this line a plan that delivers a fraction of the
+    # matches is withholding them silently, which is the one thing this service
+    # exists not to do.
+    if view.share is not None and view.share < 100:
+        lines.append("")
+        lines.append(
+            f"💎 You're currently seeing only {view.share}% of new listings. "
+            "Upgrade to Premium and get access to every new property the moment it "
+            "hits the market."
+        )
+
     return "\n".join(lines)
 
 
@@ -234,6 +264,11 @@ class TelegramNotifier:
         payload = {
             "chat_id": to.address,
             "text": render(alert),
+            # HTML rather than MarkdownV2: three characters to escape instead of
+            # eighteen, and `escape` is applied to every value the renderer
+            # interpolates. The listing renderer needs it for the bold price and
+            # the postcode's map link.
+            "parse_mode": "HTML",
             # The listing's own photograph, served by the portal from the link. See
             # the module docstring for why this is not a reproduction.
             "disable_web_page_preview": alert.kind != "listing",

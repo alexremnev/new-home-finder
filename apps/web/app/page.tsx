@@ -22,42 +22,39 @@ export default async function Page() {
   const names = await districtNames().catch(() => ({}));
 
   return (
-    <main>
-      <h1 style={{ fontSize: "1.6rem", marginBottom: "0.25rem" }}>London Rent Alerts</h1>
-      <p style={{ color: "#555", marginTop: 0 }}>
-        New rental listings in Telegram, minutes after they appear. Only what comes on the
-        market from the moment you subscribe — never a backlog.
+    <>
+      {/* The heading is the invitation and the lede is the whole pitch. What used to
+          sit here — the service name, a sentence about Telegram, and a box
+          describing the trial's district allowance — was three blocks of
+          explanation in front of somebody who had already decided to try it. The
+          plan's limit is not hidden: it is stated on the field it applies to, where
+          it is an answer rather than a warning. */}
+      <h1>Let&apos;s Find Your Perfect Home!</h1>
+      <p className="lede">
+        👋 Welcome to London Home Finder. Tell us a little about what you&apos;re
+        looking for, and we&apos;ll match you with the right properties.
       </p>
 
       {codes.length === 0 ? (
-        <p style={{ background: "#fff4f4", padding: "0.75rem", borderRadius: 6 }}>
-          No districts are being covered right now, so there is nothing to subscribe to yet.
+        <p className="panel">
+          No districts are being covered right now, so there is nothing to subscribe
+          to yet.
         </p>
       ) : (
-        <>
-          {plan && (
-            <p style={{ background: "#f5fbf8", padding: "0.7rem", borderRadius: 6 }}>
-              <strong>{plan.display_name}</strong>: {plan.max_districts} district
-              {plan.max_districts === 1 ? "" : "s"}
-              {plan.duration_days ? `, ${plan.duration_days} days` : ""}. Every matching
-              listing is sent — <a href="/upgrade">more districts</a>.
-            </p>
-          )}
-          <SubscribeForm
-            districts={codes}
-            maxDistricts={plan?.max_districts ?? 1}
-            propertyTypes={[...PROPERTY_TYPES]}
-            furnished={[...FURNISHED]}
-            names={names}
-          />
-        </>
+        <SubscribeForm
+          districts={codes}
+          maxDistricts={plan?.max_districts ?? 1}
+          propertyTypes={[...PROPERTY_TYPES]}
+          furnished={[...FURNISHED]}
+          names={names}
+        />
       )}
 
-      <p style={{ color: "#777", fontSize: "0.85rem", marginTop: "2rem" }}>
+      <p className="footnote">
         Sending <em>/stop</em> to the bot deletes your filter and stops the messages
-        immediately. We store the criteria you choose and your Telegram chat id, nothing
-        else.
+        immediately. We store the criteria you choose and your Telegram chat id,
+        nothing else.
       </p>
-    </main>
+    </>
   );
 }

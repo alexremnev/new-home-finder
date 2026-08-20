@@ -14,7 +14,11 @@ export default function Layout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        {children}
+        {/* One container rather than letting each top-level child centre itself.
+            That was the layout drifting on wide screens: `body > *` gave the
+            heading, the paragraph and the form three independent centred boxes,
+            and anything that was not a direct child fell outside all of them. */}
+        <main className="shell">{children}</main>
       </body>
     </html>
   );
