@@ -218,6 +218,27 @@ async def collect(
                     "run mirror.py login again"
                 )
 
+            # A bot session passes the check above — `is_user_authorized` means "this
+            # session is logged in", not "logged in as a person". But Telegram forbids
+            # bots from reading history at all, so the run would fail thirty frames
+            # deep inside iter_messages with "API access for bot users is restricted",
+            # which says nothing about the cause.
+            #
+            # It is an easy mistake to make and nothing else catches it: Telethon's
+            # login prompt reads "phone (or bot token)", and pasting the token of the
+            # bot you just created is the obvious thing to do while setting a bot up.
+            me = await client.get_me()
+            if getattr(me, "bot", False):
+                raise RuntimeError(
+                    f"the session for reader {reader!r} is a BOT session, and Telegram "
+                    "does not let bots read history. TG_SESSION has to come from "
+                    "logging in as a person: run `mirror.py login` and enter your "
+                    "phone number at the prompt, not a bot token. The bot token "
+                    "belongs in TELEGRAM_TOKEN, which is a different thing — it sends "
+                    "alerts, it does not read the feed."
+                )
+            stage.set("account", getattr(me, "username", None) or getattr(me, "id", None))
+
             for chat in watched():
                 try:
                     entity = await client.get_entity(chat)
