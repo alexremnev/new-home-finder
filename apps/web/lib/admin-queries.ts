@@ -161,8 +161,12 @@ export type Subscriber = {
 
 export async function subscribers(): Promise<Subscriber[]> {
   return query<Subscriber>(
+    // Cast to text, like every other timestamp this module returns. Postgres hands
+    // a TIMESTAMPTZ to the driver as a JS Date, so a field typed `string` here is a
+    // Date at runtime and the first `.slice` on it throws — a mismatch TypeScript
+    // cannot see, because the type is an assertion about a value it never inspects.
     `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
-            u.plan_until, u.created_at AS joined,
+            u.plan_until::text, u.created_at::text AS joined,
             uc.channel, s.criteria,
             (SELECT count(*)::int FROM notifications n
               WHERE n.user_id = u.id AND n.status = 'sent')                 AS sent,

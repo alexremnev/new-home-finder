@@ -30,10 +30,16 @@ const SOURCES = ["apps/web/lib", "apps/web/app"];
 // ── the schema, from the migrations ────────────────────────────────────────
 
 const schema = new Map(); // table -> Set(columns)
+// Column names whose declared type is a date or a timestamp, anywhere in the
+// schema. Kept flat rather than per table: the check below only needs to know that
+// a word names a time, not which table it came from.
+const TEMPORAL = new Set();
+const TEMPORAL_TYPE = /\b(TIMESTAMPTZ|TIMESTAMP|DATE)\b/i;
 
-function addColumn(table, column) {
+function addColumn(table, column, type = "") {
   if (!schema.has(table)) schema.set(table, new Set());
   schema.get(table).add(column.toLowerCase());
+  if (TEMPORAL_TYPE.test(type)) TEMPORAL.add(column.toLowerCase());
 }
 
 for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) {
@@ -54,7 +60,7 @@ for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sor
       if (["CONSTRAINT", "PRIMARY", "UNIQUE", "FOREIGN", "CHECK", "EXCLUDE"].includes(first)) {
         continue;
       }
-      addColumn(table, column[1]);
+      addColumn(table, column[1], trimmed);
     }
   }
 
@@ -64,7 +70,8 @@ for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sor
   for (const statement of sql.matchAll(/ALTER TABLE (?:ONLY )?(\w+)([\s\S]*?);/gi)) {
     const [, table, body] = statement;
     for (const added of body.matchAll(/ADD COLUMN (?:IF NOT EXISTS )?(\w+)/gi)) {
-      addColumn(table, added[1]);
+      // The type follows the name on the same ADD COLUMN clause.
+      addColumn(table, added[1], added[0] + body.slice(added.index + added[0].length, added.index + added[0].length + 40));
     }
   }
 }
@@ -84,9 +91,16 @@ function queriesIn(path) {
   const text = readFileSync(path, "utf8");
   const found = [];
   for (const match of text.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gi)) {
+    // The row type the caller declared for this query, if it named one. It is what
+    // makes the timestamp check precise rather than noisy: a temporal column with no
+    // cast is only wrong when the caller has promised itself a string.
+    const preceding = text.slice(Math.max(0, match.index - 400), match.index);
+    const rowType = [...preceding.matchAll(/query<\s*\{?\s*([A-Za-z][\w]*)/g)].pop()?.[1];
     found.push({
       sql: match[1],
       line: text.slice(0, match.index).split("\n").length,
+      rowType,
+      text,
     });
   }
   return found;
@@ -126,7 +140,7 @@ let problems = 0;
 
 for (const dir of SOURCES) {
   for (const path of filesUnder(dir)) {
-    for (const { sql, line } of queriesIn(path)) {
+    for (const { sql, line, rowType, text } of queriesIn(path)) {
       // Strip comments and string literals: a word inside 'quotes' is a value.
       const whole = sql
         .replace(/--[^\n]*/g, " ")
@@ -176,6 +190,50 @@ for (const dir of SOURCES) {
         if (!table) continue;
         if (!schema.get(table)?.has(column.toLowerCase()) && !IMPLICIT.has(column.toLowerCase())) {
           console.log(`  ✗ ${path}:${line} — ${table} has no column "${column}"`);
+          problems += 1;
+        }
+      }
+
+      // ── a timestamp returned as a Date ────────────────────────────────────
+      //
+      // The driver hands a TIMESTAMPTZ to JavaScript as a Date, so a field the
+      // caller has typed `string` is a Date at runtime and the first `.slice` on it
+      // throws. TypeScript cannot see it: the row type is an assertion about a value
+      // it never inspects.
+      //
+      // The fix is always the same — cast in the query — so the rule is: a temporal
+      // column in a SELECT list must carry a cast or a formatting function.
+      const selectList = /\bSELECT\b([\s\S]*?)\bFROM\b/i.exec(bare)?.[1];
+      if (selectList) {
+        for (const use of selectList.matchAll(/\b([a-z_][a-z0-9_]*)\b/gi)) {
+          const word = use[1].toLowerCase();
+          if (!TEMPORAL.has(word) || !allowed.has(word)) continue;
+          // A window after the name, so `max(started_at)::text` counts: the cast sits
+          // past the closing paren.
+          const after = selectList.slice(use.index, use.index + 32);
+          const before = selectList.slice(Math.max(0, use.index - 24), use.index);
+          const cast = /::\s*(text|date|varchar)/i.test(after);
+          const formatted = /(to_char|extract|date_part|date_trunc|age)\s*\(/i.test(before);
+          // `::date AS day` — the cast is on the expression, and the name after AS is
+          // its alias, not a raw column. Reporting it was the tool being wrong.
+          const aliasOfCast = /::\s*\w+\s+AS\s*$/i.test(before);
+          if (cast || formatted || aliasOfCast) continue;
+
+          // What the caller says it will get. Declared `Date` means the Date is
+          // wanted — `plans.ts` reads `.getTime()` off it on purpose — and only a
+          // declared `string` is the mismatch that throws.
+          const declared = rowType
+            ? new RegExp(`type\\s+${rowType}\\s*=\\s*\\{[^}]*?\\b${word}\\??\\s*:\\s*([^;\\n]+)`, "s")
+                .exec(text)?.[1]
+            : undefined;
+          if (declared && !/\bstring\b/.test(declared)) continue;
+
+          console.log(
+            `  ! ${path}:${line} — "${word}" is a timestamp with no ::text, and ` +
+              (declared
+                ? `${rowType}.${word} is declared "${declared.trim()}" — it arrives as a Date`
+                : `no row type was found to check it against; confirm the caller expects a Date`),
+          );
           problems += 1;
         }
       }
