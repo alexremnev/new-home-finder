@@ -58,6 +58,11 @@ body {
   margin: 0 auto;
 }
 
+/* The console is a reading surface, not a task, and it lives inside the same
+   shell. Without this it renders at the form's width and every table row wraps.
+   `:has()` rather than a second layout: one wrapper stays one wrapper. */
+.shell:has(.admin) { max-width: 64rem; }
+
 h1 {
   margin: 0 0 0.5rem;
   font-size: 2rem;
@@ -412,4 +417,253 @@ form p.error {
   form, .panel { padding: 1.25rem 1.15rem 1.5rem; }
   input[type="number"], input[type="date"] { width: 100%; }
   .choices { gap: 0.5rem 1rem; }
+}
+
+/* ── the admin console ────────────────────────────────────────────────────────
+ *
+ * Wider than the form, because the form is a task and this is a reading surface:
+ * a table of filters at 40rem wraps every row.
+ *
+ * The chart tokens are the validated palette's chrome and ink, kept as custom
+ * properties so the light and dark values swap in one place — and so the chart
+ * bodies are written against roles rather than raw hex. Marks carry the series
+ * colour; text never does. */
+
+.admin {
+  --chart-surface: #fff;
+  --chart-grid: #e1e0d9;
+  --chart-axis: #c3c2b7;
+  --chart-muted: #898781;
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
+  --status-serious: #ec835a;
+  --status-critical: #d03b3b;
+  max-width: 62rem;
+  margin: 0 auto;
+}
+
+.admin-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.75rem;
+}
+
+.admin h1 { margin: 0; font-size: 1.6rem; }
+
+.admin h2 {
+  margin: 0 0 0.85rem;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+}
+
+.admin section {
+  padding: 1.35rem 1.5rem 1.5rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+/* ── stat tiles ───────────────────────────────────────────────────────────── */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1rem 1.1rem;
+  background: var(--card);
+}
+
+.stat-label { color: var(--ink-soft); font-size: 0.8125rem; }
+
+/* Proportional figures: these are standalone numbers, not a column that has to
+   align vertically. Tabular is reserved for the tables below. */
+.stat-value { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; }
+
+.stat-note { color: var(--chart-muted); font-size: 0.75rem; }
+
+/* ── the range control ────────────────────────────────────────────────────── */
+
+.range { display: flex; gap: 0.4rem; margin-bottom: 1.25rem; }
+
+.range a {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.range a:hover { border-color: var(--accent); text-decoration: none; }
+
+.range a.range-on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* ── charts ───────────────────────────────────────────────────────────────── */
+
+.chart { margin: 0 0 1.75rem; }
+
+.chart:last-child { margin-bottom: 0; }
+
+.chart figcaption {
+  margin-bottom: 0.6rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+.chart-empty { color: var(--chart-muted); font-size: 0.875rem; }
+
+/* Axis ticks align in a column, so these are the one place for tabular figures. */
+.chart-svg .tick {
+  fill: var(--chart-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-svg .cat-label { fill: var(--ink-soft); font-size: 12px; }
+
+.chart-svg .value-label,
+.chart-svg .end-label {
+  fill: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* On a filled mark, so it is white rather than ink — the one exception, and it is
+   still not the series colour. */
+.chart-svg .on-mark {
+  fill: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.1rem;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+}
+
+.legend li { display: inline-flex; align-items: center; gap: 0.4rem; }
+
+.swatch {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 2px;
+  flex: none;
+}
+
+/* ── tables ───────────────────────────────────────────────────────────────── */
+
+.grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.grid th {
+  padding: 0 0.6rem 0.5rem;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.grid td {
+  padding: 0.6rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.grid tr:last-child td { border-bottom: none; }
+
+.grid .num { text-align: right; font-variant-numeric: tabular-nums; }
+.grid .muted { color: var(--chart-muted); }
+.grid .wrap { max-width: 22rem; }
+
+.grid .criteria {
+  white-space: pre-line;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+/* ── status badges ────────────────────────────────────────────────────────── */
+/* Icon and word together, always. Two of these sit below 3:1 on white by design,
+   and the pairing is what stops colour carrying the meaning alone. */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.badge.good     { background: #e7f7e7; color: #076907; }
+.badge.warning  { background: #fef4dd; color: #7a5600; }
+.badge.serious  { background: #fdeee7; color: #8f3d18; }
+.badge.critical { background: #fbe9e9; color: #8f2323; }
+
+.ok-line { display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 0.9375rem; }
+
+/* ── row actions ──────────────────────────────────────────────────────────── */
+
+.inline-form { display: flex; gap: 0.3rem; align-items: center; }
+
+.inline-form input[type="number"] { width: 4rem; padding: 0.35rem 0.45rem; }
+.inline-form input[type="text"] { width: 6rem; padding: 0.35rem 0.45rem; }
+
+.ghost {
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ghost:hover { border-color: var(--accent); background: var(--accent-wash); }
+
+@media (max-width: 52rem) {
+  /* The tables are the reason: a filter description and six columns do not fit a
+     phone, and squeezing them makes both unreadable. Scrolling one axis is the
+     lesser evil. */
+  .admin section { overflow-x: auto; }
+  .grid { min-width: 44rem; }
+  .admin-head { flex-direction: column; }
 }

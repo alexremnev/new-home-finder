@@ -7,7 +7,10 @@
 // was ever looked at".
 
 import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
+import { headers } from "next/headers";
+
 import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
+import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +23,12 @@ export default async function Page() {
   // Empty on failure rather than fatal: without it the form still takes postcodes,
   // and a page that renders without name lookup beats a page that does not render.
   const names = await districtNames().catch(() => ({}));
+
+  // Counted here rather than by a script in the browser: a beacon is blocked for a
+  // good share of visitors, and the count matters most for exactly the people who
+  // block it. Awaited but never allowed to fail — see `recordVisit`.
+  const head = await headers();
+  await recordVisit(head.get("x-forwarded-for"), head.get("user-agent"));
 
   return (
     <>
