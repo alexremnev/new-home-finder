@@ -269,9 +269,29 @@ class TelegramNotifier:
             # interpolates. The listing renderer needs it for the bold price and
             # the postcode's map link.
             "parse_mode": "HTML",
-            # The listing's own photograph, served by the portal from the link. See
-            # the module docstring for why this is not a reproduction.
-            "disable_web_page_preview": alert.kind != "listing",
+            # Which link the preview comes from, named rather than left to Telegram.
+            #
+            # Telegram previews the FIRST link in a message, and the first link in a
+            # listing alert is the map on the postcode — so the photograph was a
+            # picture of a street map instead of the flat. Naming the property's url
+            # fixes that without reordering the message, which is the alternative and
+            # a worse one: the postcode belongs near the address, not at the bottom.
+            #
+            # `show_above_text` puts the photograph first, which is the order somebody
+            # scanning alerts reads in — picture, then price. `prefer_large_media`
+            # asks for the big rendering rather than the thumbnail.
+            "link_preview_options": (
+                {
+                    "url": alert.listing.url,
+                    "prefer_large_media": True,
+                    "show_above_text": True,
+                }
+                if alert.kind == "listing" and alert.listing is not None
+                # Off for everything else. A plan notice has no listing, and a
+                # preview of the site's home page under "your trial ends tomorrow"
+                # is noise.
+                else {"is_disabled": True}
+            ),
         }
         try:
             response = self.sender(API.format(token=self.token), payload)

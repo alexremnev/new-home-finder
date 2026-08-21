@@ -13,6 +13,7 @@ keeps two ticks from claiming the same schedule row.
 from __future__ import annotations
 
 import random
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -23,9 +24,55 @@ from psycopg.rows import dict_row
 Row = dict[str, Any]
 
 
+# What Supabase's direct database host looks like. Matched only to explain a
+# failure, never to rewrite a connection string: guessing at somebody's credentials
+# is not a repair.
+_DIRECT_HOST = re.compile(r"@db\.([a-z0-9]+)\.supabase\.co", re.IGNORECASE)
+
+
+def _explain(database_url: str, failure: Exception) -> str:
+    """Turn a resolver failure into the sentence that fixes it.
+
+    `getaddrinfo failed` on `db.<ref>.supabase.co` is not a network problem and not
+    a typo. That host publishes an IPv6 address and no IPv4 one, so it resolves on a
+    connection with working IPv6 and fails outright on one without — which is why it
+    can work for weeks and then stop when a router reboots or an ISP changes
+    something. Nothing in this project changed on the day it breaks.
+
+    The fix is the pooler host, and specifically the SESSION pooler on port 5432,
+    not the transaction pooler on 6543. `advisory_lock` in this module takes a
+    session-scoped lock with `pg_try_advisory_lock`; through a transaction pooler
+    that lock is taken on whichever backend served the statement and released at a
+    moment nobody controls, so the guard against two concurrent runs silently stops
+    guarding. A lock that reports success and does nothing is worse than no lock.
+    """
+    match = _DIRECT_HOST.search(database_url)
+    if not match:
+        return str(failure)
+    return (
+        f"cannot resolve Supabase's direct host: {failure}\n\n"
+        "That host is IPv6-only, so it resolves only where IPv6 works — which is "
+        "why this can break with nothing changed on our side.\n\n"
+        "Use the SESSION pooler instead. In Supabase: Project Settings → Database → "
+        "Connection string → Session pooler. It looks like\n"
+        f"  postgresql://postgres.{match.group(1)}:<password>"
+        "@aws-0-<region>.pooler.supabase.com:5432/postgres\n\n"
+        "Session pooler (5432), not transaction pooler (6543): this worker takes a "
+        "session-scoped advisory lock to stop two runs overlapping, and a "
+        "transaction pooler cannot hold one — the lock would report success and "
+        "guard nothing."
+    )
+
+
 @contextmanager
 def connect(database_url: str, *, autocommit: bool = True) -> Iterator[psycopg.Connection[Row]]:
-    with psycopg.connect(database_url, autocommit=autocommit, row_factory=dict_row) as conn:
+    try:
+        connection = psycopg.connect(database_url, autocommit=autocommit, row_factory=dict_row)
+    except psycopg.OperationalError as failure:
+        # Re-raised with an explanation rather than logged and swallowed: the run has
+        # to fail, and the traceback it fails with should say what to do.
+        raise psycopg.OperationalError(_explain(database_url, failure)) from failure
+    with connection as conn:
         yield conn
 
 
