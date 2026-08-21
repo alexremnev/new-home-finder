@@ -186,14 +186,11 @@ def render_listing(view: ListingView) -> str:
     if view.furnished and view.furnished != "unknown":
         lines.append("🛋 " + escape(view.furnished.capitalize()))
 
-    # Bare, on its own line, and last of the facts: Telegram takes the preview
-    # image from the first link it finds, and this is the only link that has one.
-    lines.append("")
-    lines.append(escape(view.url))
-
-    # The share, named. Without this line a plan that delivers a fraction of the
-    # matches is withholding them silently, which is the one thing this service
-    # exists not to do.
+    # The share, named, and placed BEFORE the link. Without the line a plan that
+    # delivers a fraction of the matches is withholding them silently, which is the
+    # one thing this service exists not to do — and after the link it would sit
+    # between the link and the photograph the link produces, splitting the one part
+    # of the message that belongs together.
     if view.share is not None and view.share < 100:
         lines.append("")
         lines.append(
@@ -201,6 +198,13 @@ def render_listing(view: ListingView) -> str:
             "Upgrade to Premium and get access to every new property the moment it "
             "hits the market."
         )
+
+    # Last, bare, on its own line — and the photograph Telegram renders from it
+    # lands directly underneath. Which link the preview uses is stated explicitly in
+    # the payload rather than left to position, so this order is a choice about
+    # reading and not a mechanism.
+    lines.append("")
+    lines.append(escape(view.url))
 
     return "\n".join(lines)
 
@@ -277,14 +281,18 @@ class TelegramNotifier:
             # fixes that without reordering the message, which is the alternative and
             # a worse one: the postcode belongs near the address, not at the bottom.
             #
-            # `show_above_text` puts the photograph first, which is the order somebody
-            # scanning alerts reads in — picture, then price. `prefer_large_media`
-            # asks for the big rendering rather than the thumbnail.
+            # The preview sits BELOW the text, which is Telegram's default and the
+            # reason `show_above_text` is absent rather than set to false. Facts
+            # first, then the link, then the picture: the numbers are what decide
+            # whether the photograph is worth looking at, and a photograph on top
+            # pushes them off a phone screen.
+            #
+            # `prefer_large_media` asks for the big rendering rather than the
+            # thumbnail — small is worse than none for judging a flat.
             "link_preview_options": (
                 {
                     "url": alert.listing.url,
                     "prefer_large_media": True,
-                    "show_above_text": True,
                 }
                 if alert.kind == "listing" and alert.listing is not None
                 # Off for everything else. A plan notice has no listing, and a
