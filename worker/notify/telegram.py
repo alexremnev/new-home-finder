@@ -97,14 +97,15 @@ def short_date(value: date) -> str:
 def maps_link(view: ListingView) -> str | None:
     """A Google Maps search for where this flat is.
 
-    The address is folded into the query when there is one, because a UK postcode
-    alone pins to a street but an address pins to the door. What is *shown* stays
-    the postcode: it is short, and a whole address as link text reads as a wall.
+    The postcode alone, not the address with it. A UK postcode covers a handful of
+    addresses, which is close enough to walk from — and it is the one part of the
+    location the feed states in a form Maps resolves without argument. Feeding the
+    address as well made the query repeat itself ("…, CR4, CR4 1JG") and gave Maps
+    two things to reconcile instead of one to look up.
     """
     if not view.postcode:
         return None
-    where = f"{view.address}, {view.postcode}" if view.address else view.postcode
-    return "https://www.google.com/maps/search/?api=1&query=" + quote(where)
+    return "https://www.google.com/maps/search/?api=1&query=" + quote(view.postcode)
 
 
 def size_of(text: str | None) -> str | None:
@@ -150,7 +151,11 @@ def render_listing(view: ListingView) -> str:
     says "not stated": that was tried, and on a feed that never states pets or bills
     it put three words of nothing on every message.
     """
-    lines = ["🏠 <b>New listing spotted!</b>", ""]
+    # No blank line after the heading, none after the postcode, none after the
+    # furnishing. Each was there to group the message into blocks, and on a phone the
+    # effect was the opposite: an eight-line alert became fourteen and stopped fitting
+    # a screen. What separates the blocks now is the emoji at the head of each line.
+    lines = ["🏠 <b>New listing spotted!</b>"]
 
     where = ", ".join(part for part in (view.area, view.address) if part)
     if where:
@@ -161,7 +166,6 @@ def render_listing(view: ListingView) -> str:
     elif view.district:
         lines.append("📮 " + escape(view.district))
 
-    lines.append("")
     lines.append(f"💷 <b>{money(view.price_pcm)}/month</b>")
 
     # A studio names itself; "0 Bedrooms" is arithmetic, not a description.

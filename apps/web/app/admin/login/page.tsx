@@ -20,33 +20,43 @@ export default async function AdminLogin({
   const reason = e ? REASONS[e] : undefined;
 
   return (
-    <div className="panel" style={{ maxWidth: "22rem", margin: "3rem auto" }}>
-      <h1 style={{ fontSize: "1.35rem" }}>Admin</h1>
-      <p className="hint" style={{ marginBottom: "1.25rem" }}>
-        This console shows every subscriber&apos;s filter. Do not open it on a
-        machine you do not control.
-      </p>
+    <div className="signin">
+      <div className="signin-card">
+        <div className="signin-mark" aria-hidden="true">
+          🔑
+        </div>
+        <h1>Console</h1>
+        <p className="hint signin-warn">
+          This page shows every subscriber&apos;s filter. Do not open it on a machine
+          you do not control.
+        </p>
 
-      <form method="post" action="/api/admin/login">
-        <label htmlFor="password" className="field-label">
-          Password
-        </label>
-        <input
-          id="password"
-          name="password"
-          type="password"
-          autoComplete="current-password"
-          required
-          autoFocus
-        />
-        {reason && (
-          <p className="error">
-            {reason}
-            {e === "locked" && mins ? ` (${mins} minutes)` : ""}
-          </p>
-        )}
-        <button type="submit">Sign in</button>
-      </form>
+        <form method="post" action="/api/admin/login" className="signin-form">
+          <label htmlFor="password" className="field-label">
+            Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="••••••••••••"
+            required
+            autoFocus
+          />
+          {reason && (
+            <p className="error">
+              {reason}
+              {e === "locked" && mins ? ` (${mins} minutes)` : ""}
+            </p>
+          )}
+          <button type="submit">Sign in</button>
+        </form>
+
+        <p className="signin-foot">
+          Five wrong answers and this address waits fifteen minutes.
+        </p>
+      </div>
     </div>
   );
 }

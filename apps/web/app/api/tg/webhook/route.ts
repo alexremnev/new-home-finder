@@ -262,7 +262,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
         RETURNING user_id`,
       [token],
     );
-    const userId = rows[0]?.user_id;
+    let userId = rows[0]?.user_id;
     if (userId === undefined) return null;
 
     await run(
@@ -274,6 +274,57 @@ async function start(chatId: string, token: string | null): Promise<void> {
         WHERE id = $1`,
       [userId],
     );
+
+    // ── the same person filling the form again ──────────────────────────────
+    //
+    // The form cannot know who is filling it — it has no session and asks for no
+    // identity — so it always creates a fresh `users` row. When that row's token is
+    // claimed by a chat that already belongs to somebody, there are two rows for one
+    // person: the old one keeps the send history, the payments and the plan, and the
+    // new one keeps nothing but the new filter.
+    //
+    // Left alone, the old row stayed "active" with no channel attached. It sent
+    // nothing — `active_subscriptions` joins `user_channels`, so an account with no
+    // channel drops out — but it was counted, which is why changing a filter added a
+    // subscriber. The count was the symptom; two identities for one person was the
+    // fault.
+    //
+    // So the rows are merged, and the OLD one survives. That direction matters:
+    //
+    //   * The history lives there. `notifications` is keyed by user, and it is the
+    //     only thing that stops somebody being re-sent what they have already seen.
+    //   * The plan lives there. Keeping the new row would reset the trial on every
+    //     filter change, which is a free subscription for anybody who noticed.
+    // `run` is untyped by design — it returns rows as records — so the one field
+    // needed here is narrowed at the point of use rather than by a type argument.
+    const owner = await run(
+      `SELECT user_id FROM user_channels
+        WHERE channel = 'telegram' AND address = $1 AND user_id <> $2
+        LIMIT 1`,
+      [chatId, userId],
+    );
+    const existing = owner[0]?.user_id as number | undefined;
+
+    if (existing !== undefined) {
+      // The new filter moves across, and the person's earlier filters are retired:
+      // a filter change is a replacement, not an addition.
+      await run(`UPDATE subscriptions SET active = false WHERE user_id = $1 AND active`, [
+        existing,
+      ]);
+      await run(`UPDATE subscriptions SET user_id = $1 WHERE user_id = $2`, [existing, userId]);
+
+      // The shell row goes, and only if it is genuinely a shell. A row with a
+      // payment or a delivery against it is somebody's real account that happens to
+      // share a chat, and deleting it would erase both.
+      await run(
+        `DELETE FROM users u
+          WHERE u.id = $1
+            AND NOT EXISTS (SELECT 1 FROM payments p WHERE p.user_id = u.id)
+            AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id)`,
+        [userId],
+      );
+      userId = existing;
+    }
 
     // The chat id is the address. Both keys can already exist: the same person may
     // re-subscribe from a different chat, and the same chat may return with a new

@@ -287,3 +287,66 @@ export async function recentComps(): Promise<Comp[]> {
       LIMIT 20`,
   );
 }
+
+export type Run = {
+  id: number;
+  job: string;
+  trigger: string;
+  status: string;
+  started_at: string;
+  seconds: number | null;
+  counters: Record<string, unknown>;
+  error: string | null;
+};
+
+/**
+ * The last runs of each job, side by side.
+ *
+ * Both jobs in one list and not two panels: the question is almost always "did both
+ * of them run", and two panels means comparing two clocks. Sorted newest first, so
+ * the top two rows are the answer.
+ *
+ * `counters` comes back whole rather than picked apart here. Which counters a job
+ * emits is the job's business — `read`, `parsed`, `queued` for ingest, `sent` and
+ * `seeded` for drain — and a query that named them would need editing every time a
+ * stage learned to count something new.
+ */
+export async function recentRuns(limit = 20): Promise<Run[]> {
+  return query<Run>(
+    `SELECT id, job, trigger, status,
+            started_at::text,
+            round(extract(epoch FROM finished_at - started_at)::numeric, 1)::float8 AS seconds,
+            counters, error
+       FROM job_runs
+      ORDER BY started_at DESC
+      LIMIT $1`,
+    [limit],
+  );
+}
+
+export type JobHealth = {
+  job: string;
+  last_at: string | null;
+  last_status: string | null;
+  ok_24h: number;
+  failed_24h: number;
+};
+
+/** One row per job: when it last ran, and how it has been getting on since. */
+export async function jobHealth(): Promise<JobHealth[]> {
+  return query<JobHealth>(
+    `SELECT job,
+            max(started_at)::text AS last_at,
+            -- The status of the most recent run, not of the whole day: "is it
+            -- working now" is the question, and a count of failures answers a
+            -- different one.
+            (array_agg(status ORDER BY started_at DESC))[1] AS last_status,
+            count(*) FILTER (WHERE status = 'ok'
+                               AND started_at > now() - interval '24 hours')::int AS ok_24h,
+            count(*) FILTER (WHERE status IN ('failed', 'degraded')
+                               AND started_at > now() - interval '24 hours')::int AS failed_24h
+       FROM job_runs
+      GROUP BY job
+      ORDER BY job`,
+  );
+}

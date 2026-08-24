@@ -10,17 +10,12 @@
 // setup surface every channel can link to, so the channel becomes a delivery choice
 // rather than a second implementation of the same questions.
 //
-// ── why six questions and not fifteen ────────────────────────────────────────
+// ── sliders, not number boxes ─────────────────────────────────────────────────
 //
-// There was an "advanced filters" section holding move-in date, property type,
-// bills, landlord-direct and minimum tenancy. It is gone. Every one of those is a
-// field most people leave alone, and the cost of offering them was that the two
-// that decide almost every search — where, and how much — arrived buried in a page
-// of things to skip.
-//
-// The criteria model still understands them all, so nothing was lost from the
-// filter; they simply are not asked here. If one turns out to be wanted, it comes
-// back as a question, not as an accordion.
+// Rent, bedrooms and bathrooms are all "how much", and a pair of number boxes asks
+// somebody to invent a figure before they know what the market looks like. A slider
+// shows the range that exists and lets them narrow it, which is the same question
+// asked in a way that can be answered by dragging.
 //
 // ── the token and the redirect ───────────────────────────────────────────────
 //
@@ -30,7 +25,7 @@
 
 import { useState } from "react";
 
-import { neighbourhoodNames } from "../lib/neighbourhoods";
+import { neighbourhoodAreas, type Area } from "../lib/neighbourhoods";
 
 type Props = {
   districts: string[];
@@ -41,79 +36,96 @@ type Props = {
   names?: Record<string, string>;
 };
 
-// The rent slider's range, which is not the filter's range.
-//
-// `criteria` accepts £300–£20,000, because somebody renting a house in Mayfair
-// exists. A slider spanning that would put every ordinary London rent inside the
-// first tenth of the track, where a pixel is £40 and the control is useless. So the
-// track stops at £5,000 and the last notch means "no upper limit" — which covers
-// the long tail honestly rather than pretending it is not there.
-const RENT_MIN = 300;
-const RENT_MAX = 5000;
-const RENT_STEP = 50;
+// The rent track. Not the filter's range: `criteria` accepts up to £20,000 because
+// somebody renting in Mayfair exists, and a track that long puts every ordinary
+// London rent in its first fifth where a pixel is £80. £400–£10,000 covers what
+// people actually search for, and the top notch means "no upper limit" so the tail
+// is included honestly rather than pretended away.
+const RENT_MIN = 400;
+const RENT_MAX = 10_000;
+const RENT_STEP = 100;
 
-/** How many areas to offer as one-tap examples above the field. */
-const QUICK = 4;
+// Rooms. Zero is "any" rather than "no bedrooms": a studio has none and is still a
+// home, so a filter of zero would be indistinguishable from no filter — and reading
+// it as "any" is the meaning somebody dragging to the left end intends.
+const ROOMS_MAX = 5;
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
+const percent = (value: number, min: number, max: number) =>
+  ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
   districts, maxDistricts, propertyTypes: _types, furnished, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [chosen, setChosen] = useState<string[]>([]);
+  const [chosen, setChosen] = useState<Area[]>([]);
   const [typed, setTyped] = useState("");
-  const [areaError, setAreaError] = useState<string | null>(null);
+  const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(null);
   // Neighbourhood first because it is the question people can answer without
-  // looking anything up. A postcode district is something you know or you don't,
-  // and asking for one first reads as a demand for information rather than a
-  // question about where you want to live.
+  // looking anything up. A postcode district is something you know or you don't, and
+  // asking for one first reads as a demand for information rather than a question
+  // about where you want to live.
   const [mode, setMode] = useState<"name" | "postcode">("name");
-  const [rentMin, setRentMin] = useState(RENT_MIN);
-  const [rentMax, setRentMax] = useState(RENT_MAX);
-  // Set once the subscription exists. Until then there is nothing to connect a
-  // channel to; afterwards the token is the only thing standing between this page
-  // and a live filter, which is why it is held in memory and not in the URL.
+  const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
+  const [beds, setBeds] = useState(0);
+  const [baths, setBaths] = useState(0);
   const [link, setLink] = useState<string | null>(null);
 
-  // Two lists, never one. A single list mixing "Canary Wharf · E14" with a bare
-  // "SE8" asks somebody to hold two different ideas of what a place is at the same
-  // time, and the mixed entries look like an oversight rather than a choice.
-  const named = neighbourhoodNames(names, districts);
-  const options =
+  // Every neighbourhood by name, so Canary Wharf and Poplar both appear even though
+  // both are E14. Postcode mode lists the districts themselves.
+  const named = neighbourhoodAreas(names, districts);
+  const options: Area[] =
     mode === "name" ? named : [...districts].sort().map((code) => ({ code, name: code }));
 
-  const nameOf = (code: string) =>
-    named.find((one) => one.code === code)?.name ?? code;
-  const labelOf = (code: string) => (mode === "name" ? nameOf(code) : code);
+  const full = chosen.length >= maxDistricts;
 
-  const quick = options.filter((one) => !chosen.includes(one.code)).slice(0, QUICK);
-
-  function add(code: string) {
-    setAreaError(null);
-    if (chosen.includes(code)) return;
-    if (chosen.length >= maxDistricts) {
-      setAreaError(`Your plan covers ${maxDistricts} areas. Remove one to add another.`);
+  function add(area: Area) {
+    if (chosen.some((one) => one.code === area.code)) {
+      // Two neighbourhoods in one district are one filter entry. Said plainly,
+      // because silently accepting it would promise a precision the filter does not
+      // have — it matches on districts, the only location the feed states reliably.
+      setAreaNote({
+        text: `${area.name} is in ${area.code}, which you have already added.`,
+        bad: false,
+      });
+      setTyped("");
       return;
     }
-    setChosen((current) => [...current, code]);
+    if (full) {
+      setAreaNote({
+        text: `${maxDistricts} areas is the most one filter can cover. Remove one to add another.`,
+        bad: true,
+      });
+      return;
+    }
+    const next = [...chosen, area];
+    setChosen(next);
     setTyped("");
+    setAreaNote(
+      next.length === maxDistricts
+        ? {
+            // A warning at the limit rather than only a refusal past it: finding out
+            // you are full by being told "no" is worse than being told you are full.
+            text: `That is all ${maxDistricts}. More areas mean more alerts — most people settle on two or three.`,
+            bad: false,
+          }
+        : null,
+    );
   }
 
   function remove(code: string) {
-    setAreaError(null);
-    setChosen((current) => current.filter((one) => one !== code));
+    setAreaNote(null);
+    setChosen((current) => current.filter((one) => one.code !== code));
   }
 
   /**
    * Resolve whatever was typed against the list on screen.
    *
-   * A datalist is a suggestion, not a constraint — the field still accepts free
-   * text, and a browser that ignores the list entirely is within its rights. So the
-   * value is matched against the options rather than trusted, and a code typed in
-   * neighbourhood mode is accepted too: refusing "E14" because the radio says
-   * "neighbourhood" would be pedantry.
+   * A datalist is a suggestion, not a constraint — the field still accepts free text
+   * and a browser may ignore the list entirely. So the value is matched rather than
+   * trusted, and a code typed in neighbourhood mode is accepted too: refusing "E14"
+   * because a radio button says "neighbourhood" would be pedantry.
    */
   function commitTyped() {
     const text = typed.trim();
@@ -124,10 +136,10 @@ export function SubscribeForm({
       options.find((one) => one.code.toLowerCase() === wanted) ??
       options.find((one) => one.name.toLowerCase().startsWith(wanted));
     if (!hit) {
-      setAreaError(`I don't know "${text}" — pick one from the list.`);
+      setAreaNote({ text: `I don't know "${text}" — pick one from the list.`, bad: true });
       return;
     }
-    add(hit.code);
+    add(hit);
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -142,13 +154,29 @@ export function SubscribeForm({
       payload[key] = values.length > 1 ? values : values[0];
     }
 
-    // Only bounds that mean something are sent. A slider left at either end is not
-    // a limit of £300 or £5,000, it is the absence of one, and sending it as a
-    // number would quietly exclude the listings beyond it.
-    if (rentMin > RENT_MIN) payload.price_min = String(rentMin);
-    else delete payload.price_min;
-    if (rentMax < RENT_MAX) payload.price_max = String(rentMax);
-    else delete payload.price_max;
+    // Only bounds that mean something are sent. A thumb parked at either end is the
+    // absence of a limit, not a limit of £400 or £10,000, and sending it as a number
+    // would quietly exclude everything beyond it.
+    if (rent[0] > RENT_MIN) payload.price_min = String(rent[0]);
+    if (rent[1] < RENT_MAX) payload.price_max = String(rent[1]);
+    if (beds > 0) payload.bedrooms_min = String(beds);
+    if (baths > 0) payload.bathrooms_min = String(baths);
+
+    // A chosen date becomes the window the matcher already understands: ten days
+    // either side. Generous on purpose — an advertised availability date is a
+    // landlord's intention, not a fact, and demanding the exact day would reject the
+    // same flat for being ready a week early.
+    const wanted = String(data.get("available_on") ?? "").trim();
+    delete payload.available_on;
+    if (wanted) {
+      const day = new Date(`${wanted}T00:00:00Z`);
+      if (!Number.isNaN(day.getTime())) {
+        const shift = (days: number) =>
+          new Date(day.getTime() + days * 86_400_000).toISOString().slice(0, 10);
+        payload.available_after = shift(-10);
+        payload.available_before = shift(10);
+      }
+    }
 
     try {
       const response = await fetch("/api/subscribe", {
@@ -172,6 +200,9 @@ export function SubscribeForm({
 
   if (link) return <AllDone url={link} token={tokenOf(link)} />;
 
+  const placeholder =
+    mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
+
   return (
     <form onSubmit={submit}>
       <fieldset>
@@ -191,7 +222,7 @@ export function SubscribeForm({
                 checked={mode === value}
                 onChange={() => {
                   setMode(value);
-                  setAreaError(null);
+                  setAreaNote(null);
                   setTyped("");
                 }}
               />
@@ -199,35 +230,15 @@ export function SubscribeForm({
             </label>
           ))}
         </div>
-        {named.length === 0 && mode === "name" && (
-          <p className="hint">No area names yet — search by postcode for now.</p>
-        )}
       </fieldset>
 
       <div>
         <label htmlFor="area" className="field-label">
           {mode === "name" ? "Which neighbourhood?" : "Which postcode district?"}
         </label>
-        {chosen.map((code) => (
-          <input key={code} type="hidden" name="districts" value={code} />
+        {chosen.map((area) => (
+          <input key={area.code} type="hidden" name="districts" value={area.code} />
         ))}
-
-        {quick.length > 0 && chosen.length < maxDistricts && (
-          <div className="quick">
-            {quick.map((one) => (
-              <span
-                key={one.code}
-                role="button"
-                tabIndex={0}
-                onClick={() => add(one.code)}
-                onKeyDown={(event) => event.key === "Enter" && add(one.code)}
-                className="chip"
-              >
-                + {one.name}
-              </span>
-            ))}
-          </div>
-        )}
 
         <input
           id="area"
@@ -235,115 +246,104 @@ export function SubscribeForm({
           list="area-list"
           value={typed}
           autoComplete="off"
-          placeholder={mode === "name" ? "Start typing, e.g. Canary Wharf" : "e.g. E14"}
+          placeholder={placeholder}
           onChange={(event) => {
             setTyped(event.target.value);
-            setAreaError(null);
+            setAreaNote(null);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
-              // Otherwise Enter here submits the form with no areas chosen, which
-              // reads as the form rejecting itself.
+              // Otherwise Enter submits the form with no areas chosen, which reads
+              // as the form rejecting itself.
               event.preventDefault();
               commitTyped();
             }
           }}
           onBlur={commitTyped}
         />
-        {/* A datalist rather than a select: it is one control that both drops down
-            and filters as you type, and on a phone the platform turns it into a
-            picker. A 240-entry select does neither. */}
+        {/* A datalist rather than a select: one control that both drops down and
+            filters as you type, and on a phone the platform turns it into a picker.
+            A 200-entry select does neither. */}
         <datalist id="area-list">
-          {options
-            .filter((one) => !chosen.includes(one.code))
-            .map((one) => (
-              <option key={one.code} value={one.name} />
-            ))}
+          {options.map((one) => (
+            <option key={`${one.name}-${one.code}`} value={one.name}>
+              {mode === "name" ? one.code : ""}
+            </option>
+          ))}
         </datalist>
 
         <p className="hint">
-          Up to {maxDistricts} areas. Pick from the list or start typing.
+          Start typing and pick from the list. Up to {maxDistricts} areas.
         </p>
 
         {chosen.length > 0 && (
           <div className="chips">
-            {chosen.map((code) => (
+            {chosen.map((area) => (
               <span
-                key={code}
+                key={area.code}
                 role="button"
                 tabIndex={0}
                 title="Remove"
-                onClick={() => remove(code)}
-                onKeyDown={(event) => event.key === "Enter" && remove(code)}
+                onClick={() => remove(area.code)}
+                onKeyDown={(event) => event.key === "Enter" && remove(area.code)}
                 className="chip on"
               >
-                {labelOf(code)} ✕
+                {mode === "name" && area.name !== area.code
+                  ? `${area.name} · ${area.code}`
+                  : area.code}{" "}
+                ✕
               </span>
             ))}
           </div>
         )}
-        {areaError && <p className="error">{areaError}</p>}
+        {areaNote && (
+          <p className={areaNote.bad ? "error" : "notice"}>{areaNote.text}</p>
+        )}
       </div>
 
       <div>
         <span className="field-label">Rent per month</span>
-        <div className="slider">
-          <div className="slider-value">
-            {rentMin === RENT_MIN && rentMax === RENT_MAX
-              ? "Any rent"
-              : `${money(rentMin)} — ${rentMax === RENT_MAX ? money(RENT_MAX) + "+" : money(rentMax)}`}
-          </div>
-          <div className="slider-row">
-            <span>From</span>
-            <input
-              type="range"
-              min={RENT_MIN}
-              max={RENT_MAX}
-              step={RENT_STEP}
-              value={rentMin}
-              aria-label="Lowest rent"
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                // Clamped rather than swapped: dragging past the other thumb should
-                // push it, not silently reverse which one you are holding.
-                setRentMin(Math.min(value, rentMax));
-              }}
-            />
-          </div>
-          <div className="slider-row">
-            <span>To</span>
-            <input
-              type="range"
-              min={RENT_MIN}
-              max={RENT_MAX}
-              step={RENT_STEP}
-              value={rentMax}
-              aria-label="Highest rent"
-              onChange={(event) => {
-                const value = Number(event.target.value);
-                setRentMax(Math.max(value, rentMin));
-              }}
-            />
-          </div>
-        </div>
+        <RangeSlider
+          min={RENT_MIN}
+          max={RENT_MAX}
+          step={RENT_STEP}
+          value={rent}
+          onChange={setRent}
+          format={money}
+          openTop="+"
+        />
+      </div>
+
+      <div>
+        <span className="field-label">Bedrooms</span>
+        <Stepper
+          value={beds}
+          onChange={setBeds}
+          max={ROOMS_MAX}
+          label={(n) => (n === 0 ? "Any" : `${n}+`)}
+        />
+        <p className="hint">Any includes studios.</p>
+      </div>
+
+      <div>
+        <span className="field-label">Bathrooms</span>
+        <Stepper
+          value={baths}
+          onChange={setBaths}
+          max={ROOMS_MAX}
+          label={(n) => (n === 0 ? "Any" : `${n}+`)}
+        />
         <p className="hint">
-          {money(RENT_MAX)}+ means no upper limit.
+          Listings that do not state it are still sent — most do not state it.
         </p>
       </div>
 
       <label>
-        <span>Bedrooms</span>
-        <input type="number" name="bedrooms_min" placeholder="from" min={0} max={10} />{" "}
-        <input type="number" name="bedrooms_max" placeholder="to" min={0} max={10} />
-        <p className="hint">0 includes studios. Leave either blank for no limit.</p>
-      </label>
-
-      <label>
-        <span>Bathrooms</span>
-        <input type="number" name="bathrooms_min" placeholder="from" min={0} max={10} />{" "}
-        <input type="number" name="bathrooms_max" placeholder="to" min={0} max={10} />
+        <span>Desired let available date</span>
+        <input type="date" name="available_on" />
         <p className="hint">
-          Listings that do not state it are still sent — most do not state it.
+          Listings available within about ten days of it. Leave blank for any date —
+          and a listing that gives no date is sent either way.
         </p>
       </label>
 
@@ -382,6 +382,124 @@ export function SubscribeForm({
   );
 }
 
+/**
+ * One slider with two thumbs.
+ *
+ * ── how, and why it is built rather than imported ────────────────────────────
+ *
+ * HTML has no two-thumb range input. The usual answers are a 30kB library or two
+ * stacked sliders that look like two controls. This is two `input[type=range]`
+ * elements sharing one track: the inputs are transparent and ignore pointer events,
+ * their thumbs accept them, and the visible track and highlight are drawn behind.
+ * The result is one control to look at and two to grab, and it keeps the keyboard
+ * and screen-reader behaviour the platform already gives a range input.
+ *
+ * The thumbs clamp rather than swap. Dragging one past the other should push it, not
+ * silently change which one you are holding — that is disorienting in a way no
+ * amount of correctness makes up for.
+ */
+function RangeSlider({
+  min, max, step, value, onChange, format, openTop = "",
+}: {
+  min: number;
+  max: number;
+  step: number;
+  value: [number, number];
+  onChange: (next: [number, number]) => void;
+  format: (n: number) => string;
+  openTop?: string;
+}) {
+  const [low, high] = value;
+  const atFloor = low === min;
+  const atCeiling = high === max;
+
+  return (
+    <div className="range2">
+      <output className="range2-value">
+        {atFloor && atCeiling
+          ? "Any"
+          : `${format(low)} — ${format(high)}${atCeiling ? openTop : ""}`}
+      </output>
+
+      <div className="range2-track">
+        <div
+          className="range2-fill"
+          style={{
+            left: `${percent(low, min, max)}%`,
+            right: `${100 - percent(high, min, max)}%`,
+          }}
+        />
+        <input
+          type="range"
+          className="range2-input"
+          min={min}
+          max={max}
+          step={step}
+          value={low}
+          aria-label="Lowest"
+          onChange={(event) => onChange([Math.min(Number(event.target.value), high), high])}
+        />
+        <input
+          type="range"
+          className="range2-input"
+          min={min}
+          max={max}
+          step={step}
+          value={high}
+          aria-label="Highest"
+          onChange={(event) => onChange([low, Math.max(Number(event.target.value), low)])}
+        />
+      </div>
+
+      <div className="range2-ends">
+        <span>{format(min)}</span>
+        <span>
+          {format(max)}
+          {openTop}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A single-thumb slider for a small count.
+ *
+ * Kept separate from `RangeSlider` rather than made a mode of it: a count from zero
+ * to five wants tick marks and a word for each stop ("Any", "2+"), and a rent slider
+ * wants neither. One component doing both would be a parameter list longer than
+ * either.
+ */
+function Stepper({
+  value, onChange, max, label,
+}: {
+  value: number;
+  onChange: (next: number) => void;
+  max: number;
+  label: (n: number) => string;
+}) {
+  return (
+    <div className="stepper">
+      <output className="range2-value">{label(value)}</output>
+      <input
+        type="range"
+        min={0}
+        max={max}
+        step={1}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+      <div className="stepper-ticks">
+        {Array.from({ length: max + 1 }, (_, n) => (
+          <span key={n} className={n === value ? "on" : undefined}>
+            {n === 0 ? "Any" : n}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** The start token out of the bot link, for the interest vote to attach to. */
 function tokenOf(url: string): string {
   const match = /[?&]start=([^&]+)/.exec(url);
@@ -396,7 +514,7 @@ function tokenOf(url: string): string {
  *
  * The vote underneath is not an action — it is a question, and it is asked here
  * because this is the one moment somebody has just done the work and can see what
- * they get for another channel existing. Asked on the landing page it would be a
+ * they get from another channel existing. Asked on the landing page it would be a
  * survey from a stranger.
  */
 function AllDone({ url, token }: { url: string; token: string }) {

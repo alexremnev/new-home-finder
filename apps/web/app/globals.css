@@ -40,10 +40,56 @@
 
 html { -webkit-text-size-adjust: 100%; }
 
+/* The backdrop: a London sunset behind the City, drawn rather than photographed.
+ *
+ * Said plainly, because it matters if you were expecting a photograph: this is a CSS
+ * gradient with an inline SVG skyline, not a picture of London Bridge. Two reasons,
+ * and the second is the real one:
+ *
+ *   1. A photograph is a binary file. Nothing here can add one, and a hotlinked
+ *      image is somebody else's server deciding whether your page has a background.
+ *   2. A photograph behind a form has to be dimmed until it is nearly invisible or
+ *      it eats the text — at which point it is an expensive gradient.
+ *
+ * To use a real photograph: drop it in `public/` and set the `--backdrop` custom
+ * property below to `url("/your-photo.jpg")`. Keep the scrim: white cards on an
+ * undimmed photograph are unreadable in a way that is hard to notice on the machine
+ * you chose the photograph on.
+ *
+ * The silhouette is the City from the south bank — the Shard's spike, the Gherkin's
+ * dome, Tower Bridge's two towers. It is suggestive, not accurate, and at 8% opacity
+ * behind a card it is meant to be felt rather than read. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    /* the skyline, sitting on the horizon */
+    var(--backdrop, url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1400' height='240' preserveAspectRatio='none' viewBox='0 0 1400 240'%3E%3Cpath fill='%23262637' fill-opacity='0.5' d='M0 240V196h38v-28h26v28h34v-52h30v52h22v-18h28v18h40v-96l16-30 16 30v96h34v-40h30v40h30v-64h26v-14h10v14h26v64h44v-30h34v30h30v-120l14-26 14 26v120h34v-44h28v44h46v-70h12v-22h10v22h12v70h40v-34h30v34h34v-58h26v58h40v-150l18-34 18 34v150h30v-46h30v46h44v-26h32v26h36v-74h28v74h40v-40h30v40h38v-54h26v54h30v-30h34v30z'/%3E%3C/svg%3E"));
+  background-repeat: no-repeat;
+  background-position: bottom center;
+  background-size: 100% auto;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
 body {
   margin: 0;
   padding: 3rem 1.25rem 5rem;
-  background: var(--bg);
+  /* Sunset above, the page's own grey below, meeting where the skyline sits. Kept
+     pale: this is behind a form, and a form is read. */
+  background:
+    linear-gradient(
+      180deg,
+      #ffd9a8 0%,
+      #ffc59b 12%,
+      #f4b3a8 24%,
+      #e8d3d0 38%,
+      var(--bg) 58%,
+      var(--bg) 100%
+    )
+    fixed;
   color: var(--ink);
   font: 400 16px/1.55 "Segoe UI", system-ui, -apple-system, Roboto,
     "Helvetica Neue", Arial, sans-serif;
@@ -666,4 +712,237 @@ form p.error {
   .admin section { overflow-x: auto; }
   .grid { min-width: 44rem; }
   .admin-head { flex-direction: column; }
+}
+
+/* ── the two-thumb slider ─────────────────────────────────────────────────────
+ *
+ * One control, two grabbable thumbs. The inputs are invisible and transparent to
+ * the pointer; only their thumbs take events, so both can be grabbed even where
+ * they overlap. What is seen is the track and the fill underneath them.
+ *
+ * `-webkit-` and `-moz-` blocks cannot be combined into one selector list: a
+ * browser that does not know one of the pseudo-elements throws the whole rule away,
+ * so every duplicated block below is duplicated on purpose. */
+
+.range2 { margin-top: 0.25rem; }
+
+.range2-value,
+.stepper .range2-value {
+  display: block;
+  margin-bottom: 0.7rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.range2-track {
+  position: relative;
+  height: 1.6rem;
+}
+
+/* The groove. A pseudo-element so the fill can sit over it without a third node. */
+.range2-track::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 3px;
+  background: var(--line-strong);
+}
+
+.range2-fill {
+  position: absolute;
+  top: 50%;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.range2-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  background: none;
+  border: none;
+  /* The element ignores the pointer so the one underneath is reachable; the thumb
+     takes it back. This is what makes two stacked sliders behave as one control. */
+  pointer-events: none;
+}
+
+.range2-input:focus-visible { outline: none; }
+
+.range2-input::-webkit-slider-runnable-track {
+  height: 100%;
+  background: none;
+  border: none;
+}
+
+.range2-input::-moz-range-track {
+  height: 100%;
+  background: none;
+  border: none;
+}
+
+.range2-input::-webkit-slider-thumb {
+  appearance: none;
+  pointer-events: auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 5px rgb(38 38 55 / 35%);
+  cursor: grab;
+}
+
+.range2-input::-moz-range-thumb {
+  pointer-events: auto;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 3px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 1px 5px rgb(38 38 55 / 35%);
+  cursor: grab;
+}
+
+.range2-input:active::-webkit-slider-thumb { cursor: grabbing; }
+
+.range2-input:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 5px var(--accent-wash), 0 1px 5px rgb(38 38 55 / 35%);
+}
+
+.range2-input:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 5px var(--accent-wash), 0 1px 5px rgb(38 38 55 / 35%);
+}
+
+.range2-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+/* ── the room stepper ─────────────────────────────────────────────────────── */
+
+.stepper input[type="range"] {
+  width: 100%;
+  appearance: none;
+  height: 1.6rem;
+  margin: 0;
+  background: none;
+  cursor: pointer;
+}
+
+.stepper-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.3rem;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+/* The current stop is named twice — as the big value above and as the bold tick
+   below — because on a six-stop track the thumb sits between labels as often as
+   over one. */
+.stepper-ticks .on { color: var(--accent-dim); font-weight: 700; }
+
+/* ── a note that is not an error ───────────────────────────────────────────── */
+
+.notice {
+  margin: 0.5rem 0 0;
+  color: var(--accent-dim);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+/* ── the console's sign-in ─────────────────────────────────────────────────────
+ *
+ * Its own layout rather than the form card, because it is not a task in a flow — it
+ * is a door. Centred in the viewport, narrow, and with nothing else on the page: the
+ * only thing to do here is one thing, and anything else would be a place to look
+ * instead of doing it.
+ *
+ * The form card's own rules would fight this: `form > label` there is a question
+ * band with a rule under it, which on a single-field form draws a line under the
+ * only field. So the parts are styled here and the shared rules are overridden
+ * where they land wrong. */
+
+.signin {
+  display: grid;
+  place-items: center;
+  min-height: 70vh;
+}
+
+.signin-card {
+  width: 100%;
+  max-width: 23rem;
+  padding: 2rem 1.9rem 1.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.signin-mark {
+  display: grid;
+  place-items: center;
+  width: 3rem;
+  height: 3rem;
+  margin: 0 auto 0.9rem;
+  border-radius: 50%;
+  background: var(--accent-wash);
+  font-size: 1.4rem;
+}
+
+.signin-card h1 {
+  margin: 0 0 0.4rem;
+  font-size: 1.5rem;
+}
+
+.signin-warn {
+  margin: 0 0 1.5rem;
+  text-align: center;
+}
+
+/* The form inside is not a card — the card is the wrapper. Padding, border and
+   shadow are cleared rather than left to inherit the sheet treatment. */
+.signin-form {
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  text-align: left;
+}
+
+.signin-form > label,
+.signin-form > div {
+  padding: 0;
+  border-bottom: none;
+}
+
+.signin-form button[type="submit"] { margin-top: 1.1rem; }
+
+.signin-foot {
+  margin: 1.2rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+/* Counter strings are read as pairs, so they need the space kept and the digits
+   aligned enough to compare two rows at a glance. */
+.grid .counters {
+  font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
 }

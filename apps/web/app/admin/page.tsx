@@ -21,8 +21,8 @@ import { redirect } from "next/navigation";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import {
-  byDistrict, byPrice, overview, planMix, problems, recentComps, recentPayments,
-  sentPerDay, subscribers, visitsPerDay,
+  byDistrict, byPrice, jobHealth, overview, planMix, problems, recentComps,
+  recentPayments, recentRuns, sentPerDay, subscribers, visitsPerDay,
   type Range,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
@@ -71,10 +71,11 @@ export default async function AdminPage({
   // the sum of their latencies for no benefit.
   const [
     stats, plans, sent, visits, districts, prices, people, faults, payments, comps,
+    runs, health,
   ] = await Promise.all([
     overview(), planMix(), sentPerDay(days), visitsPerDay(days),
     byDistrict(days), byPrice(days), subscribers(), problems(),
-    recentPayments(), recentComps(),
+    recentPayments(), recentComps(), recentRuns(), jobHealth(),
   ]);
 
   return (
@@ -132,7 +133,67 @@ export default async function AdminPage({
         )}
       </section>
 
-      {/* ── 2. how big ─────────────────────────────────────────────────── */}
+      {/* ── 2. did the jobs run ────────────────────────────────────────── */}
+      <section>
+        <h2>Jobs</h2>
+        {/* Both jobs in one place, because the question is almost always "did both
+            of them run" and two panels means comparing two clocks. */}
+        <div className="stats">
+          {health.map((job) => (
+            <Stat
+              key={job.job}
+              label={job.job}
+              value={job.last_status === "ok" ? "OK" : (job.last_status ?? "never")}
+              note={
+                job.last_at
+                  ? `${job.last_at.slice(11, 16)} · ${job.ok_24h} ok, ${job.failed_24h} bad in 24h`
+                  : "has never run"
+              }
+            />
+          ))}
+        </div>
+
+        <table className="grid" style={{ marginTop: "1.25rem" }}>
+          <thead>
+            <tr>
+              <th>Started</th><th>Job</th><th>How</th><th>Result</th>
+              <th className="num">Secs</th><th>What it did</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((run) => {
+              const bad = run.status === "failed" || run.status === "degraded";
+              return (
+                <tr key={run.id}>
+                  <td className="muted">{run.started_at.slice(5, 16)}</td>
+                  <td><strong>{run.job}</strong></td>
+                  <td className="muted">{run.trigger}</td>
+                  <td>
+                    <span className={`badge ${bad ? "critical" : "good"}`}>
+                      {bad ? "✕" : "✓"} {run.status}
+                    </span>
+                  </td>
+                  <td className="num muted">{run.seconds ?? "—"}</td>
+                  {/* The counters as the job emitted them. Not picked apart here:
+                      which ones a job reports is the job's business, and naming them
+                      would mean editing this every time a stage learns to count
+                      something. */}
+                  <td className="wrap muted counters">
+                    {run.error
+                      ? run.error.slice(0, 120)
+                      : Object.entries(run.counters ?? {})
+                          .map(([name, value]) => `${name}=${value}`)
+                          .join("  ") || "nothing to do"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        {runs.length === 0 && <p className="hint">No runs recorded yet.</p>}
+      </section>
+
+      {/* ── 3. how big ─────────────────────────────────────────────────── */}
       <section>
         <div className="stats">
           <Stat label="Subscribers" value={comma(stats.subscribers)}
@@ -146,7 +207,7 @@ export default async function AdminPage({
         </div>
       </section>
 
-      {/* ── 3. what is happening ───────────────────────────────────────── */}
+      {/* ── 4. what is happening ───────────────────────────────────────── */}
       <section>
         <div className="range">
           {RANGES.map((r) => (
@@ -165,7 +226,7 @@ export default async function AdminPage({
         <PlanMix data={plans} title="Who is on which plan" />
       </section>
 
-      {/* ── 4. who they are ────────────────────────────────────────────── */}
+      {/* ── 5. who they are ────────────────────────────────────────────── */}
       <section>
         <h2>Subscribers</h2>
         <table className="grid">

@@ -127,6 +127,7 @@ const NOT_COLUMNS = new Set(
    to_char left right lower upper trim length floor ceil round abs cast between like ilike
    for share nowait skip locked days mins secs hours months years mo yy dd row rows only
    over partition filter lateral natural concat position substring extract epoch
+   float8 float4 int2 int4 int8 bool bytea uuid inet interval money
    nothing constraint default add column alter table create index primary key
    foreign references cascade restrict check unique if not to_jsonb jsonb_build_object
    string_agg array_agg date_trunc age justify_hours width_bucket percentile_cont
@@ -158,7 +159,8 @@ for (const dir of SOURCES) {
         [...whole.matchAll(/(?:WITH|,)\s+(\w+)\s+AS\s*\(/gi)].map((m) => m[1].toLowerCase()),
       );
 
-      for (const bare of whole.split(/\bUNION\s+ALL\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b/gi)) {
+      const arms = whole.split(/\bUNION\s+ALL\b|\bUNION\b|\bINTERSECT\b|\bEXCEPT\b/gi);
+      for (const [armIndex, bare] of arms.entries()) {
 
       // Tables in play, with their aliases.
       const tables = new Map(); // alias-or-name -> table
@@ -201,38 +203,37 @@ for (const dir of SOURCES) {
       // throws. TypeScript cannot see it: the row type is an assertion about a value
       // it never inspects.
       //
-      // The fix is always the same — cast in the query — so the rule is: a temporal
-      // column in a SELECT list must carry a cast or a formatting function.
+      // Driven from the declared TYPE rather than from the words in the SQL, and that
+      // direction is the whole reliability of this check. Scanning the SQL for
+      // temporal column names finds every mention of one — a sort key inside
+      // `array_agg(… ORDER BY ts)`, a predicate inside `count(*) FILTER (WHERE ts >
+      // …)` — none of which is returned to anybody. Those false positives are how a
+      // check becomes noise and then becomes ignored.
+      //
+      // Starting from the type asks the only question that matters: this caller says
+      // it will get a string called `plan_until`; does the query cast it?
+      // What the query returns: everything between SELECT and its FROM.
       const selectList = /\bSELECT\b([\s\S]*?)\bFROM\b/i.exec(bare)?.[1];
-      if (selectList) {
-        for (const use of selectList.matchAll(/\b([a-z_][a-z0-9_]*)\b/gi)) {
-          const word = use[1].toLowerCase();
-          if (!TEMPORAL.has(word) || !allowed.has(word)) continue;
-          // A window after the name, so `max(started_at)::text` counts: the cast sits
-          // past the closing paren.
-          const after = selectList.slice(use.index, use.index + 32);
-          const before = selectList.slice(Math.max(0, use.index - 24), use.index);
-          const cast = /::\s*(text|date|varchar)/i.test(after);
-          const formatted = /(to_char|extract|date_part|date_trunc|age)\s*\(/i.test(before);
-          // `::date AS day` — the cast is on the expression, and the name after AS is
-          // its alias, not a raw column. Reporting it was the tool being wrong.
-          const aliasOfCast = /::\s*\w+\s+AS\s*$/i.test(before);
-          if (cast || formatted || aliasOfCast) continue;
 
-          // What the caller says it will get. Declared `Date` means the Date is
-          // wanted — `plans.ts` reads `.getTime()` off it on purpose — and only a
-          // declared `string` is the mismatch that throws.
-          const declared = rowType
-            ? new RegExp(`type\\s+${rowType}\\s*=\\s*\\{[^}]*?\\b${word}\\??\\s*:\\s*([^;\\n]+)`, "s")
-                .exec(text)?.[1]
-            : undefined;
-          if (declared && !/\bstring\b/.test(declared)) continue;
-
+      // Only the first arm. In a UNION, Postgres takes the output column names from
+      // the first SELECT and ignores the rest — so the later arms select the same
+      // values positionally and never mention the field names at all. Checking them
+      // asks whether a name that cannot appear appears.
+      if (rowType && selectList && armIndex === 0) {
+        const body = new RegExp(`type\\s+${rowType}\\s*=\\s*\\{([\\s\\S]*?)\\n\\}`).exec(text)?.[1];
+        for (const field of body?.matchAll(/^\s*(\w+)\??\s*:\s*([^;\n]+)/gm) ?? []) {
+          const [, name, declared] = field;
+          const word = name.toLowerCase();
+          if (!TEMPORAL.has(word) || !/\bstring\b/.test(declared)) continue;
+          // At least one occurrence carrying a cast. A column can appear twice — once
+          // cast in the select list, once bare in a predicate — and the cast one is
+          // the one that comes back.
+          const cast = new RegExp(`\\b${name}\\b[^,]{0,24}::\\s*(text|date|varchar)`, "i");
+          const aliased = new RegExp(`\\bAS\\s+${name}\\b`, "i");
+          if (cast.test(selectList) || aliased.test(selectList)) continue;
           console.log(
-            `  ! ${path}:${line} — "${word}" is a timestamp with no ::text, and ` +
-              (declared
-                ? `${rowType}.${word} is declared "${declared.trim()}" — it arrives as a Date`
-                : `no row type was found to check it against; confirm the caller expects a Date`),
+            `  ! ${path}:${line} — ${rowType}.${name} is declared "${declared.trim()}" ` +
+              `but the query returns a timestamp; it arrives as a Date. Add ::text`,
           );
           problems += 1;
         }

@@ -218,32 +218,47 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Twickenham": "TW1",
 };
 
+export type Area = { code: string; name: string };
+
 /**
- * The name to show for a district, preferring what the feed actually calls it.
+ * Every neighbourhood that can be chosen, by name.
  *
- * Observed names win over the list above, because a name attached to real listings
- * is the word in use, and the list is a floor rather than an authority. Both are
- * folded into one map keyed by district so the dropdown holds one entry per place.
+ * ── the bug this replaced ────────────────────────────────────────────────────
+ *
+ * This used to return one name per district, keyed by code. Canary Wharf, Poplar and
+ * Isle of Dogs are all E14, so two of the three vanished — and the list looked like
+ * the service did not cover Canada Water when in fact it had no room to mention it.
+ *
+ * So the list is keyed by NAME. Several names sharing a district is the normal case
+ * and not a conflict: they are different places that happen to share a postcode.
+ *
+ * The consequence is worth being explicit about, because the caller has to handle it:
+ * choosing two neighbourhoods in one district is one filter entry, not two. The
+ * filter matches on districts, which is the only location the feed states reliably.
+ * A form that silently accepted both and counted them as two would be promising a
+ * precision that does not exist.
  */
-export function neighbourhoodNames(
+export function neighbourhoodAreas(
   observed: Record<string, string>,
   covered: string[],
-): { code: string; name: string }[] {
+): Area[] {
   const allowed = new Set(covered.map((code) => code.toUpperCase()));
-  const byCode = new Map<string, string>();
+  const byName = new Map<string, string>();
 
   for (const [name, code] of Object.entries(NEIGHBOURHOODS)) {
     const upper = code.toUpperCase();
-    if (allowed.has(upper) && !byCode.has(upper)) byCode.set(upper, name);
+    if (allowed.has(upper)) byName.set(name, upper);
   }
+  // Names the feed actually uses, added on top. A place the gazetteer has never
+  // heard of still appears the moment a listing from it arrives.
   for (const [name, code] of Object.entries(observed)) {
     const upper = code.toUpperCase();
     if (!allowed.has(upper)) continue;
-    // Overwrites the static name deliberately — see above.
-    byCode.set(upper, name.replace(/\b[a-z]/g, (c) => c.toUpperCase()));
+    const pretty = name.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    if (!byName.has(pretty)) byName.set(pretty, upper);
   }
 
-  return [...byCode]
-    .map(([code, name]) => ({ code, name }))
+  return [...byName]
+    .map(([name, code]) => ({ code, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
