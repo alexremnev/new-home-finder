@@ -44,6 +44,7 @@ import {
   upgradeInvitation,
 } from "@/lib/messages";
 import {
+  type Account,
   accountForChat,
   EDIT_TTL_MINUTES,
   enabledDistricts,
@@ -57,28 +58,11 @@ import {
 import {
   answerCallback,
   chatIdOf,
-  clearKeyboard,
-  deleteMessage,
-  editMessageText,
   type Keyboard,
   sendMessage,
-  sendMessageReturningId,
   setMyCommands,
   type Update,
 } from "@/lib/telegram";
-import {
-  apply,
-  applyDistrictText,
-  applyPriceText,
-  commitSession,
-  type Context as WizardContext,
-  dropSession,
-  loadSession,
-  parseCallback,
-  render,
-  saveSession,
-  type Session,
-} from "@/lib/wizard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,8 +88,20 @@ export async function POST(request: Request): Promise<NextResponse> {
   if (!chatId) return ok();
 
   try {
-    if (update.callback_query) await tapped(chatId, update.callback_query);
-    else await handle(chatId, update.message?.text);
+    if (update.callback_query) {
+      // Nothing in this bot has a callback button any more — the form's buttons are
+      // links and the upgrade button is a link. But a keyboard already sitting in
+      // somebody's chat stays tappable for ever, so a tap is answered rather than
+      // ignored: an unacknowledged callback leaves a spinner, which reads as a
+      // broken bot rather than an old message.
+      if (update.callback_query.id) {
+        await answerCallback(update.callback_query.id, "That message is out of date")
+          .catch(() => undefined);
+      }
+      await sendToForm(chatId, false);
+    } else {
+      await handle(chatId, update.message?.text);
+    }
   } catch (error) {
     console.error("webhook failed", { update_id: update.update_id, error: String(error) });
     // The tap is acknowledged even on this path. An unanswered callback leaves a
@@ -127,18 +123,6 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   if (command.kind === "stop") return stop(chatId);
   if (command.kind === "start") return start(chatId, command.token);
   if (command.kind === "menu") return pushMenu(chatId);
-
-  // Two steps are answered by typing rather than tapping — districts and price —
-  // so plain text that is not a command belongs to whichever one is waiting.
-  // Checked before the help fallback, or "SE16, E14" would be answered with a list
-  // of commands.
-  if (command.kind === "help" && !command.reason) {
-    const waiting = await loadSession(chatId);
-    if (waiting?.step === "districts") return districtsTyped(chatId, waiting, text ?? "");
-    if (waiting?.step === "priceMin" || waiting?.step === "priceMax") {
-      return priceTyped(chatId, waiting, text ?? "");
-    }
-  }
 
   if (command.kind === "update") return sendToForm(chatId, true);
 
@@ -182,16 +166,8 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
       return;
     }
 
-    case "upgrade": {
-      const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
-      // A button rather than a bare URL. The checkout link carries a token, and a
-      // long opaque URL in a chat is something people hesitate to tap.
-      const keyboard: Keyboard = [
-        [{ text: "Pay by card", url: `${siteUrl()}/api/checkout?t=${token}` }],
-      ];
-      await sendMessage(chatId, await upgradeInvitation(account, token), keyboard);
-      return;
-    }
+    case "upgrade":
+      return offerUpgrade(chatId, account);
 
     case "patch": {
       if (account.subscription_id === null) {
@@ -243,6 +219,19 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
 // ── START ─────────────────────────────────────────────────────────────────
 
 async function start(chatId: string, token: string | null): Promise<void> {
+  // `t.me/<bot>?start=pay` — the upgrade button on an alert. A deep link rather than
+  // a link straight to the checkout page, and the difference matters: a link in a
+  // message that is minted once would have to carry a token that stays valid for as
+  // long as the message survives in the chat, which is for ever. This way the alert
+  // carries no secret at all, and the token is made when somebody actually taps.
+  if (token === "pay") {
+    const account = await accountForChat(chatId);
+    if (account) return offerUpgrade(chatId, account);
+    // No account for this chat, so there is nothing to upgrade. The useful answer is
+    // the form, not an apology.
+    return sendToForm(chatId, false);
+  }
+
   if (!token) {
     // A bare /start from someone who found the bot directly. This used to answer
     // "go and fill in the form"; it now starts the wizard, which is the whole point
@@ -351,40 +340,42 @@ async function start(chatId: string, token: string | null): Promise<void> {
   await sendMessage(chatId, WELCOME);
 }
 
-// ── the wizard ────────────────────────────────────────────────────────────
-
-/**
- * What the plan and the coverage allow, for a chat that may not have an account
- * yet. A brand-new person is shown the sign-up plan's allowance, because that is
- * what they will have by the time they press Finish.
- */
-async function wizardContext(userId: number | null): Promise<WizardContext> {
-  const [districts, plan] = await Promise.all([enabledDistricts(), signupPlan()]);
-  let maxDistricts = plan.max_districts;
-  if (userId !== null) {
-    const rows = await query<{ max_districts: number }>(
-      `SELECT p.max_districts FROM users u JOIN plans p ON p.key = u.plan WHERE u.id = $1`,
-      [userId],
-    );
-    if (rows[0]) maxDistricts = Number(rows[0].max_districts);
-  }
-  return { districts, maxDistricts };
-}
 
 /** Start, or restart, a wizard and show its first step. */
 /**
  * Send somebody to the form instead of asking here.
  *
- * The wizard that used to live at these two commands is still in the file and
- * still reachable by an in-flight session, but nothing new is routed to it. It is
- * left in place on purpose: the form is the replacement, and deleting the working
- * path before the replacement has been used by a real person is how you end up
- * with neither.
+ * A six-step wizard used to live at these two commands, and it worked. It was
+ * replaced rather than improved because of a limit no amount of work on it would
+ * have moved: the state was a database row, the questions were Telegram keyboards
+ * and the answers were callback queries, so it could only ever exist in Telegram.
+ * A form is the one setup surface every channel can link to.
  *
- * Once the form has taken a few real sign-ups, `beginWizard`, `beginUpdate`,
- * `showStep`, the typed-answer handlers and `lib/wizard.ts` come out in one commit,
- * along with `wizard_sessions`.
+ * It is gone as of 0019 — the code, the tests and the table.
  */
+/**
+ * Offer the plans.
+ *
+ * Reached two ways: `/pay` typed in the chat, and the upgrade button on an alert,
+ * which is a `t.me/<bot>?start=pay` link. Both land here, because a person tapping a
+ * button and a person typing a command are asking the same question and should not
+ * get two different answers.
+ *
+ * One button, to the page that lists the plans — not one button per plan. Two
+ * buttons here would put the prices in two places: in this message and on the page.
+ * The day one changes they disagree, in the direction where somebody is charged what
+ * they were not shown. The page reads its prices from the same table the checkout
+ * charges from, so there is one number.
+ */
+async function offerUpgrade(chatId: string, account: Account): Promise<void> {
+  const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
+  const keyboard: Keyboard = [
+    [{ text: "💎 Choose a plan", url: `${siteUrl()}/upgrade?t=${token}` }],
+  ];
+  await sendMessage(chatId, await upgradeInvitation(account, token), keyboard);
+}
+
+
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {
   const where = `${siteUrl()}/`;
   await sendMessage(
@@ -404,207 +395,12 @@ async function sendToForm(chatId: string, existing: boolean): Promise<void> {
   );
 }
 
-async function beginWizard(
-  chatId: string,
-  userId: number | null,
-  step: Session["step"],
-  draft: Session["draft"],
-): Promise<void> {
-  const districtsKnown = await enabledDistricts();
-  if (!districtsKnown.length) {
-    // Better than a wizard whose first step has no buttons: nothing is being
-    // collected, so there is nothing to promise.
-    await sendMessage(chatId, "No districts are being covered yet. Please try again later.");
-    return;
-  }
-
-  // Any earlier wizard's keyboard is taken away before this one appears. Two live
-  // keyboards in a chat means the older one can still be tapped, and `apply()`
-  // would then be answering a step that has been left behind.
-  const previous = await loadSession(chatId);
-  if (previous?.promptMsgId) await clearKeyboard(chatId, previous.promptMsgId).catch(() => undefined);
-
-  const context = await wizardContext(userId);
-  const session: Session = { chatId, userId, step, draft, promptMsgId: null };
-  const view = render(session, context);
-  const messageId = await sendMessageReturningId(chatId, view.text, view.keyboard);
-  await saveSession({ ...session, promptMsgId: messageId });
-}
-
-/** /update, and /start from someone who already has a filter. */
-async function beginUpdate(chatId: string): Promise<void> {
-  const account = await accountForChat(chatId);
-  if (!account || account.subscription_id === null) {
-    // Nothing to overwrite, so there is nothing to ask about.
-    return beginWizard(chatId, account?.user_id ?? null, "districts", {});
-  }
-  // The current filter is the draft only so that the overwrite step can show it.
-  // Answering "replace" clears it — see `apply`.
-  return beginWizard(
-    chatId,
-    account.user_id,
-    "overwrite",
-    (account.criteria ?? {}) as Session["draft"],
-  );
-}
-
-/**
- * Show the session's current step.
- *
- * `fresh` decides where it appears, and the distinction matters more than it looks.
- * A tap is answered by editing in place: the person just touched that message, it is
- * on screen, and a new one would leave a dead copy above it.
- *
- * Typing is answered by a new message at the bottom. An edited message stays where
- * it was, so after two or three typed answers the prompt has scrolled out of sight
- * above the person's own replies — they are left looking at their own text with no
- * question visible. The old prompt is deleted rather than merely stripped of its
- * keyboard, so the chat holds one live wizard and not a column of stale ones.
- */
-async function showStep(
-  session: Session,
-  context: WizardContext,
-  fresh = false,
-): Promise<Session> {
-  const view = render(session, context);
-  if (fresh) {
-    if (session.promptMsgId) {
-      await deleteMessage(session.chatId, session.promptMsgId).catch(() => undefined);
-    }
-    const messageId = await sendMessageReturningId(session.chatId, view.text, view.keyboard);
-    return { ...session, promptMsgId: messageId };
-  }
-  if (session.promptMsgId) {
-    const edited = await editMessageText(
-      session.chatId,
-      session.promptMsgId,
-      view.text,
-      view.keyboard,
-    );
-    if (edited) return session;
-  }
-  const messageId = await sendMessageReturningId(session.chatId, view.text, view.keyboard);
-  return { ...session, promptMsgId: messageId };
-}
-
-/** A button tap. */
-async function tapped(
-  chatId: string,
-  callback: NonNullable<Update["callback_query"]>,
-): Promise<void> {
-  const acknowledge = (text?: string) =>
-    callback.id ? answerCallback(callback.id, text) : Promise.resolve(true);
-
-  const session = await loadSession(chatId);
-  if (!session) {
-    // The keyboard outlived its session — an hour of silence, or a finished wizard.
-    await acknowledge("That form has expired");
-    await sendMessage(chatId, "That was from an earlier setup. Send /start to begin again.");
-    return;
-  }
-
-  const action = parseCallback(callback.data);
-  if (!action) {
-    await acknowledge();
-    return;
-  }
-
-  const context = await wizardContext(session.userId);
-  const outcome = apply(session, action, context);
-
-  switch (outcome.kind) {
-    case "reject":
-      // The reason goes on the button, not into the chat: a refusal is about the
-      // tap that just happened and is stale a second later.
-      await acknowledge(outcome.reason);
-      return;
-
-    case "render": {
-      await acknowledge();
-      await saveSession(await showStep(outcome.session, context));
-      return;
-    }
-
-    case "abandon": {
-      await acknowledge();
-      if (session.promptMsgId) await clearKeyboard(chatId, session.promptMsgId).catch(() => undefined);
-      await dropSession(chatId);
-      await sendMessage(chatId, "Left as it was. /current shows what you have.");
-      return;
-    }
-
-    case "commit": {
-      await acknowledge();
-      await finishWizard(outcome.session);
-      return;
-    }
-  }
-}
-
-/** Districts typed rather than tapped, which is the only way to reach most of them. */
-async function districtsTyped(chatId: string, session: Session, text: string): Promise<void> {
-  const context = await wizardContext(session.userId);
-  const result = applyDistrictText(session, text, context);
-  if (!result.ok) {
-    // Named rather than silently dropped: a filter that quietly covers less than
-    // was asked for is worse than a refusal, because nobody finds out.
-    await sendMessage(chatId, `${result.reason}\n\nTry again, or tap one below.`);
-    return;
-  }
-  await saveSession(await showStep(result.session, context, true));
-}
 
 
-/** The price steps' typed answer. */
-async function priceTyped(chatId: string, session: Session, text: string): Promise<void> {
-  const result = applyPriceText(session, text);
-  if (!result.ok) {
-    // Sent as a message rather than edited into the prompt: the person typed, so
-    // the correction belongs next to what they typed.
-    await sendMessage(chatId, `${result.reason}\n\nSend a number, or tap Continue.`);
-    return;
-  }
-  const context = await wizardContext(session.userId);
-  await saveSession(await showStep(result.session, context, true));
-}
 
-async function finishWizard(session: Session): Promise<void> {
-  let committed;
-  try {
-    committed = await commitSession(session);
-  } catch (error) {
-    if (error instanceof InvalidForm) {
-      // The plan changed under a draft that was left open. Said plainly, with the
-      // draft kept, so nothing has to be answered again.
-      await sendMessage(session.chatId, `That didn't work: ${error.message}\n\n/pay — cover more districts`);
-      return;
-    }
-    throw error;
-  }
 
-  if (session.promptMsgId) await clearKeyboard(session.chatId, session.promptMsgId).catch(() => undefined);
 
-  const lines = [
-    committed.live
-      ? "Done. I'll message you when a new listing matches."
-      : "Your filter is saved, but your plan has ended, so nothing will be sent yet.",
-    "",
-    describeCriteria(session.draft),
-    "",
-    planLine(committed.planName, committed.planUntil, committed.live),
-  ];
-  if (committed.live) {
-    lines.push(
-      "",
-      "Only listings posted from now on are sent — nothing already on the market.",
-      "",
-      "/current — what I'm using · /update — change it · /stop — stop",
-    );
-  } else {
-    lines.push("", "/pay — turn the alerts back on");
-  }
-  await sendMessage(session.chatId, lines.join("\n"));
-}
+
 
 /** Push the command list to Telegram. Admin only; there is no second factor in a chat. */
 async function pushMenu(chatId: string): Promise<void> {

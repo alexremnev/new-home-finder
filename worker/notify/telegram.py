@@ -128,6 +128,16 @@ def size_of(text: str | None) -> str | None:
     )
 
 
+def _bot_username() -> str:
+    """The bot's @name, for a deep link back into the chat.
+
+    Empty when unset, and the button is then simply not attached — a link to
+    `t.me/?start=pay` goes nowhere, and a broken button on every free-tier alert is
+    worse than no button. The 💎 line still says what is being withheld either way.
+    """
+    return (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
+
+
 def render_listing(view: ListingView) -> str:
     """Render one listing, as HTML.
 
@@ -293,6 +303,35 @@ class TelegramNotifier:
             #
             # `prefer_large_media` asks for the big rendering rather than the
             # thumbnail — small is worse than none for judging a flat.
+            # The way out of the reduced share, on the message that demonstrates it.
+            #
+            # A deep link into the bot rather than a link to the checkout page: a
+            # link in a chat message lives as long as the message does, which is for
+            # ever, so it must carry no secret. Tapping this opens the chat, the bot
+            # mints a fresh short-lived token, and the plans are offered there.
+            #
+            # Only on messages where the share is being applied. On a paid plan's
+            # alerts it would be an advert for something already bought.
+            **(
+                {
+                    "reply_markup": {
+                        "inline_keyboard": [[
+                            {
+                                "text": "💎 Upgrade to Premium",
+                                "url": f"https://t.me/{_bot_username()}?start=pay",
+                            }
+                        ]]
+                    }
+                }
+                if (
+                    alert.kind == "listing"
+                    and alert.listing is not None
+                    and alert.listing.share is not None
+                    and alert.listing.share < 100
+                    and _bot_username()
+                )
+                else {}
+            ),
             "link_preview_options": (
                 {
                     "url": alert.listing.url,

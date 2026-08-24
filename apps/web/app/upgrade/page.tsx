@@ -1,118 +1,108 @@
-// What you get, what it costs, and how to pay.
+// Choose a plan.
 //
-// Prices and limits are read from the `plans` table, so this page cannot promise
-// something different from what the worker enforces. If a plan is edited in the
-// database, this page changes with it.
+// The one page where money is asked for, reached from two places: a link in the bot
+// and a link in an alert. One implementation, so there is one place where a price is
+// decided and one place where a payment starts.
 //
-// Payment is deliberately a choice of route rather than one hard-wired provider.
-// A bank transfer with a reference works from the first day and needs no account
-// anywhere; a card checkout is added by setting STRIPE_PRICE_ID, and this page
-// then shows the button instead. Neither path can grant a plan by itself — that
-// happens in /api/stripe/webhook or by /grant in the bot, both of which write to
-// `payments`.
+// The token in the URL is how this page knows whose plan it is about. It is short
+// lived and single purpose — see `issueToken` — so a link left in a chat stops
+// working rather than becoming a way to top up somebody else's account.
 
-import { accountForToken, paidPlans, siteUrl } from "@/lib/plans";
-import { cardPaymentsEnabled } from "@/lib/stripe";
+import { accountForToken, paidPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
-function money(pence: number): string {
-  return pence % 100 === 0 ? `£${pence / 100}` : `£${(pence / 100).toFixed(2)}`;
-}
+const money = (pence: number) =>
+  "£" + (pence / 100).toLocaleString("en-GB", { minimumFractionDigits: 0 });
 
-export default async function Page({
+/** What a plan costs per day, for comparing two lengths honestly. */
+const perDay = (pence: number, days: number | null) =>
+  days && days > 0 ? `${money(Math.round(pence / days))} a day` : null;
+
+export default async function UpgradePage({
   searchParams,
 }: {
   searchParams: Promise<{ t?: string }>;
 }) {
-  const token = (await searchParams).t ?? "";
-  // The page works without a token — the expiry message links here plainly — but
-  // only a token identifies whose plan is being paid for, so the payment
-  // reference and the card button appear only with one.
+  const { t } = await searchParams;
+  const token = t ?? "";
   const account = token ? await accountForToken(token, "upgrade").catch(() => null) : null;
   const plans = await paidPlans().catch(() => []);
-  const card = cardPaymentsEnabled() && account !== null;
-  const transfer = process.env.PAYMENT_LINK;
+
+  if (!account) {
+    return (
+      <div className="panel">
+        <h1>That link has expired</h1>
+        <p className="lede">
+          Upgrade links are short lived on purpose — one left in a chat should stop
+          working. Send <strong>/pay</strong> to the bot for a new one.
+        </p>
+      </div>
+    );
+  }
+
+  if (plans.length === 0) {
+    return (
+      <div className="panel">
+        <h1>Nothing to buy yet</h1>
+        <p className="lede">No paid plan is set up. Nothing has been charged.</p>
+      </div>
+    );
+  }
+
+  // Cheapest first from the query, and the more expensive one carries the
+  // recommendation — it is the better value per day, which is the only honest reason
+  // to point at it.
+  const best = plans.reduce((a, b) =>
+    (a.duration_days ?? 0) >= (b.duration_days ?? 0) ? a : b,
+  );
 
   return (
-    <main>
-      <h1 style={{ fontSize: "1.5rem" }}>More districts</h1>
-
-      {plans.length === 0 ? (
-        <p>Nothing is on sale at the moment.</p>
-      ) : (
-        <ul style={{ paddingLeft: "1.1rem" }}>
-          {plans.map((plan) => (
-            <li key={plan.key} style={{ marginBottom: "0.5rem" }}>
-              <strong>{plan.display_name}</strong> — {money(plan.price_pence)}
-              {plan.duration_days ? ` for ${plan.duration_days} days` : ""}: up to{" "}
-              {plan.max_districts} districts.
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <h2 style={{ fontSize: "1.1rem", marginTop: "1.5rem" }}>How to pay</h2>
-
-      {card && (
-        <p>
-          <a
-            href={`/api/checkout?t=${encodeURIComponent(token)}`}
-            style={{
-              display: "inline-block",
-              padding: "0.6rem 1.1rem",
-              background: "#0a7",
-              color: "#fff",
-              borderRadius: 5,
-              textDecoration: "none",
-            }}
-          >
-            Pay by card
-          </a>
-        </p>
-      )}
-
-      {transfer ? (
-        <p>
-          {card ? "Or send" : "Send"} the amount to <a href={transfer}>{transfer}</a> and{" "}
-          <strong>put your reference in the message</strong>:{" "}
-          {account?.payment_ref ? (
-            <code style={{ background: "#f2f2f2", padding: "0.1rem 0.3rem" }}>
-              {account.payment_ref}
-            </code>
-          ) : (
-            <>
-              send <em>/upgrade</em> to the bot to see yours
-            </>
-          )}
-          . Without it there is no way to tell whose account to extend, and the plan has
-          to be granted by hand either way.
-        </p>
-      ) : (
-        !card && (
-          <p>
-            Payment is not set up yet. Send <em>/upgrade</em> to the bot and you will be
-            told how to pay.
-          </p>
-        )
-      )}
-
-      {!account && (
-        <p style={{ color: "#777", fontSize: "0.85rem" }}>
-          Send <em>/upgrade</em> to the bot to get a link that knows which account is
-          yours.
-        </p>
-      )}
-
-      <p style={{ color: "#777", fontSize: "0.85rem", marginTop: "1.5rem" }}>
-        Every listing that matches your filter is sent, on every plan, from the run that
-        found it — a paid plan covers more districts and lasts longer, it is not a faster
-        queue or a bigger allowance. Your filter is kept when a plan ends,
-        so renewing turns the alerts back on with nothing to set up again.
+    <>
+      <h1>Every listing, the moment it appears</h1>
+      <p className="lede">
+        The free plan sends a share of what matches your filter. A paid plan sends all
+        of it — same filter, nothing else to set up.
       </p>
-      <p style={{ fontSize: "0.85rem" }}>
-        <a href={siteUrl()}>Back</a>
+
+      <div className="plans">
+        {plans.map((plan) => {
+          const rate = perDay(plan.price_pence, plan.duration_days);
+          return (
+            <div
+              key={plan.key}
+              className={plan.key === best.key ? "plan plan-best" : "plan"}
+            >
+              {plan.key === best.key && <span className="plan-flag">Better value</span>}
+              <h2>{plan.display_name}</h2>
+              <div className="plan-price">{money(plan.price_pence)}</div>
+              {rate && <p className="hint">{rate}</p>}
+              <ul className="plan-points">
+                <li>Every matching listing, not a share</li>
+                <li>Up to {plan.max_districts} areas</li>
+                <li>
+                  {plan.duration_days
+                    ? `${plan.duration_days} days from today`
+                    : "No end date"}
+                </li>
+              </ul>
+              <a
+                className="cta"
+                href={`/api/checkout?t=${encodeURIComponent(token)}&plan=${encodeURIComponent(plan.key)}`}
+              >
+                Pay by card
+              </a>
+            </div>
+          );
+        })}
+      </div>
+
+      <p className="footnote">
+        One payment for one period — nothing recurring, and no card kept on file by
+        us. Payment is handled by Stripe; the card never touches this server. When it
+        ends the alerts drop back to the free share rather than stopping, and your
+        filter is kept either way.
       </p>
-    </main>
+    </>
   );
 }

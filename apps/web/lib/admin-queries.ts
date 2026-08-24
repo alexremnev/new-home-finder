@@ -350,3 +350,153 @@ export async function jobHealth(): Promise<JobHealth[]> {
       ORDER BY job`,
   );
 }
+
+// ── the log ────────────────────────────────────────────────────────────────
+
+export type Filters = {
+  range: Range;
+  job?: string;
+  level?: string;
+  q?: string;
+};
+
+export type Event = {
+  id: number;
+  ts: string;
+  level: string;
+  job: string;
+  stage: string | null;
+  source_key: string | null;
+  message: string;
+  ctx: Record<string, unknown>;
+};
+
+/**
+ * The event log, filtered.
+ *
+ * `job_events` has been written since the first migration and nothing has ever read
+ * it except a hand-typed query. That is the gap this closes: the worker has produced
+ * a structured, queryable log all along, with a run id, a stage and a JSON context on
+ * every line — it just had no window.
+ *
+ * Every filter is optional and applied as `($n IS NULL OR …)`. One statement handles
+ * every combination, so there is no query built from strings and no chance of a
+ * filter that silently does nothing because a branch was missed.
+ *
+ * The text search is `ILIKE` over the message, not a full-text index. At this volume
+ * a sequential scan over two days of events is milliseconds, and an index would be a
+ * thing to maintain for a search nobody runs twice.
+ */
+export async function events(filter: Filters, limit = 300): Promise<Event[]> {
+  return query<Event>(
+    `SELECT e.id, e.ts::text, e.level, r.job, e.stage, e.source_key, e.message, e.ctx
+       FROM job_events e
+       JOIN job_runs r ON r.id = e.run_id
+      WHERE e.ts > now() - make_interval(days => $1::int)
+        AND ($2::text IS NULL OR r.job = $2)
+        AND ($3::text IS NULL OR e.level = $3)
+        AND ($4::text IS NULL OR e.message ILIKE '%' || $4 || '%')
+      ORDER BY e.ts DESC
+      LIMIT $5`,
+    [filter.range, filter.job ?? null, filter.level ?? null, filter.q ?? null, limit],
+  );
+}
+
+/** How many of each level, for the filter bar's counts. */
+export async function eventCounts(filter: Filters): Promise<Slice[]> {
+  return query<Slice>(
+    `SELECT e.level AS label, count(*)::int AS value
+       FROM job_events e
+       JOIN job_runs r ON r.id = e.run_id
+      WHERE e.ts > now() - make_interval(days => $1::int)
+        AND ($2::text IS NULL OR r.job = $2)
+      GROUP BY 1
+      ORDER BY 2 DESC`,
+    [filter.range, filter.job ?? null],
+  );
+}
+
+/** The jobs that have ever run, for the filter bar. Not a constant: a job added
+ *  tomorrow should appear without an edit here. */
+export async function knownJobs(): Promise<string[]> {
+  const rows = await query<{ job: string }>(
+    `SELECT DISTINCT job FROM job_runs ORDER BY job`,
+  );
+  return rows.map((r) => r.job);
+}
+
+// ── metrics worth a chart ──────────────────────────────────────────────────
+
+/**
+ * The share of messages the parser could not read, per day.
+ *
+ * A share and not two counts. The two numbers on one chart would be a second scale
+ * away from a dual axis, and the question is not "how many arrived" — that is the
+ * ingest chart — but "is the parser keeping up with the format". A rising line means
+ * the feed changed and nobody noticed.
+ */
+export async function unparseableShare(days: Range): Promise<Slice[]> {
+  return query<Slice>(
+    `WITH span AS (
+       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
+     )
+     SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
+            coalesce(
+              round(
+                100.0 * count(m.id) FILTER (WHERE m.status = 'unparseable')
+                / nullif(count(m.id), 0)
+              )::int,
+              0
+            ) AS value
+       FROM span
+       LEFT JOIN source_messages m ON m.stored_at::date = span.day
+      GROUP BY span.day
+      ORDER BY span.day`,
+    [days],
+  );
+}
+
+export type Delivery = {
+  oldest_queued_mins: number | null;
+  median_latency_secs: number | null;
+  failed_24h: number;
+  skipped_24h: number;
+};
+
+/**
+ * Is delivery keeping up?
+ *
+ * The oldest queued item is the number that matters. An average queue length says
+ * nothing — a queue of ten that turns over every minute is healthy and a queue of ten
+ * that has not moved for an hour is broken, and only the age tells them apart.
+ *
+ * Latency is measured as sent minus created, which includes the wait in the queue.
+ * That is the number a subscriber experiences: a listing that appeared twenty minutes
+ * ago is twenty minutes stale however fast the send itself was.
+ */
+export async function delivery(): Promise<Delivery> {
+  const rows = await query<Delivery>(
+    `SELECT
+       (SELECT round(extract(epoch FROM now() - min(created_at)) / 60)::int
+          FROM notifications WHERE status = 'queued')            AS oldest_queued_mins,
+       (SELECT round(
+                 percentile_cont(0.5) WITHIN GROUP (
+                   ORDER BY extract(epoch FROM sent_at - created_at)
+                 )
+               )::int
+          FROM notifications
+         WHERE status = 'sent' AND sent_at > now() - interval '24 hours')
+                                                                 AS median_latency_secs,
+       (SELECT count(*)::int FROM notifications
+         WHERE status = 'failed' AND created_at > now() - interval '24 hours')
+                                                                 AS failed_24h,
+       (SELECT count(*)::int FROM notifications
+         WHERE status = 'skipped' AND created_at > now() - interval '24 hours')
+                                                                 AS skipped_24h`,
+  );
+  return (
+    rows[0] ?? {
+      oldest_queued_mins: null, median_latency_secs: null, failed_24h: 0, skipped_24h: 0,
+    }
+  );
+}

@@ -1,43 +1,68 @@
 // Start a card payment.
 //
-// The token in the URL is how this route knows whose plan to extend. Without it
-// there is no way to connect a card payment to an account, and a payment that
-// cannot be attributed is a refund waiting to happen.
+// ── what identifies the buyer, and what identifies the purchase ─────────────
+//
+// The token says who. Without it a payment cannot be attributed to an account, and
+// an unattributable payment is a refund waiting to happen.
+//
+// The `plan` parameter says what — and it is a key looked up in the database, never
+// a price sent to Stripe. Anything arriving in a URL is somebody's suggestion: a
+// route that took an amount from the query string would sell a month for a penny to
+// the first person who tried it.
 
 import { NextResponse } from "next/server";
 
-import { accountForToken, siteUrl } from "@/lib/plans";
-import { cardPaymentsEnabled, stripeClient } from "@/lib/stripe";
+import { accountForToken, paidPlan, siteUrl } from "@/lib/plans";
+import { stripeClient } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<NextResponse | Response> {
-  if (!cardPaymentsEnabled()) {
-    return NextResponse.json({ error: "card payments are not set up" }, { status: 503 });
-  }
   const url = new URL(request.url);
   const token = url.searchParams.get("t") ?? "";
+  const wanted = url.searchParams.get("plan") ?? "";
+
   const account = token ? await accountForToken(token, "upgrade") : null;
   if (!account) {
     return NextResponse.json(
-      { error: "this link has expired; send /upgrade to the bot for a new one" },
+      { error: "this link has expired; send /pay to the bot for a new one" },
       { status: 404 },
     );
   }
 
+  const plan = wanted ? await paidPlan(wanted) : null;
+  if (!plan) {
+    return NextResponse.json({ error: "no such plan" }, { status: 404 });
+  }
+  if (!plan.stripe_price_id) {
+    // A plan with no Stripe price is a plan somebody added to the table and has not
+    // finished setting up. Said plainly, because the alternative is a Stripe error
+    // page that blames the buyer.
+    return NextResponse.json(
+      { error: `${plan.display_name} is not set up for card payment yet` },
+      { status: 503 },
+    );
+  }
+
   const stripe = stripeClient();
-  if (!stripe) return NextResponse.json({ error: "not configured" }, { status: 503 });
+  if (!stripe) {
+    return NextResponse.json({ error: "card payments are not set up" }, { status: 503 });
+  }
 
   const session = await stripe.checkout.sessions.create({
+    // `payment`, not `subscription`: this sells a fixed period that has to be bought
+    // again, which is what the plan means and what `plan_until` records. A Stripe
+    // subscription would put the renewal schedule in two places — theirs and ours —
+    // and the two would disagree the first time a card was declined.
     mode: "payment",
-    line_items: [{ price: process.env.STRIPE_PRICE_ID!, quantity: 1 }],
+    line_items: [{ price: plan.stripe_price_id, quantity: 1 }],
     success_url: `${siteUrl()}/upgrade/thanks`,
-    cancel_url: `${siteUrl()}/upgrade?t=${token}`,
-    // Both, on purpose. `client_reference_id` is what shows up in the Stripe
-    // dashboard next to the payment, and the metadata is what the webhook reads.
+    cancel_url: `${siteUrl()}/upgrade?t=${encodeURIComponent(token)}`,
+    // Both, on purpose. `client_reference_id` is what appears in the Stripe
+    // dashboard beside the payment; the metadata is what the webhook reads back.
     client_reference_id: account.payment_ref ?? String(account.user_id),
-    metadata: { user_id: String(account.user_id), plan: process.env.STRIPE_PLAN_KEY ?? "paid" },
+    metadata: { user_id: String(account.user_id), plan: plan.key },
   });
 
   if (!session.url) {

@@ -73,91 +73,9 @@ export async function sendMessage(
   });
 }
 
-/**
- * The message id, so a keyboard can be edited in place afterwards.
- *
- * Separate from `sendMessage` because only the wizard needs the id, and making
- * every caller handle a nullable number to get a boolean's worth of information
- * would be worse than one extra function.
- */
-export async function sendMessageReturningId(
-  chatId: string,
-  text: string,
-  keyboard?: Keyboard,
-): Promise<string | null> {
-  const token = process.env.TELEGRAM_TOKEN;
-  if (!token) throw new Error("TELEGRAM_TOKEN is not set");
-  const response = await fetch(`${API}/bot${token}/sendMessage`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text,
-      disable_web_page_preview: true,
-      ...(keyboard && { reply_markup: { inline_keyboard: keyboard } }),
-    }),
-  });
-  if (!response.ok) {
-    console.error("telegram sendMessage failed", {
-      status: response.status,
-      body: await response.text().catch(() => ""),
-    });
-    return null;
-  }
-  const body = (await response.json().catch(() => null)) as
-    | { result?: { message_id?: number } }
-    | null;
-  const id = body?.result?.message_id;
-  return id === undefined ? null : String(id);
-}
-
-/**
- * Rewrite the message a keyboard is attached to.
- *
- * This is how the wizard advances: one message, edited five times, rather than
- * five messages each leaving a live keyboard behind. An old keyboard is not
- * merely untidy — it stays tappable, and a tap on step 2's buttons after step 4
- * has been answered is a state machine going backwards.
- *
- * Returns false when the edit was rejected, which the caller treats as "send a
- * fresh message instead": Telegram refuses an edit whose text and keyboard are
- * both unchanged, and refuses one on a message too old to touch.
- */
-export async function editMessageText(
-  chatId: string,
-  messageId: string,
-  text: string,
-  keyboard?: Keyboard,
-): Promise<boolean> {
-  return call("editMessageText", {
-    chat_id: chatId,
-    message_id: Number(messageId),
-    text,
-    disable_web_page_preview: true,
-    ...(keyboard && { reply_markup: { inline_keyboard: keyboard } }),
-  });
-}
-
-/**
- * Remove one of our own messages.
- *
- * Used to keep exactly one live wizard prompt in the chat. Telegram allows a bot to
- * delete its own messages for 48 hours, which is far longer than a wizard lives, and
- * a failure is ignored: a leftover prompt is untidy, not broken.
- */
-export async function deleteMessage(chatId: string, messageId: string): Promise<boolean> {
-  return call("deleteMessage", { chat_id: chatId, message_id: Number(messageId) });
-}
 
 
-/** Take the keyboard away, leaving the text. Used when a wizard is finished or abandoned. */
-export async function clearKeyboard(chatId: string, messageId: string): Promise<boolean> {
-  return call("editMessageReplyMarkup", {
-    chat_id: chatId,
-    message_id: Number(messageId),
-    reply_markup: { inline_keyboard: [] },
-  });
-}
+
 
 /**
  * Acknowledge a button tap.

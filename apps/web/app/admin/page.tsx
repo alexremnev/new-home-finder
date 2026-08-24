@@ -21,26 +21,31 @@ import { redirect } from "next/navigation";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import {
-  byDistrict, byPrice, jobHealth, overview, planMix, problems, recentComps,
-  recentPayments, recentRuns, sentPerDay, subscribers, visitsPerDay,
-  type Range,
+  byDistrict, byPrice, delivery, eventCounts, events, jobHealth, knownJobs, overview,
+  planMix, problems, recentComps, recentPayments, recentRuns, sentPerDay, subscribers,
+  unparseableShare, visitsPerDay,
+  type Filters, type Range,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
 
 import { Bars, Columns, PlanMix, Stat, TimeSeries } from "./charts";
+import { FilterBar } from "./filters";
+import { Live } from "./live";
 
 export const dynamic = "force-dynamic";
-
-const RANGES: { days: Range; label: string }[] = [
-  { days: 1, label: "Today" },
-  { days: 7, label: "7 days" },
-  { days: 30, label: "30 days" },
-  { days: 90, label: "90 days" },
-];
 
 const pounds = (pence: number) =>
   "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 0 });
 const comma = (n: number) => n.toLocaleString("en-GB");
+
+/** Log levels to the status palette. Reserved colours, so a level never wears a
+ *  series hue and a series never wears a level's. */
+const LEVELS: Record<string, string> = {
+  error: "critical",
+  warn: "warning",
+  info: "good",
+  debug: "warning",
+};
 
 /** How a problem reads: an icon and a word, never colour alone. */
 const SEVERITY: Record<string, { icon: string; word: string; className: string }> = {
@@ -54,7 +59,13 @@ const SEVERITY: Record<string, { icon: string; word: string; className: string }
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams: Promise<{ range?: string; done?: string }>;
+  searchParams: Promise<{
+    range?: string;
+    done?: string;
+    job?: string;
+    level?: string;
+    q?: string;
+  }>;
 }) {
   // Checked here as well as in middleware, and the duplication is the point. This
   // page renders every subscriber's filter; if the matcher is ever edited wrongly
@@ -64,18 +75,34 @@ export default async function AdminPage({
   if (!(await sessionIsValid(jar.get(SESSION_COOKIE)?.value))) redirect("/admin/login");
 
   const params = await searchParams;
-  const days = (RANGES.find((r) => String(r.days) === params.range)?.days ?? 7) as Range;
+  // Every filter comes from the URL and is validated here rather than trusted. A
+  // range of "999" or a level of "'; DROP" is not an error to report — it is a
+  // parameter somebody typed, and the honest answer is the default view.
+  const days = ([1, 7, 30, 90] as const).includes(Number(params.range) as Range)
+    ? (Number(params.range) as Range)
+    : (7 as Range);
+  const level = ["debug", "info", "warn", "error"].includes(params.level ?? "")
+    ? params.level
+    : undefined;
+  const filters: Filters = {
+    range: days,
+    job: params.job?.slice(0, 40) || undefined,
+    level,
+    q: params.q?.slice(0, 80) || undefined,
+  };
 
   // One round of queries, in parallel. They are independent and the page cannot
   // render until all of them are in, so waiting for them one at a time would be
   // the sum of their latencies for no benefit.
   const [
     stats, plans, sent, visits, districts, prices, people, faults, payments, comps,
-    runs, health,
+    runs, health, log, levels, jobs, feedHealth, sending,
   ] = await Promise.all([
     overview(), planMix(), sentPerDay(days), visitsPerDay(days),
     byDistrict(days), byPrice(days), subscribers(), problems(),
     recentPayments(), recentComps(), recentRuns(), jobHealth(),
+    events(filters), eventCounts(filters), knownJobs(), unparseableShare(days),
+    delivery(),
   ]);
 
   return (
@@ -88,10 +115,17 @@ export default async function AdminPage({
             delivered all time
           </p>
         </div>
-        <form method="post" action="/api/admin/logout">
-          <button type="submit" className="ghost">Sign out</button>
-        </form>
+        <div className="admin-head-right">
+          <Live />
+          <form method="post" action="/api/admin/logout">
+            <button type="submit" className="ghost">Sign out</button>
+          </form>
+        </div>
       </header>
+
+      {/* One bar, above everything, because these filters apply to everything. A
+          filter beside one chart reads as belonging to that chart. */}
+      <FilterBar chosen={filters} jobs={jobs} levels={levels} />
 
       {params.done === "extended" && (
         <p className="note">Plan extended. The new date is in the table below.</p>
@@ -209,16 +243,33 @@ export default async function AdminPage({
 
       {/* ── 4. what is happening ───────────────────────────────────────── */}
       <section>
-        <div className="range">
-          {RANGES.map((r) => (
-            <a key={r.days} href={`/admin?range=${r.days}`}
-               className={r.days === days ? "range-on" : ""}>
-              {r.label}
-            </a>
-          ))}
+        <div className="stats" style={{ marginBottom: "1.5rem" }}>
+          <Stat
+            label="Oldest thing waiting"
+            value={
+              sending.oldest_queued_mins === null
+                ? "nothing"
+                : `${comma(sending.oldest_queued_mins)} min`
+            }
+            note="a queue that stops moving looks like a small one"
+          />
+          <Stat
+            label="Typical delay"
+            value={
+              sending.median_latency_secs === null
+                ? "—"
+                : `${comma(sending.median_latency_secs)}s`
+            }
+            note="queued to delivered, median, 24h"
+          />
+          <Stat label="Failed sends, 24h" value={comma(sending.failed_24h)} />
+          <Stat label="Held back, 24h" value={comma(sending.skipped_24h)}
+                note="free tier's share" />
         </div>
 
         <TimeSeries data={sent} title={`Alerts delivered · last ${days} day${days === 1 ? "" : "s"}`} />
+        <TimeSeries data={feedHealth} unit="%"
+                    title="Messages the parser could not read, % of the day's messages" />
         <TimeSeries data={visits} title={`Unique visitors · last ${days} day${days === 1 ? "" : "s"}`} />
         <Bars data={districts} title="Alerts by district" />
         <Columns data={prices} title="Alerts by rent, in £250 bands"
@@ -319,6 +370,59 @@ export default async function AdminPage({
               </tbody>
             </table>
           </>
+        )}
+      </section>
+
+      {/* ── 6. the log ─────────────────────────────────────────────────── */}
+      <section>
+        <h2>
+          Log{" "}
+          <span className="section-note">
+            {comma(log.length)} shown
+            {filters.q ? ` · matching "${filters.q}"` : ""}
+          </span>
+        </h2>
+        {log.length === 0 ? (
+          <p className="hint">
+            Nothing matches. The worker only logs warnings and errors at this level —
+            silence here is the good outcome.
+          </p>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>When</th><th>Level</th><th>Job</th><th>Stage</th><th>Message</th>
+              </tr>
+            </thead>
+            <tbody>
+              {log.map((entry) => (
+                <tr key={entry.id}>
+                  <td className="muted">{entry.ts.slice(5, 19)}</td>
+                  <td>
+                    <span className={`badge ${LEVELS[entry.level] ?? "warning"}`}>
+                      {entry.level}
+                    </span>
+                  </td>
+                  <td className="muted">{entry.job}</td>
+                  <td className="muted">{entry.stage ?? "—"}</td>
+                  <td className="wrap">
+                    {entry.message}
+                    {/* The context, when there is any. It is where the worker puts
+                        the numbers that explain the line, and dropping it would make
+                        this a list of sentences instead of a log. */}
+                    {entry.ctx && Object.keys(entry.ctx).length > 0 && (
+                      <span className="counters">
+                        {" "}
+                        {Object.entries(entry.ctx)
+                          .map(([name, value]) => `${name}=${String(value)}`)
+                          .join(" ")}
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </section>
 

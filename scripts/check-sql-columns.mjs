@@ -128,6 +128,8 @@ const NOT_COLUMNS = new Set(
    for share nowait skip locked days mins secs hours months years mo yy dd row rows only
    over partition filter lateral natural concat position substring extract epoch
    float8 float4 int2 int4 int8 bool bytea uuid inet interval money
+   nullif greatest least mod div sign power sqrt trunc ceiling
+   percentile_disc mode rank dense_rank row_number lag lead
    nothing constraint default add column alter table create index primary key
    foreign references cascade restrict check unique if not to_jsonb jsonb_build_object
    string_agg array_agg date_trunc age justify_hours width_bucket percentile_cont

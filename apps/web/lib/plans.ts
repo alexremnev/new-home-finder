@@ -15,6 +15,8 @@ export type Plan = {
   max_districts: number;
   duration_days: number | null;
   price_pence: number;
+  /** The Stripe Price this plan is bought with. NULL means it cannot be bought. */
+  stripe_price_id: string | null;
 };
 
 export type Account = {
@@ -44,7 +46,10 @@ export async function signupPlan(): Promise<Plan> {
 
 export async function paidPlans(): Promise<Plan[]> {
   return query<Plan>(
-    `SELECT key, display_name, max_districts, duration_days, price_pence
+    // Cheapest first, because that is the order somebody comparing two prices
+    // reads them in, and the shorter plan is the lower commitment to offer first.
+    `SELECT key, display_name, max_districts, duration_days, price_pence,
+            stripe_price_id
        FROM plans WHERE enabled AND price_pence > 0 ORDER BY price_pence`,
   );
 }
@@ -198,6 +203,19 @@ export async function accountForToken(
       ORDER BY s.id DESC
       LIMIT 1`,
     [token, purpose],
+  );
+  return rows[0] ?? null;
+}
+
+
+/** One purchasable plan by key, or null. Used by checkout, which is handed a key
+ *  from a URL and must not trust it. */
+export async function paidPlan(key: string): Promise<Plan | null> {
+  const rows = await query<Plan>(
+    `SELECT key, display_name, max_districts, duration_days, price_pence,
+            stripe_price_id
+       FROM plans WHERE key = $1 AND enabled AND price_pence > 0`,
+    [key],
   );
   return rows[0] ?? null;
 }

@@ -946,3 +946,203 @@ form p.error {
   font-size: 0.75rem;
   white-space: pre-wrap;
 }
+
+/* ── the console's filter bar and live control ────────────────────────────────
+ *
+ * One row of controls above everything, so it reads as applying to the page rather
+ * than to whichever card it sits nearest. */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.filter-group { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+
+.filter-group a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.filter-group a:hover { border-color: var(--accent); text-decoration: none; }
+
+/* The selected filter is filled, not tinted. On a row of eight chips a tint is a
+   guess and a fill is an answer. */
+.filter-group a.range-on,
+.live-choices button.range-on {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+  font-weight: 600;
+}
+
+.filter-count {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--ink-soft);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.filter-group a.range-on .filter-count { background: rgb(255 255 255 / 20%); color: #fff; }
+
+.filter-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.filter-search input[type="text"] {
+  width: 13rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+}
+
+.filter-clear { font-size: 0.75rem; }
+
+.admin-head-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.live {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* How old what you are looking at is. Stated always, because a stale number with no
+   timestamp is worse than no number — it is believed. */
+.live-age {
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5rem;
+  text-align: right;
+}
+
+.live-age.stale { color: var(--bad); font-weight: 600; }
+
+.live-choices { display: flex; gap: 0.2rem; }
+
+.live-choices button {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.live-choices button:hover { border-color: var(--accent); }
+
+.section-note {
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  font-weight: 400;
+}
+
+@media (max-width: 52rem) {
+  .filters { gap: 0.5rem 0.75rem; }
+  .filter-search input[type="text"] { width: 100%; }
+}
+
+/* ── choosing a plan ──────────────────────────────────────────────────────────
+ *
+ * Two cards side by side, and only one of them marked. Marking both would be no
+ * recommendation, and marking the cheaper one would be a recommendation against the
+ * thing worth recommending — the longer plan is the better value per day, which is
+ * the only honest reason to point at it. */
+
+.plans {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.plan {
+  position: relative;
+  padding: 1.5rem 1.35rem 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+/* A border and a tinted head, not a different colour scheme. The recommended card
+   should read as the same card with a note on it. */
+.plan-best { border-color: var(--accent); border-width: 2px; }
+
+.plan-flag {
+  position: absolute;
+  top: -0.7rem;
+  left: 1.2rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.plan h2 {
+  margin: 0 0 0.2rem;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+/* Proportional figures: a standalone number, not a column to align. */
+.plan-price {
+  font-size: 2.25rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.plan-points {
+  margin: 1rem 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9375rem;
+}
+
+.plan-points li {
+  position: relative;
+  padding-left: 1.4rem;
+  margin-bottom: 0.4rem;
+}
+
+.plan-points li::before {
+  content: "✓";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.plan .cta { margin-top: 0; }
