@@ -45,11 +45,30 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const session = event.data.object as Stripe.Checkout.Session;
   const userId = Number(session.metadata?.user_id);
-  const planKey = session.metadata?.plan ?? "paid";
-  if (!Number.isFinite(userId)) {
-    console.error("stripe session without a user_id", { session: session.id });
-    // 200: retrying will not add the metadata. This needs a person, not a retry.
-    return NextResponse.json({ ok: true, error: "no user_id in metadata" });
+  // No default. There used to be one — `?? "paid"` — and 0020 disabled that plan,
+  // which turned a session with no plan in its metadata into a payment that could
+  // never be granted: the lookup below finds nothing, the transaction throws, the
+  // response is 500, and Stripe retries for three days before giving up. Money taken
+  // and nothing given, discovered by accident.
+  //
+  // Guessing is worse than refusing. Which plan somebody bought is not something to
+  // infer from a price, and every session this route creates sets the metadata — so
+  // one arriving without it is a bug or a hand-made session, and either needs a
+  // person rather than a default.
+  const planKey = session.metadata?.plan;
+  if (!Number.isFinite(userId) || !planKey) {
+    console.error("stripe session missing metadata", {
+      session: session.id,
+      user_id: session.metadata?.user_id ?? null,
+      plan: session.metadata?.plan ?? null,
+      // The amount, so the payment can be found and granted by hand from the log
+      // alone. Without it this line says a payment went wrong and nothing else.
+      amount_pence: session.amount_total,
+    });
+    // 200, not 500: retrying will not add metadata that was never there. Stripe
+    // would spend three days rediscovering that, and the log line would repeat
+    // instead of standing out.
+    return NextResponse.json({ ok: true, error: "incomplete metadata" });
   }
 
   try {

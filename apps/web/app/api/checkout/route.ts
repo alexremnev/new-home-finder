@@ -44,6 +44,27 @@ export async function GET(request: Request): Promise<NextResponse | Response> {
       { status: 503 },
     );
   }
+  if (!plan.stripe_price_id.startsWith("price_")) {
+    // Almost always a Product id where a Price id belongs. They are different
+    // objects — a product holds one or more prices — and the dashboard puts the
+    // product's id in the more prominent place, so `prod_…` is the easy thing to
+    // copy. Stripe's own answer to it is "No such price", which names the symptom
+    // and not the mistake.
+    //
+    // Checked here rather than by a constraint on the column: a shape rule in the
+    // database would be a second place to update if Stripe ever changes its
+    // prefixes, and this is the one place the value is used.
+    return NextResponse.json(
+      {
+        error:
+          `${plan.display_name} has "${plan.stripe_price_id}" where a Price id ` +
+          `belongs. A Price id starts with "price_"; "prod_" is the Product that ` +
+          `holds it. Open the product in Stripe, find the row in its Pricing table, ` +
+          `and copy that id.`,
+      },
+      { status: 503 },
+    );
+  }
 
   const stripe = stripeClient();
   if (!stripe) {

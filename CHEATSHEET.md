@@ -435,3 +435,46 @@ scripts\win\run-job.cmd drain
 ```cmd
 del %TEMP%\home-alert-*.flag
 ```
+
+## Цены в Stripe
+
+`plans.stripe_price_id` — это **идентификатор** Price, который генерирует Stripe, а
+не сумма. Выглядит как `price_1QxYzAbCdEfGhIjKlMnOpQrS`; придумать нельзя, только
+скопировать.
+
+Dashboard → Product catalogue → **+ Add product**:
+
+1. Название, например `1 week of alerts`
+2. **One-off**, не Recurring — продаём фиксированный период, который покупают
+   заново. Подписка Stripe положила бы график продлений в два места, их и наше.
+3. Сумма, валюта GBP
+4. Сохранить → в блоке **Pricing** у строки с ценой своя кнопка копирования
+   (или ⋯ → Copy price ID) → оттуда `price_1QxYz…`
+
+**Не `prod_…`** — это идентификатор продукта, а не цены. Продукт это папка, цена
+это то, что в ней лежит и что продаётся. Дашборд показывает id продукта на более
+заметном месте, поэтому его и копируют. Checkout на него ответит «No such price»;
+у нас теперь проверка формы, которая скажет это словами.
+
+```sql
+UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'week';
+UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'month';
+```
+
+Без этого страница честно скажет «not set up for card payment yet» — не отдаст
+ошибку Stripe, которая винит покупателя.
+
+### Две ловушки
+
+**Test и live — разные идентификаторы.** Цена из тестового режима в живом не
+существует. При переходе на живой меняются оба `stripe_price_id`, плюс
+`STRIPE_SECRET_KEY`, плюс вебхук заводится заново. Забыть половину легко.
+
+**Сумма в Stripe и `price_pence` никем не сверяются.** Страница показывает нашу
+колонку, списывает Stripe по своей цене. Разойдутся — человеку покажут £5 и спишут
+£10. Сверить один раз:
+
+```sql
+SELECT key, price_pence / 100.0 AS "показываем £", stripe_price_id
+  FROM plans WHERE stripe_price_id IS NOT NULL;
+```
