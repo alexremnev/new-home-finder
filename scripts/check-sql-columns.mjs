@@ -42,6 +42,26 @@ function addColumn(table, column, type = "") {
   if (TEMPORAL_TYPE.test(type)) TEMPORAL.add(column.toLowerCase());
 }
 
+/**
+ * A column that has been taken away.
+ *
+ * Without this the schema map is a record of everything that has ever existed, which
+ * is the one shape that makes this tool worse than nothing: it stayed silent about
+ * `plans.max_alerts_per_day` — dropped in 0007, referenced again in 0020 — because as
+ * far as it knew the column was still there.
+ *
+ * Not removed from TEMPORAL: the set is only used to ask "is this word the name of a
+ * time", and a name that used to be one still is.
+ */
+function dropColumn(table, column) {
+  schema.get(table)?.delete(column.toLowerCase());
+}
+
+// Every migration's own DML, checked against the schema as it stands when that
+// migration runs. Collected here and reported after the whole schema is built, so a
+// single pass gives both the final shape and each step's mistakes.
+const migrationProblems = [];
+
 for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sort()) {
   const sql = readFileSync(join(MIGRATIONS, file), "utf8");
 
@@ -74,6 +94,52 @@ for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sor
       addColumn(table, added[1], added[0] + body.slice(added.index + added[0].length, added.index + added[0].length + 40));
     }
   }
+  for (const statement of sql.matchAll(/ALTER TABLE (?:ONLY )?(\w+)([\s\S]*?);/gi)) {
+    const [, table, body] = statement;
+    for (const gone of body.matchAll(/DROP COLUMN (?:IF EXISTS )?(\w+)/gi)) {
+      dropColumn(table, gone[1]);
+    }
+  }
+
+  for (const gone of sql.matchAll(/DROP TABLE (?:IF EXISTS )?(\w+)/gi)) {
+    schema.delete(gone[1]);
+  }
+
+  // ── the migration's own writes ────────────────────────────────────────────
+  //
+  // Checked against the schema at THIS migration's point in the sequence, which is
+  // the whole reason this lives inside the loop. `plans.max_alerts_per_day` existed
+  // in 0006 and was gone by 0007; 0020 referenced it again and this tool said
+  // nothing, because it had no notion of a column being taken away and no notion of
+  // reading the migrations at all.
+  //
+  // Only the two forms that name columns outright — an INSERT's column list and an
+  // UPDATE's assignments — because those are the two that can be verified without
+  // parsing SQL. A bare `INSERT … VALUES` with no column list is not checked; it is
+  // also not written anywhere here.
+  const bare = sql.replace(/--[^\n]*/g, " ").replace(/'[^']*'/g, "''");
+
+  for (const insert of bare.matchAll(/INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)/gi)) {
+    const [, table, list] = insert;
+    const known = schema.get(table);
+    if (!known) continue;
+    for (const column of list.split(",").map((c) => c.trim().toLowerCase()).filter(Boolean)) {
+      if (!/^\w+$/.test(column) || known.has(column)) continue;
+      migrationProblems.push(`  \u2717 ${MIGRATIONS}/${file} — ${table} has no column "${column}"`);
+    }
+  }
+
+  for (const update of bare.matchAll(/UPDATE\s+(\w+)\s+SET\s+([\s\S]*?)(?:\bWHERE\b|;)/gi)) {
+    const [, table, sets] = update;
+    const known = schema.get(table);
+    if (!known) continue;
+    for (const assign of sets.split(",")) {
+      const name = /^\s*(\w+)\s*=/.exec(assign)?.[1]?.toLowerCase();
+      if (!name || known.has(name)) continue;
+      migrationProblems.push(`  \u2717 ${MIGRATIONS}/${file} — ${table} has no column "${name}"`);
+    }
+  }
+
 }
 
 // Columns Postgres provides that no migration declares.
@@ -139,7 +205,8 @@ const NOT_COLUMNS = new Set(
     .filter(Boolean),
 );
 
-let problems = 0;
+let problems = migrationProblems.length;
+for (const line of migrationProblems) console.log(line);
 
 for (const dir of SOURCES) {
   for (const path of filesUnder(dir)) {

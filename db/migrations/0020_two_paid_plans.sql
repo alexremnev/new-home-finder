@@ -31,11 +31,15 @@ COMMENT ON COLUMN plans.stripe_price_id IS
     'The Stripe Price this plan is bought with. Set it after creating the price in '
     'the Stripe dashboard. NULL means the plan cannot be bought.';
 
+-- No `max_alerts_per_day`: 0007 dropped it from both `plans` and `subscriptions`.
+-- A cap silently withholds listings that matched, which is the one thing this
+-- service exists not to do; what limits the free tier now is `delivery_share`, and
+-- it says out loud what it held back.
 INSERT INTO plans
-       (key, display_name, max_districts, max_alerts_per_day, duration_days,
+       (key, display_name, max_districts, duration_days,
         price_pence, is_signup_default, enabled)
-VALUES ('week',  '1 week',  7, 60,  7,  500, false, true),
-       ('month', '1 month', 7, 60, 30, 1000, false, true)
+VALUES ('week',  '1 week',  7,  7,  500, false, true),
+       ('month', '1 month', 7, 30, 1000, false, true)
 ON CONFLICT (key) DO UPDATE
    SET display_name  = EXCLUDED.display_name,
        max_districts = EXCLUDED.max_districts,
