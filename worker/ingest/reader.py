@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pathlib
 import sys
 import re
 from typing import Any
@@ -214,10 +215,35 @@ async def collect(
 
 __all__ = [
     "BATCH", "REDACTED", "collect", "content_hash", "login", "media_of",
-    "reader_name", "redact", "urls_of", "watched",
+    "reader_name", "redact", "save_session", "urls_of", "watched",
 ]
 
-async def login() -> int:
+def save_session(path: pathlib.Path, session: str) -> None:
+    lines = path.read_text(encoding="utf-8").split("\n") if path.is_file() else []
+    replaced = False
+    for i, line in enumerate(lines):
+        if line.startswith("TG_SESSION="):
+            lines[i] = f"TG_SESSION={session}"
+            replaced = True
+            break
+    if not replaced:
+        lines.append(f"TG_SESSION={session}")
+
+    mode = path.stat().st_mode & 0o777 if path.is_file() else 0o600
+    temp = path.with_suffix(path.suffix + ".new")
+    temp.write_text("\n".join(lines), encoding="utf-8")
+    os.chmod(temp, mode)
+    os.replace(temp, path)
+
+
+async def login(save_to: str | None = None) -> int:
+
+    target = pathlib.Path(save_to) if save_to else None
+    if target and target.is_file():
+        for line in target.read_text(encoding="utf-8").split("\n"):
+            name, _, value = line.partition("=")
+            if name.strip() in ("TG_API_ID", "TG_API_HASH") and not os.environ.get(name.strip()):
+                os.environ[name.strip()] = value.strip()
 
     api_id = os.environ.get("TG_API_ID", "").strip()
     api_hash = os.environ.get("TG_API_HASH", "").strip()
@@ -246,9 +272,20 @@ async def login() -> int:
         await client.disconnect()
         return 2
 
-    print(f"\nSigned in as {me.first_name} (@{me.username or me.id}).")
-    print("\nPut this in .env as TG_SESSION. It is a live login to your account, so")
-    print("treat it like a password and keep it out of the repository:\n")
-    print(client.session.save())
+    session = client.session.save()
     await client.disconnect()
+    print(f"\nSigned in as {me.first_name} (@{me.username or me.id}).")
+
+    if target:
+        save_session(target, session)
+        print(f"TG_SESSION written to {target}.")
+        print("Not printed: a session string is a live login, and a terminal that")
+        print("wraps it is a terminal you cannot copy it out of correctly.")
+        return 0
+
+    print("\nPut this in .env as TG_SESSION. It is a live login to your account, so")
+    print("treat it like a password and keep it out of the repository.")
+    print("\nBetter: re-run with --save <path> and skip the copying, which is where")
+    print("this goes wrong — a wrapped line copied back gives 'Incorrect padding'.\n")
+    print(session)
     return 0

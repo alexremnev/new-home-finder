@@ -28,6 +28,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="no writes outside the run log")
     parser.add_argument(
+        "--save",
+        help="with login: write TG_SESSION straight into this env file instead of "
+        "printing it, and read TG_API_ID/TG_API_HASH from it",
+    )
+    parser.add_argument(
         "--trigger", default="manual", choices=("schedule", "manual", "retry"),
         help="recorded on the run for auditing",
     )
@@ -37,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
 
         from worker.ingest.reader import login
 
-        return asyncio.run(login())
+        return asyncio.run(login(args.save))
 
     try:
         cfg = Config.load(dry_run=args.dry_run)
