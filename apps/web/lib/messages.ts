@@ -1,10 +1,3 @@
-// Everything the bot says outside a listing alert.
-//
-// Kept apart from the routes so that the wording can be changed, or translated,
-// without touching the logic that decides when each one is sent. Listing alerts
-// are rendered by the worker (worker/notify/telegram.py) and deliberately not
-// duplicated here.
-
 import type { Account } from "./plans";
 import { paidPlans, siteUrl } from "./plans";
 
@@ -15,19 +8,6 @@ export const WELCOME = [
   "only what appears from now on.",
   "",
   "/stop — delete my filter and stop the messages",
-].join("\n");
-
-export const ALREADY_ACTIVE = [
-  "You're already subscribed — nothing to do.",
-  "",
-  "/stop — delete my filter and stop the messages",
-].join("\n");
-
-export const NEEDS_LINK = [
-  "Hello. To set up alerts, choose your filter on the site first — the link there",
-  "brings you back here already connected.",
-  "",
-  process.env.SITE_URL ?? "https://london-rent-alerts.vercel.app",
 ].join("\n");
 
 export const LINK_EXPIRED = [
@@ -46,14 +26,6 @@ export const STOPPED = [
 
 export const NOTHING_TO_STOP = "You have no active filter, so there is nothing to stop.";
 
-export const HELP = [
-  "I only send alerts about new rental listings.",
-  "",
-  "/stop — delete my filter and stop the messages",
-].join("\n");
-
-// ── plans ─────────────────────────────────────────────────────────────────
-
 export function noFilterYet(site: string): string {
   return [
     "You don't have a filter yet — set one up here and the alerts start:",
@@ -71,10 +43,6 @@ function money(pence: number): string {
   return pence % 100 === 0 ? `£${pence / 100}` : `£${(pence / 100).toFixed(2)}`;
 }
 
-/**
- * What /upgrade says. Prices and limits come from the `plans` table, so this
- * cannot drift out of step with what is actually charged.
- */
 export async function upgradeInvitation(account: Account, token?: string): Promise<string> {
   const plans = await paidPlans();
   const lines = [
@@ -95,8 +63,7 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   }
   lines.push("", token ? `${siteUrl()}/upgrade?t=${token}` : `${siteUrl()}/upgrade`);
   if (account.payment_ref) {
-    // Quoted with the payment so a transfer can be matched to an account without
-    // asking who sent it.
+
     lines.push("", `Your payment reference: ${account.payment_ref}`);
   }
   return lines.join("\n");

@@ -1,14 +1,3 @@
-// The form's endpoint: create a pending subscription and hand back the link that
-// connects it to a Telegram chat.
-//
-// Nothing here is sendable yet. The user is `pending` and has no channel, so the
-// matcher's join excludes them entirely until the webhook sees a START. That is
-// the point: a subscription that could receive messages before its owner has
-// messaged the bot would be a subscription without provable consent.
-//
-// The sign-up plan and its limits come from the `plans` table. Nothing in this
-// file knows how many districts a trial covers or how long it lasts.
-
 import { NextResponse } from "next/server";
 
 import { enforceLimits, InvalidForm, parseForm } from "@/lib/criteria";
@@ -35,8 +24,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const districts = await enabledDistricts();
   if (!districts.length) {
-    // Better than accepting a subscription that can never match: nothing is
-    // being collected, so there is nothing to promise.
+
     return NextResponse.json({ error: "no districts are being covered yet" }, { status: 503 });
   }
 
@@ -87,8 +75,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   return NextResponse.json({
     ok: true,
-    // `backfill_from` is now, so the existing market is not replayed. Said out
-    // loud because the first thing a new subscriber notices is silence.
+
     note: "Only listings that appear from now on will be sent.",
     plan: plan.display_name,
     trial_days: plan.duration_days,
@@ -106,8 +93,7 @@ async function readForm(request: Request): Promise<Record<string, unknown>> {
   const out: Record<string, unknown> = {};
   for (const key of new Set(data.keys())) {
     const values = data.getAll(key).map((v) => String(v));
-    // Checkbox groups arrive repeated; a single value must not become a
-    // one-element array, because the parser distinguishes the two.
+
     out[key] = values.length > 1 ? values : values[0];
   }
   return out;

@@ -1,33 +1,5 @@
-// London neighbourhoods, by the name people use for them.
-//
-// ── why this file exists ─────────────────────────────────────────────────────
-//
-// `districtNames()` derives names from listings already seen, which is the right
-// default: it cannot go stale against the data and it costs nothing to maintain.
-// What it cannot do is name a place before a listing from it has arrived. Canada
-// Water is in SE16 whether or not the feed has mentioned it this week, and a
-// dropdown that omits it looks like the service does not cover Canada Water.
-//
-// So: this is the floor, and observed names are laid on top of it. A name the feed
-// actually uses wins, because that is the word attached to real listings.
-//
-// ── what this list is and is not ─────────────────────────────────────────────
-//
-// It is the neighbourhoods somebody looking for a flat would type. It is NOT
-// exhaustive and is not trying to be — London has several hundred named areas, many
-// of them contested at the edges, and a list of every hamlet would be mostly
-// entries nobody searches for and cannot be checked by anybody reading it.
-//
-// Each name maps to the postcode district its centre sits in. Several are honest
-// simplifications: a neighbourhood can straddle two districts, and the one chosen
-// here is where most of its rental stock is. Somebody who wants the other half can
-// switch to postcode mode and add it, which is the reason both modes exist.
-//
-// Adding one is a line. Keep it alphabetical within its district block so a
-// duplicate is visible rather than discovered.
-
 export const NEIGHBOURHOODS: Record<string, string> = {
-  // ── E, east ────────────────────────────────────────────────────────────────
+
   "Whitechapel": "E1",
   "Shoreditch": "E1",
   "Spitalfields": "E1",
@@ -55,7 +27,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Forest Gate": "E7",
   "South Woodford": "E18",
 
-  // ── EC / WC, the City and centre ───────────────────────────────────────────
   "Barbican": "EC1Y",
   "Clerkenwell": "EC1R",
   "Farringdon": "EC1M",
@@ -65,7 +36,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "King's Cross": "N1C",
   "Covent Garden": "WC2E",
 
-  // ── N, north ───────────────────────────────────────────────────────────────
   "Islington": "N1",
   "Angel": "N1",
   "Barnsbury": "N1",
@@ -88,7 +58,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Archway": "N19",
   "Enfield": "EN1",
 
-  // ── NW, north-west ─────────────────────────────────────────────────────────
   "Camden Town": "NW1",
   "Regent's Park": "NW1",
   "Golders Green": "NW11",
@@ -111,7 +80,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Neasden": "NW10",
   "Kensal Green": "NW10",
 
-  // ── SE, south-east ─────────────────────────────────────────────────────────
   "Bermondsey": "SE1",
   "Borough": "SE1",
   "London Bridge": "SE1",
@@ -154,7 +122,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Bromley": "BR1",
   "Croydon": "CR0",
 
-  // ── SW, south-west ─────────────────────────────────────────────────────────
   "Westminster": "SW1",
   "Pimlico": "SW1V",
   "Belgravia": "SW1X",
@@ -191,7 +158,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
   "Richmond": "TW9",
   "Kingston": "KT1",
 
-  // ── W, west ────────────────────────────────────────────────────────────────
   "Mayfair": "W1K",
   "Marylebone": "W1U",
   "Soho": "W1D",
@@ -220,24 +186,6 @@ export const NEIGHBOURHOODS: Record<string, string> = {
 
 export type Area = { code: string; name: string };
 
-/**
- * Every neighbourhood that can be chosen, by name.
- *
- * ── the bug this replaced ────────────────────────────────────────────────────
- *
- * This used to return one name per district, keyed by code. Canary Wharf, Poplar and
- * Isle of Dogs are all E14, so two of the three vanished — and the list looked like
- * the service did not cover Canada Water when in fact it had no room to mention it.
- *
- * So the list is keyed by NAME. Several names sharing a district is the normal case
- * and not a conflict: they are different places that happen to share a postcode.
- *
- * The consequence is worth being explicit about, because the caller has to handle it:
- * choosing two neighbourhoods in one district is one filter entry, not two. The
- * filter matches on districts, which is the only location the feed states reliably.
- * A form that silently accepted both and counted them as two would be promising a
- * precision that does not exist.
- */
 export function neighbourhoodAreas(
   observed: Record<string, string>,
   covered: string[],
@@ -249,8 +197,7 @@ export function neighbourhoodAreas(
     const upper = code.toUpperCase();
     if (allowed.has(upper)) byName.set(name, upper);
   }
-  // Names the feed actually uses, added on top. A place the gazetteer has never
-  // heard of still appears the moment a listing from it arrives.
+
   for (const [name, code] of Object.entries(observed)) {
     const upper = code.toUpperCase();
     if (!allowed.has(upper)) continue;

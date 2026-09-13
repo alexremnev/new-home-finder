@@ -1,30 +1,3 @@
-"""Seed the geographic reference data and the coverage scope.
-
-Two different things, deliberately separated:
-
-  locations          complete reference data for zones 1-3. Seeded once, never
-                     gated. Widening coverage later must not require new rows.
-  source_locations   which of those districts a source actually watches, via
-                     the `enabled` flag. This is the coverage scope, and it is
-                     data so that changing it needs no deploy.
-
-The first stage watches three districts. Everything else is present but disabled:
-
-    python scripts/seed_locations.py --enable SE16,SE8,E14
-
-To widen coverage afterwards, no code and no re-seed is needed:
-
-    UPDATE source_locations SET enabled = true
-     WHERE source_key = 'openrent'
-       AND location_id IN (SELECT id FROM locations WHERE code IN ('E1','SE1'));
-
-Zone membership comes from the approximate district lists in the specification
-and is stored with approx = true. Zone boundaries are defined for stations, not
-territories, so several districts genuinely straddle two zones; the columns are
-min and max for that reason. Deriving zones properly from station coordinates is
-a later refinement and does not change this schema.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -40,10 +13,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from worker.env import load_env  # noqa: E402 - path set above for direct runs
+from worker.env import load_env
 
-# Approximate zone membership. A district listed in two zones is split by a zone
-# boundary and gets min/max accordingly.
 ZONE_DISTRICTS: dict[int, list[str]] = {
     1: "EC1 EC2 EC3 EC4 WC1 WC2 W1 SW1 NW1 N1 E1 SE1 SE11 SW3 SW7 W2 W8".split(),
     2: (
@@ -60,26 +31,8 @@ ZONE_DISTRICTS: dict[int, list[str]] = {
     ).split(),
 }
 
-# Every outward code in London, whether or not its zone is known.
-#
-# Two separate facts, and conflating them is what limited the reference data to
-# zones 1-3: ZONE_DISTRICTS says *which zone a district is in*, and that is only
-# known for the inner ones. This says *which districts exist in London*, which is a
-# much longer list and has nothing to do with zones. A district seeded from here
-# with no entry above simply has a null zone and `approx = true` — honest, and
-# nothing reads the zone except a report.
-#
-# The outer areas are those falling substantially within Greater London. The
-# boundaries are genuinely arguable — WD and DA straddle it, KT reaches into Surrey
-# — and being slightly generous is the cheaper mistake: a district nobody has a
-# listing in is a filter that matches nothing, while a missing district is a
-# subscriber told their own area "isn't covered yet".
-#
-# Anything still missed registers itself: `store.ensure_district` adds a district
-# the moment a listing arrives from it, so this list is a good start rather than a
-# boundary that has to be right.
 LONDON_AREAS: dict[str, list[int]] = {
-    # Inner: the eight London postcode areas.
+
     "E": list(range(1, 21)),
     "EC": [1, 2, 3, 4],
     "N": list(range(1, 23)),
@@ -88,38 +41,33 @@ LONDON_AREAS: dict[str, list[int]] = {
     "SW": list(range(1, 21)),
     "W": list(range(1, 15)),
     "WC": [1, 2],
-    # Outer: Greater London beyond the inner areas.
-    "BR": list(range(1, 9)),          # Bromley
-    "CR": [0, 2, 3, 4, 5, 6, 7, 8],   # Croydon
-    "DA": [1, 5, 6, 7, 8, 14, 15, 16, 17, 18],  # Bexley, Dartford edge
-    "EN": [1, 2, 3, 4, 5],            # Enfield
-    "HA": list(range(0, 10)),         # Harrow
-    "IG": list(range(1, 12)),         # Redbridge, Barking
-    "KT": list(range(1, 11)),         # Kingston
-    "RM": list(range(1, 15)),         # Havering, Barking
-    "SM": list(range(1, 8)),          # Sutton
-    "TW": list(range(1, 21)),         # Richmond, Hounslow
-    "UB": list(range(1, 12)),         # Hillingdon, Ealing
-    "WD": [6, 23],                    # Harrow Weald edge
+
+    "BR": list(range(1, 9)),
+    "CR": [0, 2, 3, 4, 5, 6, 7, 8],
+    "DA": [1, 5, 6, 7, 8, 14, 15, 16, 17, 18],
+    "EN": [1, 2, 3, 4, 5],
+    "HA": list(range(0, 10)),
+    "IG": list(range(1, 12)),
+    "KT": list(range(1, 11)),
+    "RM": list(range(1, 15)),
+    "SM": list(range(1, 8)),
+    "TW": list(range(1, 21)),
+    "UB": list(range(1, 12)),
+    "WD": [6, 23],
 }
 
-# Codes that are not plain "<area><number>" and would otherwise be missed.
 EXTRA_DISTRICTS = ("E1W", "N1C", "NW1W")
 
-
 def all_districts() -> list[str]:
-    """Every district to seed, in a stable order."""
+
     codes = {f"{area}{number}" for area, numbers in LONDON_AREAS.items() for number in numbers}
     codes.update(EXTRA_DISTRICTS)
-    # Whatever ZONE_DISTRICTS knows about is included even if the ranges above miss
-    # it, so zone knowledge can never be dropped by an edit to the ranges.
+
     codes.update(code for codes_in_zone in ZONE_DISTRICTS.values() for code in codes_in_zone)
     return sorted(codes, key=lambda c: (len(c), c))
 
-
 POSTCODES_IO = "https://api.postcodes.io/outcodes/{code}"
 DEFAULT_SCOPE = ("SE16", "SE8", "E14")
-
 
 def zone_bounds() -> dict[str, tuple[int, int]]:
     seen: dict[str, list[int]] = {}
@@ -128,9 +76,8 @@ def zone_bounds() -> dict[str, tuple[int, int]]:
             seen.setdefault(code, []).append(zone)
     return {code: (min(zones), max(zones)) for code, zones in seen.items()}
 
-
 def fetch_centroid(code: str, *, timeout: int = 10) -> tuple[float, float] | None:
-    """Look up a district centroid. Open ONS data, no key required."""
+
     try:
         with urllib.request.urlopen(POSTCODES_IO.format(code=code), timeout=timeout) as resp:
             payload = json.load(resp)
@@ -141,7 +88,6 @@ def fetch_centroid(code: str, *, timeout: int = 10) -> tuple[float, float] | Non
     result = payload.get("result") or {}
     lat, lng = result.get("latitude"), result.get("longitude")
     return (float(lat), float(lng)) if lat is not None and lng is not None else None
-
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -175,8 +121,6 @@ def main() -> int:
     bounds = zone_bounds()
     districts = all_districts()
 
-    # Checked against every district, not only the zoned ones: --enable HA1 used to
-    # be refused as "not in the zone 1-3 lists", which was true and unhelpful.
     unknown = scope - set(districts)
     if unknown:
         print(f"not London districts: {sorted(unknown)}", file=sys.stderr)
@@ -189,7 +133,7 @@ def main() -> int:
             coords[code] = fetch_centroid(code)
             if i % 25 == 0:
                 print(f"  {i}/{len(districts)}", file=sys.stderr)
-            time.sleep(0.05)  # open service; stay well below any sensible limit
+            time.sleep(0.05)
 
     with psycopg.connect(database_url, row_factory=dict_row) as conn:
         if args.source:
@@ -205,14 +149,7 @@ def main() -> int:
             keys = [
                 r["key"] for r in
                 conn.execute(
-                    # Feed sources are excluded from the default sweep on purpose.
-                    # `enabled` means a scrape scope for a source that fetches pages —
-                    # one more district is one more request — and something else
-                    # entirely for a feed, where nothing is requested per district and
-                    # narrowing it only throws away listings that already arrived.
-                    # Including them here would silently reset a feed's coverage to
-                    # `--enable` every time this script is run for the scrapers.
-                    # Name one explicitly with --source to override.
+
                     """
                     SELECT key FROM sources
                      WHERE enabled AND coalesce(config->>'kind', '') <> 'telegram_feed'
@@ -225,9 +162,7 @@ def main() -> int:
                 return 2
 
         for code in districts:
-            # The zone where it is known, null where it is not. Coalescing to a
-            # number would put a guess where a filter can read it; the existing
-            # `approx = true` already says the zone is not authoritative.
+
             zmin, zmax = bounds.get(code, (None, None))
             latlng = coords.get(code)
             conn.execute(
@@ -253,10 +188,6 @@ def main() -> int:
                 },
             )
 
-        # external_id is what the source itself uses to denote the place. For
-        # sitemap-based discovery that is the outward code appearing in a listing
-        # URL; a source that searches per area needs its own identifier, and
-        # existing values are therefore left alone rather than overwritten.
         summaries = []
         for key in keys:
             conn.execute(
@@ -289,7 +220,6 @@ def main() -> int:
             f"({', '.join(sorted(scope))}), {summary['without_coords']} without coordinates"
         )
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())

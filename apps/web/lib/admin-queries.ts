@@ -1,17 +1,5 @@
-// Everything the console shows, as SQL.
-//
-// One module, and it only reads — the single write the console can do lives in its
-// own route, where it is audited. Keeping them apart means this file can be read as
-// "what the admin can see" without also having to check what it changes.
-//
-// Every count is computed in Postgres rather than by fetching rows and counting
-// them in JavaScript. Not for speed at this size, but because the alternative sends
-// every subscriber's filter to the server that renders the page in order to produce
-// a single number.
-
 import { query } from "@/lib/db";
 
-/** Days back, from the console's range control. */
 export type Range = 1 | 7 | 30 | 90;
 
 export type Overview = {
@@ -49,14 +37,6 @@ export async function overview(): Promise<Overview> {
 
 export type Slice = { label: string; value: number };
 
-/**
- * Who is on which plan. Identity, so this one is drawn with categorical colour.
- *
- * Ordered by the plan's key and NOT by how many people are on it. Ordering by count
- * would make the colour follow the rank: the day trial overtakes free, the two swap
- * hues and every earlier screenshot becomes a lie. Alphabetical by key is stable
- * whatever the numbers do, which is the only property the ordering needs.
- */
 export async function planMix(): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(p.display_name, u.plan) AS label, count(*)::int AS value
@@ -68,12 +48,6 @@ export async function planMix(): Promise<Slice[]> {
   );
 }
 
-/**
- * Alerts actually delivered, per day.
- *
- * `generate_series` so a day with nothing sent is a zero rather than a gap. A line
- * that skips its empty days is a line that lies about its shape.
- */
 export async function sentPerDay(days: Range): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
@@ -105,7 +79,6 @@ export async function visitsPerDay(days: Range): Promise<Slice[]> {
   );
 }
 
-/** Which districts the delivered alerts were in. One measure, so one colour. */
 export async function byDistrict(days: Range, limit = 12): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(l.postcode_district, '—') AS label, count(*)::int AS value
@@ -120,17 +93,9 @@ export async function byDistrict(days: Range, limit = 12): Promise<Slice[]> {
   );
 }
 
-/**
- * What they cost, in £250 bands.
- *
- * Bands rather than exact prices because the question is "what price of flat are we
- * actually sending", and 400 distinct prices answers it worse than 12 bands do.
- */
 export async function byPrice(days: Range): Promise<Slice[]> {
   return query<Slice>(
-    // Grouped by the number and ordered by the number, then cast for the label.
-    // Grouping by the text and ordering by the expression is the natural way to
-    // write this and Postgres rejects it — the expression is not in the grouping.
+
     `WITH banded AS (
        SELECT (floor(l.price_pcm / 250.0) * 250)::int AS band
          FROM notifications n
@@ -161,10 +126,7 @@ export type Subscriber = {
 
 export async function subscribers(): Promise<Subscriber[]> {
   return query<Subscriber>(
-    // Cast to text, like every other timestamp this module returns. Postgres hands
-    // a TIMESTAMPTZ to the driver as a JS Date, so a field typed `string` here is a
-    // Date at runtime and the first `.slice` on it throws — a mismatch TypeScript
-    // cannot see, because the type is an assertion about a value it never inspects.
+
     `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
             u.plan_until::text, u.created_at::text AS joined,
             uc.channel, s.criteria,
@@ -190,14 +152,6 @@ export type Problem = {
   last_at: string | null;
 };
 
-/**
- * What is wrong, in one list.
- *
- * Four different questions, unioned, because an admin opening this page wants one
- * answer to "is anything broken" and not four panels to compare. The silence checks
- * matter most: a component that has stopped doing anything reports no errors at all,
- * which is exactly why it needs asking about separately.
- */
 export async function problems(): Promise<Problem[]> {
   return query<Problem>(
     `SELECT 'run failed' AS kind,
@@ -299,18 +253,6 @@ export type Run = {
   error: string | null;
 };
 
-/**
- * The last runs of each job, side by side.
- *
- * Both jobs in one list and not two panels: the question is almost always "did both
- * of them run", and two panels means comparing two clocks. Sorted newest first, so
- * the top two rows are the answer.
- *
- * `counters` comes back whole rather than picked apart here. Which counters a job
- * emits is the job's business — `read`, `parsed`, `queued` for ingest, `sent` and
- * `seeded` for drain — and a query that named them would need editing every time a
- * stage learned to count something new.
- */
 export async function recentRuns(limit = 20): Promise<Run[]> {
   return query<Run>(
     `SELECT id, job, trigger, status,
@@ -332,7 +274,6 @@ export type JobHealth = {
   failed_24h: number;
 };
 
-/** One row per job: when it last ran, and how it has been getting on since. */
 export async function jobHealth(): Promise<JobHealth[]> {
   return query<JobHealth>(
     `SELECT job,
@@ -350,8 +291,6 @@ export async function jobHealth(): Promise<JobHealth[]> {
       ORDER BY job`,
   );
 }
-
-// ── the log ────────────────────────────────────────────────────────────────
 
 export type Filters = {
   range: Range;
@@ -371,22 +310,6 @@ export type Event = {
   ctx: Record<string, unknown>;
 };
 
-/**
- * The event log, filtered.
- *
- * `job_events` has been written since the first migration and nothing has ever read
- * it except a hand-typed query. That is the gap this closes: the worker has produced
- * a structured, queryable log all along, with a run id, a stage and a JSON context on
- * every line — it just had no window.
- *
- * Every filter is optional and applied as `($n IS NULL OR …)`. One statement handles
- * every combination, so there is no query built from strings and no chance of a
- * filter that silently does nothing because a branch was missed.
- *
- * The text search is `ILIKE` over the message, not a full-text index. At this volume
- * a sequential scan over two days of events is milliseconds, and an index would be a
- * thing to maintain for a search nobody runs twice.
- */
 export async function events(filter: Filters, limit = 300): Promise<Event[]> {
   return query<Event>(
     `SELECT e.id, e.ts::text, e.level, r.job, e.stage, e.source_key, e.message, e.ctx
@@ -402,7 +325,6 @@ export async function events(filter: Filters, limit = 300): Promise<Event[]> {
   );
 }
 
-/** How many of each level, for the filter bar's counts. */
 export async function eventCounts(filter: Filters): Promise<Slice[]> {
   return query<Slice>(
     `SELECT e.level AS label, count(*)::int AS value
@@ -416,8 +338,6 @@ export async function eventCounts(filter: Filters): Promise<Slice[]> {
   );
 }
 
-/** The jobs that have ever run, for the filter bar. Not a constant: a job added
- *  tomorrow should appear without an edit here. */
 export async function knownJobs(): Promise<string[]> {
   const rows = await query<{ job: string }>(
     `SELECT DISTINCT job FROM job_runs ORDER BY job`,
@@ -425,16 +345,6 @@ export async function knownJobs(): Promise<string[]> {
   return rows.map((r) => r.job);
 }
 
-// ── metrics worth a chart ──────────────────────────────────────────────────
-
-/**
- * The share of messages the parser could not read, per day.
- *
- * A share and not two counts. The two numbers on one chart would be a second scale
- * away from a dual axis, and the question is not "how many arrived" — that is the
- * ingest chart — but "is the parser keeping up with the format". A rising line means
- * the feed changed and nobody noticed.
- */
 export async function unparseableShare(days: Range): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
@@ -463,17 +373,6 @@ export type Delivery = {
   skipped_24h: number;
 };
 
-/**
- * Is delivery keeping up?
- *
- * The oldest queued item is the number that matters. An average queue length says
- * nothing — a queue of ten that turns over every minute is healthy and a queue of ten
- * that has not moved for an hour is broken, and only the age tells them apart.
- *
- * Latency is measured as sent minus created, which includes the wait in the queue.
- * That is the number a subscriber experiences: a listing that appeared twenty minutes
- * ago is twenty minutes stale however fast the send itself was.
- */
 export async function delivery(): Promise<Delivery> {
   const rows = await query<Delivery>(
     `SELECT

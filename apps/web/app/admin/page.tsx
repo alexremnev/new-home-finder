@@ -1,21 +1,3 @@
-// The console.
-//
-// A server component, and that is a security decision rather than a performance
-// one: every subscriber's filter is on this page, and in a client component the
-// data would be serialised into the page's JavaScript payload. Here it is rendered
-// to HTML and the numbers never exist in the browser as data.
-//
-// ── what it answers, in the order somebody asks ──────────────────────────────
-//
-//   1. Is anything broken?  — first, because if it is, nothing else matters.
-//   2. How big is this?     — the tiles.
-//   3. What is happening?   — the charts, over a range you choose.
-//   4. Who are they?        — the table, with the one action there is.
-//
-// Problems go at the top even though they are usually empty. A dashboard that puts
-// its warnings under three screens of charts is a dashboard where warnings are
-// found late.
-
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -38,8 +20,6 @@ const pounds = (pence: number) =>
   "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 0 });
 const comma = (n: number) => n.toLocaleString("en-GB");
 
-/** Log levels to the status palette. Reserved colours, so a level never wears a
- *  series hue and a series never wears a level's. */
 const LEVELS: Record<string, string> = {
   error: "critical",
   warn: "warning",
@@ -47,7 +27,6 @@ const LEVELS: Record<string, string> = {
   debug: "warning",
 };
 
-/** How a problem reads: an icon and a word, never colour alone. */
 const SEVERITY: Record<string, { icon: string; word: string; className: string }> = {
   "run failed": { icon: "✕", word: "Failed", className: "critical" },
   "error logged": { icon: "!", word: "Error", className: "serious" },
@@ -67,17 +46,12 @@ export default async function AdminPage({
     q?: string;
   }>;
 }) {
-  // Checked here as well as in middleware, and the duplication is the point. This
-  // page renders every subscriber's filter; if the matcher is ever edited wrongly
-  // the middleware silently stops running, and nothing about the page would look
-  // different. Two independent checks means one mistake is not an open door.
+
   const jar = await cookies();
   if (!(await sessionIsValid(jar.get(SESSION_COOKIE)?.value))) redirect("/admin/login");
 
   const params = await searchParams;
-  // Every filter comes from the URL and is validated here rather than trusted. A
-  // range of "999" or a level of "'; DROP" is not an error to report — it is a
-  // parameter somebody typed, and the honest answer is the default view.
+
   const days = ([1, 7, 30, 90] as const).includes(Number(params.range) as Range)
     ? (Number(params.range) as Range)
     : (7 as Range);
@@ -91,9 +65,6 @@ export default async function AdminPage({
     q: params.q?.slice(0, 80) || undefined,
   };
 
-  // One round of queries, in parallel. They are independent and the page cannot
-  // render until all of them are in, so waiting for them one at a time would be
-  // the sum of their latencies for no benefit.
   const [
     stats, plans, sent, visits, districts, prices, people, faults, payments, comps,
     runs, health, log, levels, jobs, feedHealth, sending,
@@ -123,15 +94,12 @@ export default async function AdminPage({
         </div>
       </header>
 
-      {/* One bar, above everything, because these filters apply to everything. A
-          filter beside one chart reads as belonging to that chart. */}
       <FilterBar chosen={filters} jobs={jobs} levels={levels} />
 
       {params.done === "extended" && (
         <p className="note">Plan extended. The new date is in the table below.</p>
       )}
 
-      {/* ── 1. anything broken ─────────────────────────────────────────── */}
       <section>
         <h2>Problems</h2>
         {faults.length === 0 ? (
@@ -167,11 +135,9 @@ export default async function AdminPage({
         )}
       </section>
 
-      {/* ── 2. did the jobs run ────────────────────────────────────────── */}
       <section>
         <h2>Jobs</h2>
-        {/* Both jobs in one place, because the question is almost always "did both
-            of them run" and two panels means comparing two clocks. */}
+
         <div className="stats">
           {health.map((job) => (
             <Stat
@@ -208,10 +174,7 @@ export default async function AdminPage({
                     </span>
                   </td>
                   <td className="num muted">{run.seconds ?? "—"}</td>
-                  {/* The counters as the job emitted them. Not picked apart here:
-                      which ones a job reports is the job's business, and naming them
-                      would mean editing this every time a stage learns to count
-                      something. */}
+
                   <td className="wrap muted counters">
                     {run.error
                       ? run.error.slice(0, 120)
@@ -227,7 +190,6 @@ export default async function AdminPage({
         {runs.length === 0 && <p className="hint">No runs recorded yet.</p>}
       </section>
 
-      {/* ── 3. how big ─────────────────────────────────────────────────── */}
       <section>
         <div className="stats">
           <Stat label="Subscribers" value={comma(stats.subscribers)}
@@ -241,7 +203,6 @@ export default async function AdminPage({
         </div>
       </section>
 
-      {/* ── 4. what is happening ───────────────────────────────────────── */}
       <section>
         <div className="stats" style={{ marginBottom: "1.5rem" }}>
           <Stat
@@ -277,7 +238,6 @@ export default async function AdminPage({
         <PlanMix data={plans} title="Who is on which plan" />
       </section>
 
-      {/* ── 5. who they are ────────────────────────────────────────────── */}
       <section>
         <h2>Subscribers</h2>
         <table className="grid">
@@ -306,9 +266,7 @@ export default async function AdminPage({
                 <td className="num">{comma(person.sent)}</td>
                 <td className="num muted">{comma(person.withheld)}</td>
                 <td>
-                  {/* A form per row rather than one form with a user picker: the
-                      row already says who, and a picker is a chance to extend the
-                      wrong account. */}
+
                   <form method="post" action="/api/admin/extend" className="inline-form">
                     <input type="hidden" name="user_id" value={person.user_id} />
                     <input type="number" name="days" min={1} max={365}
@@ -373,7 +331,6 @@ export default async function AdminPage({
         )}
       </section>
 
-      {/* ── 6. the log ─────────────────────────────────────────────────── */}
       <section>
         <h2>
           Log{" "}
@@ -407,9 +364,7 @@ export default async function AdminPage({
                   <td className="muted">{entry.stage ?? "—"}</td>
                   <td className="wrap">
                     {entry.message}
-                    {/* The context, when there is any. It is where the worker puts
-                        the numbers that explain the line, and dropping it would make
-                        this a list of sentences instead of a log. */}
+
                     {entry.ctx && Object.keys(entry.ctx).length > 0 && (
                       <span className="counters">
                         {" "}

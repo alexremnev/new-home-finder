@@ -15,8 +15,7 @@ uv run python -m worker ingest                 # прочитать фид, ра
 uv run python -m worker ingest --dry-run       # только обвязка: без сети и без TG_*
 uv run python -m worker drain                  # отправить очередь notifications
 uv run python -m worker drain --dry-run        # сколько ждёт, не отправляя
-uv run python -m worker tick                   # то, что вызывает планировщик
-uv run python -m worker schedules              # таблица расписаний
+uv run python -m worker login                  # войти аккаунтом, напечатать TG_SESSION
 ```
 
 Для `ingest` нужны `uv sync --extra ingest` (Telethon) и переменные `TG_*` из
@@ -170,15 +169,18 @@ SELECT id, created_at, token_expires_at FROM users
 
 ```cmd
 scripts\win\install-task.cmd          :: один раз, из админской консоли
-schtasks /Run   /TN "LondonRentAlerts worker"
-schtasks /Query /TN "LondonRentAlerts worker" /V /FO LIST
+schtasks /Run   /TN "home ingest"
+schtasks /Query /TN "home ingest" /V /FO LIST
 ```
 
-Задача вызывает `worker tick` каждые 10 минут. Что именно и как часто выполняется
-— решает таблица `schedules`, поэтому окно 10:00–19:00 и часовой интервал меняются
-`UPDATE`, а не правкой задачи. Если ничего не пора — тик стоит один запрос.
+Три задачи: `ingest` каждые 5 минут, `drain` тоже каждые 5 со сдвигом на 2 минуты,
+`report` раз в час. Сдвиг нужен, чтобы пачка уходила в том же цикле, в котором
+попала в очередь, а не ждала следующего.
 
-Логи: `D:\projects\new-home-finder\logs\worker-ГГГГ-ММ-ДД.log`.
+Интервал живёт в самой задаче. Таблицы расписаний больше нет — два таймера на одно
+решение это один лишний, и лишним был тот, которого никто не спрашивал.
+
+Логи: `logs\ingest-ГГГГ-ММ-ДД.log` и `logs\drain-ГГГГ-ММ-ДД.log`.
 
 ## Планы и оплата
 
@@ -232,13 +234,10 @@ SELECT provider, count(*), sum(amount_pence)/100.0 AS pounds FROM payments GROUP
 ## Команды бота
 
 ```
-/show          текущий фильтр и план
-/filter        ссылка на форму (30 минут, одноразовая)
-/price 1500-2200 · /price 2000 · /price any
-/beds 1-2
-/areas SE16, SE8
-/pets on · /bills on · /direct on
-/upgrade       тарифы и ссылка на оплату
+/start         ссылка на форму — единственный способ задать фильтр
+/current       текущий фильтр и план
+/update        ссылка на форму, чтобы задать заново
+/pay           тарифы и оплата
 /stop          удалить фильтр и прекратить отправку
 /grant <ref> <plan> <days>   только из TELEGRAM_ADMIN_CHAT
 ```

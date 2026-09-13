@@ -1,18 +1,3 @@
-"""Listing records, before and after normalisation.
-
-`RawListing` holds values exactly as they appeared on the page. `Listing` is the
-canonical form, and everything downstream of normalisation works only with it.
-
-Three invariants hold across the canonical form:
-  * price is always in GBP per calendar month; weekly prices are converted
-    during normalisation, not during matching, so a price filter cannot quietly
-    disagree with what the user was shown;
-  * timestamps are UTC in storage and rendered in Europe/London only for
-    display, so the BST transition cannot produce a gap or a duplicate;
-  * `pets_allowed` and `bills_included` are tri-state. None means the listing
-    did not say, which is a different answer from False and filters differently.
-"""
-
 from __future__ import annotations
 
 from datetime import date
@@ -24,9 +9,7 @@ Furnished = Literal["furnished", "unfurnished", "part", "unknown"]
 
 RawValue = str | int | float | bool | None
 
-
 class RawListing(BaseModel):
-    """Field values as extracted, keyed by the source's field contract."""
 
     source_key: str
     fields: dict[str, RawValue]
@@ -40,9 +23,7 @@ class RawListing(BaseModel):
     def get(self, name: str) -> RawValue:
         return self.fields.get(name)
 
-
 class Listing(BaseModel):
-    """Canonical listing."""
 
     source_key: str
     external_id: str

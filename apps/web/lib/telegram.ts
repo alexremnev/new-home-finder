@@ -1,16 +1,5 @@
-// Telegram, from the web side.
-//
-// The worker has its own sender; this one exists because the replies to START and
-// STOP are answers to something the person just did, and queueing them would put
-// a scrape interval between the action and the acknowledgement.
-//
-// Plain text, no parse mode, previews off — the same reasoning as the worker's
-// renderer: a listing line is full of MarkdownV2 syntax characters, and one
-// missed escape is a rejected message rather than an ugly one.
-
 const API = "https://api.telegram.org";
 
-/** One inline keyboard button. `callback_data` is capped at 64 bytes by Telegram. */
 export type Button = { text: string; callback_data?: string; url?: string };
 export type Keyboard = Button[][];
 
@@ -22,10 +11,7 @@ export type Update = {
     from?: { id?: number | string };
     text?: string;
   };
-  // Arrives only if the webhook was registered with `callback_query` in
-  // `allowed_updates`. Registering with just `["message"]` — as the cheatsheet
-  // did before the wizard existed — means button taps never reach us at all, and
-  // the failure is silent on both ends.
+
   callback_query?: {
     id?: string;
     data?: string;
@@ -48,9 +34,7 @@ async function call(method: string, payload: Payload): Promise<boolean> {
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    // Logged rather than thrown: every caller is answering a person, and a failed
-    // courtesy reply must not turn into a 500 that makes Telegram retry the whole
-    // update. The body is where Telegram puts the reason.
+
     console.error("telegram call failed", {
       method,
       status: response.status,
@@ -73,18 +57,6 @@ export async function sendMessage(
   });
 }
 
-
-
-
-
-/**
- * Acknowledge a button tap.
- *
- * Not optional and not cosmetic: until this is called Telegram shows a loading
- * indicator on the button, and after a few seconds the client decides the tap
- * failed. It is answered even on the paths that reject the tap, because "nothing
- * happened" and "the app is broken" look identical to the person holding the phone.
- */
 export async function answerCallback(callbackId: string, text?: string): Promise<boolean> {
   return call("answerCallbackQuery", {
     callback_query_id: callbackId,
@@ -92,14 +64,12 @@ export async function answerCallback(callbackId: string, text?: string): Promise
   });
 }
 
-/** The command list shown in the bot's menu button. Idempotent; safe to re-send. */
 export async function setMyCommands(
   commands: { command: string; description: string }[],
 ): Promise<boolean> {
   return call("setMyCommands", { commands });
 }
 
-/** The chat id an update came from, as a string, or null if it carries none. */
 export function chatIdOf(update: Update): string | null {
   const id =
     update.message?.chat?.id ??

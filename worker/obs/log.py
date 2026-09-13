@@ -1,13 +1,3 @@
-"""Run logging.
-
-Every event goes to two places: a JSON line on stdout, which the CI log keeps,
-and a row in the database, which outlives the CI log and can be queried.
-
-The repository is public. Nothing written here may contain a chat id, phone
-number, email address, or a whole criteria object — reference a user by its
-internal id instead.
-"""
-
 from __future__ import annotations
 
 import json
@@ -26,9 +16,7 @@ _FORBIDDEN_CTX_KEYS = frozenset(
     {"chat_id", "phone", "phone_e164", "email", "address", "criteria", "token"}
 )
 
-
 class Run:
-    """One worker invocation, with its stages and events."""
 
     def __init__(
         self,
@@ -41,9 +29,7 @@ class Run:
     ) -> None:
         self.conn = conn
         self.job = job
-        # Kept because the summary line names it. Without it a scheduled run reads
-        # identically to one typed by hand, which is the question a log is opened to
-        # answer in the first place.
+
         self.trigger = trigger
         self.dry_run = dry_run
         self.counters: dict[str, int] = {}
@@ -57,8 +43,6 @@ class Run:
         assert row is not None
         self.id: int = row["id"]
         self.event("info", f"run started: job={job} trigger={trigger}", dry_run=dry_run)
-
-    # ── events ────────────────────────────────────────────────────────────
 
     def event(
         self,
@@ -93,8 +77,6 @@ class Run:
     def count(self, name: str, delta: int = 1) -> None:
         self.counters[name] = self.counters.get(name, 0) + delta
 
-    # ── stages ────────────────────────────────────────────────────────────
-
     @contextmanager
     def stage(self, name: str, *, source_key: str | None = None) -> Iterator[Stage]:
         row = self.conn.execute(
@@ -112,8 +94,6 @@ class Run:
         else:
             st.finish(st.status)
 
-    # ── completion ────────────────────────────────────────────────────────
-
     def finish(self, status: str, error: str | None = None) -> None:
         self.conn.execute(
             """
@@ -123,9 +103,7 @@ class Run:
             """,
             (status, json.dumps(self.counters), error, self.id),
         )
-        # A degraded run is a warning, not an error. Logging it as an error
-        # makes every scaffold run shout, and an alert that fires on every run
-        # is one nobody reads.
+
         level: Level = (
             "info" if status in ("ok", "skipped_locked")
             else "warn" if status == "degraded"
@@ -133,15 +111,6 @@ class Run:
         )
         self.event(level, f"run finished: {status}", **self.counters)
 
-        # One plain line per run, alongside the structured event above, because the
-        # two are read by different things. The JSON is for querying; this is for a
-        # person opening a log file on a Windows box at midnight and wanting to know
-        # whether the scheduler fired and how much it moved.
-        #
-        # `SUMMARY` as a fixed prefix so a week of logs answers that with one
-        # `findstr SUMMARY` instead of scrolling. The trigger is included because
-        # without it a scheduled run is indistinguishable from one typed by hand,
-        # which is exactly the question being asked of the log.
         counts = " ".join(f"{name}={value}" for name, value in sorted(self.counters.items()))
         print(
             f"SUMMARY {datetime.now(UTC).astimezone():%Y-%m-%d %H:%M:%S} "
@@ -149,7 +118,6 @@ class Run:
             + (f" {counts}" if counts else " (nothing to do)"),
             flush=True,
         )
-
 
 class Stage:
     def __init__(self, run: Run, stage_id: int, name: str, source_key: str | None) -> None:

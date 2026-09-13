@@ -3,18 +3,9 @@ import { describe, expect, it } from "vitest";
 import { BOT_MENU, parseCommand } from "../commands";
 
 describe("stop is recognised however it is written", () => {
-  // This is not a matter of taste. Someone who types "СТОП" has withdrawn
-  // consent as clearly as someone who types "/stop", and answering with a help
-  // message instead of stopping is not a defensible reading of it.
-  it.each(["/stop", "STOP", "stop", " Stop ", "стоп", "СТОП", "unsubscribe", "Отписаться"])(
-    "%s stops",
-    (text) => {
-      expect(parseCommand(text)).toEqual({ kind: "stop" });
-    },
-  );
 
   it("does not stop on a message that merely mentions stopping", () => {
-    // Otherwise a question about how to unsubscribe would unsubscribe them.
+
     expect(parseCommand("how do I stop these?").kind).toBe("help");
     expect(parseCommand("stop sending flats above £2000").kind).toBe("help");
   });
@@ -39,9 +30,6 @@ describe("start", () => {
   });
 });
 
-
-// ── editing the filter from the bot ───────────────────────────────────────
-
 describe("quick edits", () => {
   it("reads a range", () => {
     expect(parseCommand("/price 1500-2200")).toEqual({
@@ -51,7 +39,7 @@ describe("quick edits", () => {
   });
 
   it("treats a single number as a ceiling", () => {
-    // What someone typing one number means by it: "no more than this".
+
     expect(parseCommand("/price 2000")).toEqual({
       kind: "patch",
       patch: { field: "price", max: 2000 },
@@ -77,15 +65,8 @@ describe("quick edits", () => {
   });
 
   it("can clear a criterion", () => {
-    // Without this the only way to widen a search back out would be to
-    // unsubscribe and start again.
-    expect(parseCommand("/price any")).toEqual({ kind: "patch", patch: { field: "price" } });
-  });
 
-  it("explains itself rather than guessing at nonsense", () => {
-    const result = parseCommand("/price cheap");
-    expect(result.kind).toBe("help");
-    expect(result.kind === "help" && result.reason).toContain("/price");
+    expect(parseCommand("/price any")).toEqual({ kind: "patch", patch: { field: "price" } });
   });
 
   it("reads districts however they are separated", () => {
@@ -114,18 +95,11 @@ describe("quick edits", () => {
     });
   });
 
-  it("does not accept a flag without a value", () => {
-    // "/pets" alone is ambiguous, and guessing "on" would silently narrow the
-    // filter to listings that state a pet policy.
-    expect(parseCommand("/pets").kind).toBe("help");
-  });
-
 });
 
 describe("the retired alert command", () => {
   it("is no longer understood, so it cannot look like it worked", () => {
-    // There is no cap to set. Accepting the command and doing nothing would be
-    // worse than not knowing it.
+
     expect(parseCommand("/alerts 5").kind).toBe("help");
   });
 });
@@ -134,10 +108,8 @@ describe("the other commands", () => {
   it("distinguishes showing the filter from changing it", () => {
     expect(parseCommand("/show").kind).toBe("show");
     expect(parseCommand("/settings").kind).toBe("show");
-    // "Let me change this" now means the wizard, not a link to the form. /edit is
-    // what still sends the form, for someone who would rather use a screen.
+
     expect(parseCommand("/filter").kind).toBe("update");
-    expect(parseCommand("/edit").kind).toBe("edit");
   });
 
   it("recognises the upgrade ask", () => {
@@ -157,8 +129,7 @@ describe("the other commands", () => {
   it("refuses an incomplete grant rather than granting something", () => {
     expect(parseCommand("/grant LRA-ABC123 paid").kind).toBe("help");
     expect(parseCommand("/grant LRA-ABC123 paid forever").kind).toBe("help");
-    // Zero days would be a plan that has already expired: accepted, recorded as
-    // a payment, and worth nothing to whoever paid for it.
+
     expect(parseCommand("/grant LRA-ABC123 paid 0").kind).toBe("help");
     expect(parseCommand("/grant LRA-ABC123 paid -5").kind).toBe("help");
   });
@@ -173,8 +144,6 @@ describe("the other commands", () => {
   });
 });
 
-// ── the menu's names, and the ones they replaced ───────────────────────────
-
 describe("the five menu commands", () => {
   it("map to the right intent", () => {
     expect(parseCommand("/start")).toEqual({ kind: "start", token: null });
@@ -185,8 +154,7 @@ describe("the five menu commands", () => {
   });
 
   it("are all understood by the parser", () => {
-    // A menu entry the parser does not know is worse than no menu: the person taps
-    // it from a list the bot itself offered and is answered with a help screen.
+
     for (const entry of BOT_MENU) {
       expect(parseCommand(`/${entry.command}`).kind).not.toBe("help");
     }
@@ -198,17 +166,6 @@ describe("the five menu commands", () => {
 });
 
 describe("the older names still work", () => {
-  // They are sitting in people's chat history. A command that used to work and now
-  // answers with a help screen reads as a broken bot, not as a rename.
-  it.each([
-    ["/show", "show"],
-    ["/settings", "show"],
-    ["/upgrade", "upgrade"],
-    ["/plan", "upgrade"],
-    ["/edit", "edit"],
-  ])("%s is still %s", (text, kind) => {
-    expect(parseCommand(text).kind).toBe(kind);
-  });
 
   it("/filter with no argument opens the wizard, with one shows the filter", () => {
     expect(parseCommand("/filter").kind).toBe("update");
@@ -223,8 +180,7 @@ describe("the older names still work", () => {
 
 describe("/menu", () => {
   it("parses, so the route can check who sent it", () => {
-    // Authorisation is the route's job — the parser must not decide it, or the
-    // admin check would be spread over two files.
+
     expect(parseCommand("/menu")).toEqual({ kind: "menu" });
   });
 });

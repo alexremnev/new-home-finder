@@ -1,28 +1,5 @@
 "use client";
 
-// The form. One page, and the setup path for every channel.
-//
-// ── why one page and no wizard ────────────────────────────────────────────────
-//
-// The bot had a six-step wizard, and it worked, but it could only ever work in
-// Telegram: the state lived in `wizard_sessions`, the questions were inline
-// keyboards, and none of that transfers to WhatsApp or email. A form is the one
-// setup surface every channel can link to, so the channel becomes a delivery choice
-// rather than a second implementation of the same questions.
-//
-// ── sliders, not number boxes ─────────────────────────────────────────────────
-//
-// Rent, bedrooms and bathrooms are all "how much", and a pair of number boxes asks
-// somebody to invent a figure before they know what the market looks like. A slider
-// shows the range that exists and lets them narrow it, which is the same question
-// asked in a way that can be answered by dragging.
-//
-// ── the token and the redirect ───────────────────────────────────────────────
-//
-// It posts JSON and then offers a link rather than following a redirect. The link
-// carries a one-time token, and a redirect would leave it in history and in the
-// Referer header of whatever they open next.
-
 import { useState } from "react";
 
 import { neighbourhoodAreas, type Area } from "../lib/neighbourhoods";
@@ -32,22 +9,14 @@ type Props = {
   maxDistricts: number;
   propertyTypes: string[];
   furnished: string[];
-  /** Neighbourhood name (lower case) to district code, from listings already seen. */
+
   names?: Record<string, string>;
 };
 
-// The rent track. Not the filter's range: `criteria` accepts up to £20,000 because
-// somebody renting in Mayfair exists, and a track that long puts every ordinary
-// London rent in its first fifth where a pixel is £80. £400–£10,000 covers what
-// people actually search for, and the top notch means "no upper limit" so the tail
-// is included honestly rather than pretended away.
 const RENT_MIN = 400;
 const RENT_MAX = 10_000;
 const RENT_STEP = 100;
 
-// Rooms. Zero is "any" rather than "no bedrooms": a studio has none and is still a
-// home, so a filter of zero would be indistinguishable from no filter — and reading
-// it as "any" is the meaning somebody dragging to the left end intends.
 const ROOMS_MAX = 5;
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
@@ -62,18 +31,13 @@ export function SubscribeForm({
   const [chosen, setChosen] = useState<Area[]>([]);
   const [typed, setTyped] = useState("");
   const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(null);
-  // Neighbourhood first because it is the question people can answer without
-  // looking anything up. A postcode district is something you know or you don't, and
-  // asking for one first reads as a demand for information rather than a question
-  // about where you want to live.
+
   const [mode, setMode] = useState<"name" | "postcode">("name");
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
   const [beds, setBeds] = useState(0);
   const [baths, setBaths] = useState(0);
   const [link, setLink] = useState<string | null>(null);
 
-  // Every neighbourhood by name, so Canary Wharf and Poplar both appear even though
-  // both are E14. Postcode mode lists the districts themselves.
   const named = neighbourhoodAreas(names, districts);
   const options: Area[] =
     mode === "name" ? named : [...districts].sort().map((code) => ({ code, name: code }));
@@ -82,9 +46,7 @@ export function SubscribeForm({
 
   function add(area: Area) {
     if (chosen.some((one) => one.code === area.code)) {
-      // Two neighbourhoods in one district are one filter entry. Said plainly,
-      // because silently accepting it would promise a precision the filter does not
-      // have — it matches on districts, the only location the feed states reliably.
+
       setAreaNote({
         text: `${area.name} is in ${area.code}, which you have already added.`,
         bad: false,
@@ -105,8 +67,7 @@ export function SubscribeForm({
     setAreaNote(
       next.length === maxDistricts
         ? {
-            // A warning at the limit rather than only a refusal past it: finding out
-            // you are full by being told "no" is worse than being told you are full.
+
             text: `That is all ${maxDistricts}. More areas mean more alerts — most people settle on two or three.`,
             bad: false,
           }
@@ -119,14 +80,6 @@ export function SubscribeForm({
     setChosen((current) => current.filter((one) => one.code !== code));
   }
 
-  /**
-   * Resolve whatever was typed against the list on screen.
-   *
-   * A datalist is a suggestion, not a constraint — the field still accepts free text
-   * and a browser may ignore the list entirely. So the value is matched rather than
-   * trusted, and a code typed in neighbourhood mode is accepted too: refusing "E14"
-   * because a radio button says "neighbourhood" would be pedantry.
-   */
   function commitTyped() {
     const text = typed.trim();
     if (!text) return;
@@ -154,18 +107,11 @@ export function SubscribeForm({
       payload[key] = values.length > 1 ? values : values[0];
     }
 
-    // Only bounds that mean something are sent. A thumb parked at either end is the
-    // absence of a limit, not a limit of £400 or £10,000, and sending it as a number
-    // would quietly exclude everything beyond it.
     if (rent[0] > RENT_MIN) payload.price_min = String(rent[0]);
     if (rent[1] < RENT_MAX) payload.price_max = String(rent[1]);
     if (beds > 0) payload.bedrooms_min = String(beds);
     if (baths > 0) payload.bathrooms_min = String(baths);
 
-    // A chosen date becomes the window the matcher already understands: ten days
-    // either side. Generous on purpose — an advertised availability date is a
-    // landlord's intention, not a fact, and demanding the exact day would reject the
-    // same flat for being ready a week early.
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
     if (wanted) {
@@ -253,17 +199,14 @@ export function SubscribeForm({
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
-              // Otherwise Enter submits the form with no areas chosen, which reads
-              // as the form rejecting itself.
+
               event.preventDefault();
               commitTyped();
             }
           }}
           onBlur={commitTyped}
         />
-        {/* A datalist rather than a select: one control that both drops down and
-            filters as you type, and on a phone the platform turns it into a picker.
-            A 200-entry select does neither. */}
+
         <datalist id="area-list">
           {options.map((one) => (
             <option key={`${one.name}-${one.code}`} value={one.name}>
@@ -382,22 +325,6 @@ export function SubscribeForm({
   );
 }
 
-/**
- * One slider with two thumbs.
- *
- * ── how, and why it is built rather than imported ────────────────────────────
- *
- * HTML has no two-thumb range input. The usual answers are a 30kB library or two
- * stacked sliders that look like two controls. This is two `input[type=range]`
- * elements sharing one track: the inputs are transparent and ignore pointer events,
- * their thumbs accept them, and the visible track and highlight are drawn behind.
- * The result is one control to look at and two to grab, and it keeps the keyboard
- * and screen-reader behaviour the platform already gives a range input.
- *
- * The thumbs clamp rather than swap. Dragging one past the other should push it, not
- * silently change which one you are holding — that is disorienting in a way no
- * amount of correctness makes up for.
- */
 function RangeSlider({
   min, max, step, value, onChange, format, openTop = "",
 }: {
@@ -462,14 +389,6 @@ function RangeSlider({
   );
 }
 
-/**
- * A single-thumb slider for a small count.
- *
- * Kept separate from `RangeSlider` rather than made a mode of it: a count from zero
- * to five wants tick marks and a word for each stop ("Any", "2+"), and a rent slider
- * wants neither. One component doing both would be a parameter list longer than
- * either.
- */
 function Stepper({
   value, onChange, max, label,
 }: {
@@ -500,30 +419,17 @@ function Stepper({
   );
 }
 
-/** The start token out of the bot link, for the interest vote to attach to. */
 function tokenOf(url: string): string {
   const match = /[?&]start=([^&]+)/.exec(url);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
 
-/**
- * Saved, and where it can go.
- *
- * One action, because there is only one thing to do next and a second button would
- * make somebody choose between "connect" and something that is not connecting.
- *
- * The vote underneath is not an action — it is a question, and it is asked here
- * because this is the one moment somebody has just done the work and can see what
- * they get from another channel existing. Asked on the landing page it would be a
- * survey from a stranger.
- */
 function AllDone({ url, token }: { url: string; token: string }) {
   const [wanted, setWanted] = useState<Record<string, boolean>>({});
   const [failed, setFailed] = useState(false);
 
   async function vote(channel: string) {
-    // Flipped before the request and rolled back on failure: the press has to feel
-    // immediate, and a vote is not worth a spinner.
+
     const next = !wanted[channel];
     setWanted((current) => ({ ...current, [channel]: next }));
     setFailed(false);

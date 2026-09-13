@@ -1,35 +1,3 @@
-"""Who received what, and whether anything is quietly broken.
-
-Two jobs in one script because they read the same tables and you want them at the
-same cadence: a report you can open, and an alert you cannot miss.
-
-    python scripts/report.py                    # write the report, check for trouble
-    python scripts/report.py --days 30          # a longer window
-    python scripts/report.py --no-alert         # report only, stay silent
-    python scripts/report.py --out reports/     # somewhere other than ./reports
-
-── why a file ───────────────────────────────────────────────────────────────
-
-Because a dashboard is a decision and a file is not. A plain text table can be
-opened, mailed, diffed between days and kept; when the questions it answers have
-settled into the three you actually ask, those three are worth a real dashboard and
-the rest can be dropped. Doing it the other way round means building charts for
-questions nobody turns out to have.
-
-── what counts as broken ────────────────────────────────────────────────────
-
-Only silences. Every check here fires on *absence* — no messages read, none
-parsed, a queue that stopped draining, a source that has not been scraped — because
-a loud failure already tells you: the worker exits non-zero, the log has a
-traceback, the task's Last Run Result turns 1. What no existing signal covers is a
-component that stops doing anything while everything still reports success, and
-that is the failure this product cannot survive: alerts simply stop, and the first
-person to notice is a subscriber who did not get one.
-
-Thresholds are arguments rather than constants so the quiet hours of a genuinely
-quiet market do not have to be argued with in code.
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -43,19 +11,15 @@ from datetime import datetime, timezone
 from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from worker.env import load_env  # noqa: E402 - path set above for direct runs
+from worker.env import load_env
 
 try:
     import psycopg
     from psycopg.rows import dict_row
-except ModuleNotFoundError:  # pragma: no cover - a setup error, not a runtime one
+except ModuleNotFoundError:
     sys.exit("report: psycopg is not installed. Run `uv sync` first.")
 
 Row = dict[str, Any]
-
-
-# ── the report ────────────────────────────────────────────────────────────
-
 
 DELIVERY_BY_DAY = """
 SELECT date_trunc('day', coalesce(n.sent_at, n.created_at))::date AS day,
@@ -70,8 +34,6 @@ SELECT date_trunc('day', coalesce(n.sent_at, n.created_at))::date AS day,
  GROUP BY 1 ORDER BY 1 DESC
 """
 
-# Per person, because "how many did this subscriber get" is the question support
-# actually gets asked, and an average over everybody cannot answer it.
 DELIVERY_BY_USER = """
 SELECT u.id,
        u.plan,
@@ -93,8 +55,6 @@ SELECT u.id,
  ORDER BY sent DESC, u.id
 """
 
-# The hour of day a person hears from us. Useful for the one complaint this kind of
-# product reliably attracts, which is being messaged at four in the morning.
 DELIVERY_BY_HOUR = """
 SELECT extract(hour FROM n.sent_at)::int AS hour, count(*) AS sent
   FROM notifications n
@@ -123,9 +83,8 @@ SELECT source_key,
   FROM listings GROUP BY 1 ORDER BY 1
 """
 
-
 def table(title: str, rows: list[Row]) -> str:
-    """Fixed-width columns, because the point is to be read rather than parsed."""
+
     if not rows:
         return f"{title}\n  (nothing)\n"
     headers = list(rows[0].keys())
@@ -139,7 +98,6 @@ def table(title: str, rows: list[Row]) -> str:
     )
     return f"{title}\n{line}\n{rule}\n{body}\n"
 
-
 def fmt(value: Any) -> str:
     if value is None:
         return "-"
@@ -147,20 +105,14 @@ def fmt(value: Any) -> str:
         return value.strftime("%Y-%m-%d %H:%M")
     return str(value)
 
-
-# ── the checks ────────────────────────────────────────────────────────────
-
-
 def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
-    """Every silence worth waking someone for. Empty means nothing is stuck."""
+
     found: list[str] = []
 
     def scalar(sql: str, params: tuple[Any, ...] = ()) -> Any:
         row = conn.execute(sql, params).fetchone()
         return None if row is None else next(iter(row.values()))
 
-    # 1. The reader. Its own log says "nothing waiting" whether the feed is quiet or
-    #    the session was revoked, so only the gap distinguishes them.
     latest = scalar("SELECT max(received_at) FROM source_messages")
     if latest is None:
         found.append("no source messages have ever been stored — the reader has not run")
@@ -172,8 +124,6 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
                 f"(last {latest:%Y-%m-%d %H:%M}) — reader stopped, or the feed went quiet"
             )
 
-    # 2. The parser. A format change shows up here and nowhere else: messages keep
-    #    arriving, listings stop appearing, and every job still exits 0.
     stuck = scalar(
         "SELECT count(*) FROM source_messages WHERE status = 'new' "
         "AND stored_at < now() - make_interval(hours => %s)",
@@ -195,8 +145,6 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
             "— the source has probably changed its format"
         )
 
-    # 3. The queue. Rows piling up means delivery is down while matching is fine,
-    #    which produces no error anywhere.
     waiting = scalar(
         "SELECT count(*) FROM notifications WHERE status = 'queued' "
         "AND created_at < now() - make_interval(hours => %s)",
@@ -205,15 +153,11 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
     if waiting:
         found.append(f"{waiting} message(s) queued for over {stale_hours}h — delivery is not draining")
 
-    # 4. Scraped sources. Distinct from the reader: these can be blocked by the site
-    #    while everything else keeps working.
     for row in conn.execute(
         "SELECT key, health, health_note FROM sources WHERE enabled AND health <> 'ok'"
     ).fetchall():
         found.append(f"source {row['key']} is {row['health']}: {row['health_note'] or 'no note'}")
 
-    # 5. Nobody can be sent anything. Worth its own line because it looks like a
-    #    quiet market from every other angle.
     reachable = scalar(
         """
         SELECT count(*) FROM subscriptions s
@@ -226,7 +170,6 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
         found.append("no active subscription has a delivery channel — nothing can be sent")
 
     return found
-
 
 def tell_ops(message: str) -> None:
     token = os.environ.get("TELEGRAM_TOKEN")
@@ -247,7 +190,6 @@ def tell_ops(message: str) -> None:
                 print(f"report: alert rejected with {response.status}", file=sys.stderr)
     except (urllib.error.URLError, OSError) as error:
         print(f"report: could not alert — {type(error).__name__}: {error}", file=sys.stderr)
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Delivery statistics, and a check for silences.")
@@ -299,11 +241,9 @@ def main() -> int:
 
     if faults and not args.no_alert:
         tell_ops("⚠️ Something is stuck:\n\n" + "\n".join(f"• {f}" for f in faults))
-        # Non-zero so a scheduler's own "last run failed" column agrees with the
-        # alert. Silence in two places is how a monitor stops being trusted.
+
         return 1
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

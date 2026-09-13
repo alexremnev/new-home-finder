@@ -1,15 +1,7 @@
-// Postgres access.
-//
-// One pool per process, kept on `globalThis` because a serverless function is
-// re-entered on a warm invocation and a fresh pool per request exhausts the
-// server's connection slots within minutes. `max: 1` for the same reason: many
-// short-lived instances each holding one connection is what the pooled port
-// (6543) is designed for.
-
 import { Pool } from "pg";
 
 declare global {
-  // eslint-disable-next-line no-var
+
   var __pool: Pool | undefined;
 }
 
@@ -35,13 +27,6 @@ export async function query<T extends Record<string, unknown>>(
   return result.rows as T[];
 }
 
-/**
- * Run several statements as one unit.
- *
- * `/stop` needs this and not for tidiness: deleting the filter while leaving the
- * queue behind would send messages to someone who has just unsubscribed, which
- * is a PECR breach rather than a cosmetic bug.
- */
 export async function transaction<T>(
   work: (run: (sql: string, params?: unknown[]) => Promise<Record<string, unknown>[]>) => Promise<T>,
 ): Promise<T> {

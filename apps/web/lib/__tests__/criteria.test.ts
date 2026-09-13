@@ -5,8 +5,7 @@ import { InvalidForm, parseForm } from "../criteria";
 const ENABLED = ["E14", "SE16", "SE8"];
 
 describe("an absent field stays absent", () => {
-  // The matcher reads a present criterion as a requirement, so a default invented
-  // here silently narrows someone's search.
+
   it("produces an empty object from an empty form", () => {
     expect(parseForm({}, ENABLED)).toEqual({});
   });
@@ -22,7 +21,7 @@ describe("an absent field stays absent", () => {
 
 describe("checkboxes", () => {
   it("only a ticked box becomes a criterion", () => {
-    // An unticked "pets allowed" means "I don't mind", not "listings that forbid pets".
+
     expect(parseForm({}, ENABLED).pets_allowed).toBeUndefined();
     expect(parseForm({ pets_allowed: "on" }, ENABLED).pets_allowed).toBe(true);
   });
@@ -35,8 +34,7 @@ describe("checkboxes", () => {
   });
 
   it("drops a value that is not in the vocabulary", () => {
-    // The worker's matcher compares against its own list; a value it has never
-    // heard of would match nothing and look like a bug in matching.
+
     expect(parseForm({ property_types: ["flat", "castle"] }, ENABLED).property_types)
       .toEqual(["flat"]);
   });
@@ -54,8 +52,7 @@ describe("districts", () => {
   });
 
   it("refuses a district nothing is collected for", () => {
-    // Accepting it would create a subscription that waits for ever, and the
-    // person could not tell that apart from a quiet market.
+
     expect(() => parseForm({ districts: ["SE16", "W1"] }, ENABLED)).toThrow(InvalidForm);
   });
 });
@@ -76,11 +73,9 @@ describe("ranges", () => {
   });
 });
 
-
 describe("there is no daily cap", () => {
   it("ignores a cap someone tries to send", () => {
-    // Every match is delivered. A field left over from an old form must not
-    // quietly reappear as a limit.
+
     expect(parseForm({ max_alerts_per_day: "3" }, ENABLED)).toEqual({});
   });
 });

@@ -1,13 +1,3 @@
-// Choose a plan.
-//
-// The one page where money is asked for, reached from two places: a link in the bot
-// and a link in an alert. One implementation, so there is one place where a price is
-// decided and one place where a payment starts.
-//
-// The token in the URL is how this page knows whose plan it is about. It is short
-// lived and single purpose — see `issueToken` — so a link left in a chat stops
-// working rather than becoming a way to top up somebody else's account.
-
 import { accountForToken, paidPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
@@ -15,7 +5,6 @@ export const dynamic = "force-dynamic";
 const money = (pence: number) =>
   "£" + (pence / 100).toLocaleString("en-GB", { minimumFractionDigits: 0 });
 
-/** What a plan costs per day, for comparing two lengths honestly. */
 const perDay = (pence: number, days: number | null) =>
   days && days > 0 ? `${money(Math.round(pence / days))} a day` : null;
 
@@ -50,9 +39,6 @@ export default async function UpgradePage({
     );
   }
 
-  // Cheapest first from the query, and the more expensive one carries the
-  // recommendation — it is the better value per day, which is the only honest reason
-  // to point at it.
   const best = plans.reduce((a, b) =>
     (a.duration_days ?? 0) >= (b.duration_days ?? 0) ? a : b,
   );

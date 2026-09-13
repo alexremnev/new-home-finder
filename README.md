@@ -50,7 +50,7 @@ section of the spec before adopting a source.
 beyond the run log:
 
 ```bash
-python -m worker schedules              # show what is due and when
+python -m worker ingest --dry-run       # the wiring, without the network
 ```
 
 **On a runner, manually.** This is what verifies the real network path and

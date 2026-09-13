@@ -1,10 +1,3 @@
-"""Process configuration.
-
-Everything the worker needs to start comes from the environment; everything that
-governs its behaviour comes from the database. That split is what makes the host
-interchangeable — moving between CI, a VPS, and a container changes nothing here.
-"""
-
 from __future__ import annotations
 
 import os
@@ -12,10 +5,8 @@ from dataclasses import dataclass
 
 from worker.env import load_env
 
-
 class ConfigError(RuntimeError):
     pass
-
 
 @dataclass(frozen=True)
 class Config:
@@ -42,12 +33,10 @@ class Config:
             dry_run=dry_run,
         )
 
-
     def require_telegram(self) -> str:
         if not self.telegram_token:
             raise ConfigError("TELEGRAM_TOKEN is required to deliver alerts")
         return self.telegram_token
-
 
 def _opt(name: str) -> str | None:
     value = os.environ.get(name, "").strip()

@@ -1,20 +1,3 @@
-"""Load a local `.env` file.
-
-Nothing reads `.env` on its own: the standard library only exposes the process
-environment. This fills that gap for local runs while leaving deployed runs
-alone.
-
-Values already present in the environment win. In CI the values arrive as real
-environment variables from the secret store, and a stale file checked out beside
-them must not override them.
-
-One deliberate difference from some `.env` parsers: text after `#` on a value
-line is *not* treated as a comment. A Postgres password may legitimately contain
-`#`, and silently truncating a connection string produces a confusing
-authentication failure. Only a line whose first non-space character is `#` is a
-comment. Wrap a value in quotes if it has leading or trailing spaces.
-"""
-
 from __future__ import annotations
 
 import os
@@ -22,16 +5,14 @@ import pathlib
 
 FILENAME = ".env"
 
-
 def find_env_file(start: pathlib.Path | None = None) -> pathlib.Path | None:
-    """Look for `.env` beside the project root, walking up from `start`."""
+
     here = (start or pathlib.Path(__file__)).resolve()
     for directory in [here, *here.parents]:
         candidate = directory / FILENAME
         if candidate.is_file():
             return candidate
     return None
-
 
 def parse(text: str) -> dict[str, str]:
     values: dict[str, str] = {}
@@ -54,9 +35,8 @@ def parse(text: str) -> dict[str, str]:
         values[name] = value
     return values
 
-
 def load_env(path: pathlib.Path | None = None, *, override: bool = False) -> int:
-    """Put `.env` values into the environment. Returns how many were applied."""
+
     env_file = path or find_env_file()
     if env_file is None or not env_file.is_file():
         return 0

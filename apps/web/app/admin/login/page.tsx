@@ -1,9 +1,3 @@
-// The login form.
-//
-// A plain HTML form posting to a route handler: no client component, no state, no
-// JavaScript. A password field is the last place to want a hydration boundary, and
-// the browser's own form is better at this than anything written here would be.
-
 export const dynamic = "force-dynamic";
 
 const REASONS: Record<string, string> = {
