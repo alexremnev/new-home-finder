@@ -110,11 +110,12 @@ async def collect(
         if missing:
 
             raise RuntimeError(
-                f"not set in the worker's .env: {', '.join(missing)}. "
-                "TG_API_ID/HASH/SESSION come from tools/tg-mirror/.env (the session "
-                "is printed once by `mirror.py login`); TG_WATCH is the chat to read "
-                "without the @; TG_READER names this reader and must differ between "
-                "accounts, because the cursor is keyed by it."
+                f"not set in the environment: {', '.join(missing)}. "
+                "TG_API_ID/TG_API_HASH come from https://my.telegram.org -> API "
+                "development tools; TG_SESSION is written by "
+                "`python -m worker login --save <env file>`; TG_WATCH is the chat "
+                "to read without the @; TG_READER names this reader and must differ "
+                "between accounts, because the cursor is keyed by it."
             )
 
         reader = reader_name()
@@ -136,7 +137,7 @@ async def collect(
 
                 raise RuntimeError(
                     f"the session for reader {reader!r} is no longer authorised — "
-                    "run mirror.py login again"
+                    "run `python -m worker login --save <env file>` again"
                 )
 
             me = await client.get_me()
@@ -144,7 +145,8 @@ async def collect(
                 raise RuntimeError(
                     f"the session for reader {reader!r} is a BOT session, and Telegram "
                     "does not let bots read history. TG_SESSION has to come from "
-                    "logging in as a person: run `mirror.py login` and enter your "
+                    "logging in as a person: run "
+                    "`python -m worker login --save <env file>` and enter your "
                     "phone number at the prompt, not a bot token. The bot token "
                     "belongs in TELEGRAM_TOKEN, which is a different thing — it sends "
                     "alerts, it does not read the feed."
@@ -229,10 +231,16 @@ def save_session(path: pathlib.Path, session: str) -> None:
     if not replaced:
         lines.append(f"TG_SESSION={session}")
 
-    mode = path.stat().st_mode & 0o777 if path.is_file() else 0o600
+    stat = path.stat() if path.is_file() else None
+    mode = stat.st_mode & 0o777 if stat else 0o600
     temp = path.with_suffix(path.suffix + ".new")
     temp.write_text("\n".join(lines), encoding="utf-8")
     os.chmod(temp, mode)
+    if stat is not None:
+        try:
+            os.chown(temp, stat.st_uid, stat.st_gid)
+        except PermissionError:
+            pass
     os.replace(temp, path)
 
 
@@ -248,8 +256,19 @@ async def login(save_to: str | None = None) -> int:
     api_id = os.environ.get("TG_API_ID", "").strip()
     api_hash = os.environ.get("TG_API_HASH", "").strip()
     if not api_id.isdigit() or not api_hash:
-        print("TG_API_ID and TG_API_HASH must be set in .env first.", file=sys.stderr)
-        print("Get them from https://my.telegram.org -> API development tools.", file=sys.stderr)
+        where = f"in {target}" if target else "in the environment"
+        print(f"TG_API_ID and TG_API_HASH are not set {where}.", file=sys.stderr)
+        if not target:
+            print(
+                "This command reads them from the environment unless you name a "
+                "file: --save /etc/london-home-finder.env reads TG_API_ID and "
+                "TG_API_HASH from it and writes TG_SESSION back into it.",
+                file=sys.stderr,
+            )
+        print(
+            "Get them from https://my.telegram.org -> API development tools.",
+            file=sys.stderr,
+        )
         return 2
 
     try:
