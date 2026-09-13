@@ -30,71 +30,21 @@ describe("start", () => {
   });
 });
 
-describe("quick edits", () => {
-  it("reads a range", () => {
-    expect(parseCommand("/price 1500-2200")).toEqual({
-      kind: "patch",
-      patch: { field: "price", min: 1500, max: 2200 },
-    });
+describe("the shorthand commands are gone", () => {
+  it("answers with help rather than pretending to have changed something", () => {
+    for (const typed of [
+      "/price 1500-2200",
+      "/price any",
+      "/beds 1-2",
+      "/areas SE16, SE8",
+      "/pets on",
+      "/bills off",
+      "/direct on",
+      "/edit",
+    ]) {
+      expect(parseCommand(typed).kind).toBe("help");
+    }
   });
-
-  it("treats a single number as a ceiling", () => {
-
-    expect(parseCommand("/price 2000")).toEqual({
-      kind: "patch",
-      patch: { field: "price", max: 2000 },
-    });
-  });
-
-  it("ignores the currency symbol and separators people type", () => {
-    expect(parseCommand("/price £1,500 - £2,200")).toEqual({
-      kind: "patch",
-      patch: { field: "price", min: 1500, max: 2200 },
-    });
-  });
-
-  it("reads an open-ended range in both directions", () => {
-    expect(parseCommand("/price 1500-")).toEqual({
-      kind: "patch",
-      patch: { field: "price", min: 1500 },
-    });
-    expect(parseCommand("/price -2200")).toEqual({
-      kind: "patch",
-      patch: { field: "price", max: 2200 },
-    });
-  });
-
-  it("can clear a criterion", () => {
-
-    expect(parseCommand("/price any")).toEqual({ kind: "patch", patch: { field: "price" } });
-  });
-
-  it("reads districts however they are separated", () => {
-    expect(parseCommand("/areas SE16, SE8")).toEqual({
-      kind: "patch",
-      patch: { field: "areas", districts: ["SE16", "SE8"] },
-    });
-    expect(parseCommand("/areas se16 e14")).toEqual({
-      kind: "patch",
-      patch: { field: "areas", districts: ["se16", "e14"] },
-    });
-  });
-
-  it("reads flags", () => {
-    expect(parseCommand("/pets on")).toEqual({
-      kind: "patch",
-      patch: { field: "pets_allowed", on: true },
-    });
-    expect(parseCommand("/bills off")).toEqual({
-      kind: "patch",
-      patch: { field: "bills_included", on: false },
-    });
-    expect(parseCommand("/direct yes")).toEqual({
-      kind: "patch",
-      patch: { field: "landlord_direct_only", on: true },
-    });
-  });
-
 });
 
 describe("the retired alert command", () => {
