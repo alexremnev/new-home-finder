@@ -75,6 +75,17 @@ SELECT date_trunc('day', received_at)::date AS day,
  GROUP BY 1, 2 ORDER BY 1 DESC, 2
 """
 
+UNPARSEABLE_BY_REASON = """
+SELECT coalesce(nullif(split_part(parse_error, ';', 1), ''), '(no reason recorded)')
+                                       AS reason,
+       count(*)                        AS messages,
+       min(received_at)                AS oldest,
+       max(received_at)                AS newest
+  FROM source_messages
+ WHERE status = 'unparseable'
+ GROUP BY 1 ORDER BY 2 DESC LIMIT 12
+"""
+
 LISTINGS_BY_SOURCE = """
 SELECT source_key,
        count(*)                                        AS total,
@@ -134,10 +145,10 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
 
     recent_bad = scalar(
         "SELECT count(*) FROM source_messages WHERE status = 'unparseable' "
-        "AND stored_at > now() - interval '24 hours'"
+        "AND received_at > now() - interval '24 hours'"
     )
     recent_all = scalar(
-        "SELECT count(*) FROM source_messages WHERE stored_at > now() - interval '24 hours'"
+        "SELECT count(*) FROM source_messages WHERE received_at > now() - interval '24 hours'"
     ) or 0
     if recent_all >= 10 and recent_bad and recent_bad / recent_all > 0.2:
         found.append(
@@ -198,6 +209,10 @@ def main() -> int:
                         help="where to write the report (default ./reports)")
     parser.add_argument("--no-alert", action="store_true",
                         help="write the report but send nothing to the ops chat")
+    parser.add_argument("--fail-on-problems", action="store_true",
+                        help="exit 1 when the report finds a problem. Off by default: "
+                             "under systemd a non-zero exit means the report itself "
+                             "failed, and OnFailure= cannot tell the two apart")
     parser.add_argument("--quiet-hours", type=int, default=6, metavar="H",
                         help="hours without a source message before that is a fault (default 6)")
     parser.add_argument("--stale-hours", type=int, default=2, metavar="H",
@@ -225,6 +240,8 @@ def main() -> int:
             table("BY HOUR OF DAY",
                   conn.execute(DELIVERY_BY_HOUR, {"days": args.days}).fetchall()),
             table("INGEST", conn.execute(INGEST_BY_DAY, {"days": args.days}).fetchall()),
+            table("WHY MESSAGES DID NOT PARSE",
+                  conn.execute(UNPARSEABLE_BY_REASON).fetchall()),
             table("LISTINGS", conn.execute(LISTINGS_BY_SOURCE).fetchall()),
         ]
         faults = problems(conn, quiet_hours=args.quiet_hours, stale_hours=args.stale_hours)
@@ -242,8 +259,7 @@ def main() -> int:
     if faults and not args.no_alert:
         tell_ops("⚠️ Something is stuck:\n\n" + "\n".join(f"• {f}" for f in faults))
 
-        return 1
-    return 0
+    return 1 if faults and args.fail_on_problems else 0
 
 if __name__ == "__main__":
     raise SystemExit(main())
