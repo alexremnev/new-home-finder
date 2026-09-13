@@ -1,0 +1,12 @@
+[Unit]
+Description=Run rollup every five minutes
+
+[Timer]
+Unit=london-home-finder@rollup.service
+OnBootSec=2min
+OnUnitInactiveSec=5min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

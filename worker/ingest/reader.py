@@ -161,6 +161,9 @@ async def collect(
                 highest = cursor
                 seen = 0
 
+                batch: list[dict[str, Any]] = []
+                hashes: set[str] = set()
+
                 async for message in client.iter_messages(
                     entity, min_id=cursor, reverse=True, limit=limit
                 ):
@@ -176,21 +179,26 @@ async def collect(
                     if not body and not links:
                         continue
 
-                    if store.store_source_message(
-                        conn,
-                        source_key=source_key,
-                        reader=reader,
-                        external_id=str(message.id),
-                        received_at=message.date,
-                        body=body,
-                        links=links,
-                        media_kinds=media_of(message),
-                        content_hash=content_hash(body, links),
-                    ):
-                        stored += 1
-                    else:
-
+                    digest = content_hash(body, links)
+                    if digest in hashes:
                         stage.count("already_known")
+                        continue
+                    hashes.add(digest)
+
+                    batch.append({
+                        "source_key": source_key,
+                        "reader": reader,
+                        "external_id": str(message.id),
+                        "received_at": message.date,
+                        "body": body,
+                        "links": links,
+                        "media_kinds": media_of(message),
+                        "content_hash": digest,
+                    })
+
+                written = store.store_source_messages(conn, batch)
+                stored += written
+                stage.count("already_known", len(batch) - written)
 
                 if highest > cursor:
                     store.set_ingest_cursor(

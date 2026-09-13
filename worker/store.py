@@ -284,24 +284,35 @@ def stop_user(conn: Conn, user_id: int, *, reason: str) -> None:
         (reason[:500], user_id),
     )
 
-def store_source_message(
-    conn: Conn, *, source_key: str, reader: str, external_id: str, received_at: Any,
-    body: str | None, links: list[str], media_kinds: list[str], content_hash: str,
-) -> bool:
 
-    row = conn.execute(
-        """
-        INSERT INTO source_messages
-               (source_key, reader, external_id, received_at, body, links,
-                media_kinds, content_hash)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+def store_source_messages(conn: Conn, rows: list[dict[str, Any]]) -> int:
+    if not rows:
+        return 0
+
+    columns = (
+        "source_key", "reader", "external_id", "received_at", "body", "links",
+        "media_kinds", "content_hash",
+    )
+    groups = ", ".join(
+        "(" + ", ".join(f"%({name}_{i})s" for name in columns) + ")"
+        for i in range(len(rows))
+    )
+    params: dict[str, Any] = {}
+    for i, row in enumerate(rows):
+        for name in columns:
+            params[f"{name}_{i}"] = row.get(name)
+
+    written = conn.execute(
+        f"""
+        INSERT INTO source_messages ({", ".join(columns)})
+        VALUES {groups}
         ON CONFLICT DO NOTHING
         RETURNING id
-        """,
-        (source_key, reader, external_id, received_at, body, links,
-         media_kinds, content_hash),
-    ).fetchone()
-    return row is not None
+        """,  # noqa: S608 - placeholders only; column names are the fixed tuple above
+        params,
+    ).fetchall()
+    return len(written)
+
 
 def unparsed_messages(conn: Conn, *, source_key: str, limit: int = 500) -> list[Row]:
 

@@ -1,0 +1,16 @@
+[Unit]
+Description=London Home Finder: report
+After=network-online.target
+OnFailure=london-home-finder-alert@report.service
+
+[Service]
+Type=oneshot
+User=finder
+WorkingDirectory=/opt/london-home-finder
+EnvironmentFile=/etc/london-home-finder.env
+ExecStart=/opt/london-home-finder/.venv/bin/python scripts/report.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/london-home-finder/reports

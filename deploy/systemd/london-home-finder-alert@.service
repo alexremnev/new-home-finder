@@ -1,0 +1,8 @@
+[Unit]
+Description=Tell the ops chat that %i failed
+
+[Service]
+Type=oneshot
+User=finder
+EnvironmentFile=/etc/london-home-finder.env
+ExecStart=/opt/london-home-finder/deploy/notify-failure.sh %i

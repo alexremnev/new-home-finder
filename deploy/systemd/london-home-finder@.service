@@ -1,0 +1,20 @@
+[Unit]
+Description=London Home Finder: %i
+After=network-online.target
+Wants=network-online.target
+OnFailure=london-home-finder-alert@%i.service
+
+[Service]
+Type=oneshot
+User=finder
+WorkingDirectory=/opt/london-home-finder
+EnvironmentFile=/etc/london-home-finder.env
+ExecStart=/opt/london-home-finder/.venv/bin/python -m worker %i --trigger schedule
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/london-home-finder/reports
