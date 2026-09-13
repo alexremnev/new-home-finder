@@ -22,30 +22,7 @@ MONTHS = (
     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 )
 
-LABELS = {
-    "per_month": "/mo",
-    "studio": "studio",
-    "room": "room in a share",
-    "bedroom": "bedroom",
-    "zone": "Zone",
-    "available": "Available from",
-    "min_term": "min",
-    "months": "months",
-    "month": "month",
-    "pets_yes": "🐾 Pets: allowed",
-    "pets_no": "🐾 Pets: not allowed",
-    "bills_yes": "💡 Bills included",
-    "bills_no": "💡 Bills: not included",
-    "landlord_direct": "direct from landlord",
-    "unsubscribe": "/stop to unsubscribe",
-    "bathroom": "bathroom",
-    "deposit": "Deposit",
-    "size": "Size",
-    "not_stated": "not stated",
-}
-
 def plural(count: int, word: str) -> str:
-
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 def money(amount: int) -> str:
@@ -91,7 +68,9 @@ def render_listing(view: ListingView) -> str:
 
     lines.append(f"💷 <b>{money(view.price_pcm)}/month</b>")
 
-    if view.bedrooms == 0:
+    if view.property_type == "room":
+        lines.append("🛏️ Room in a shared flat")
+    elif view.bedrooms == 0:
         lines.append("🛏️ Studio")
     else:
         lines.append(f"🛏️ {plural(view.bedrooms, 'Bedroom')}")

@@ -7,7 +7,6 @@ import pytest
 
 from worker.pipeline.match import is_eligible, matches
 
-
 def listing(**overrides: Any) -> dict[str, Any]:
     values: dict[str, Any] = {
         "price_pcm": 1950,
@@ -26,16 +25,8 @@ def listing(**overrides: Any) -> dict[str, Any]:
     values.update(overrides)
     return values
 
-
-# ── the empty criteria case ───────────────────────────────────────────────
-
-
 def test_empty_criteria_match_everything() -> None:
     assert matches({}, listing())
-
-
-# ── ranges ────────────────────────────────────────────────────────────────
-
 
 @pytest.mark.parametrize(
     ("price", "expected"),
@@ -45,20 +36,14 @@ def test_price_range_is_inclusive(price: int, expected: bool) -> None:
     criteria = {"price_pcm": {"min": 1200, "max": 2200}}
     assert bool(matches(criteria, listing(price_pcm=price))) is expected
 
-
 def test_an_open_ended_range_works() -> None:
     assert matches({"price_pcm": {"max": 2000}}, listing(price_pcm=500))
     assert not matches({"price_pcm": {"min": 2000}}, listing(price_pcm=500))
 
-
 def test_a_studio_is_zero_bedrooms_not_a_missing_value() -> None:
-    """A studio must match a "from zero bedrooms" filter rather than fall out."""
+
     assert matches({"bedrooms": {"min": 0, "max": 1}}, listing(bedrooms=0))
     assert not matches({"bedrooms": {"min": 1}}, listing(bedrooms=0))
-
-
-# ── the rule about unknown values ─────────────────────────────────────────
-
 
 @pytest.mark.parametrize(
     ("criteria", "unknown_field"),
@@ -75,100 +60,67 @@ def test_a_studio_is_zero_bedrooms_not_a_missing_value() -> None:
 def test_a_set_criterion_passes_a_value_it_cannot_check(
     criteria: dict[str, Any], unknown_field: str
 ) -> None:
-    """The single rule that governs matching: only a contradicting value rejects.
 
-    This is the reverse of what this file asserted originally, and the reversal was
-    forced by data rather than taste. One feed never states pets or bills at all, so
-    under the old rule anybody who asked for "pets allowed" received nothing, for
-    ever, with no error anywhere. A filter that silently matches zero listings is
-    worse than one that occasionally includes a listing the recipient has to check —
-    and the alert now says which fields were not stated, so they can.
-    """
     assert matches(criteria, listing(**{unknown_field: None}))
 
-
 def test_an_unset_criterion_ignores_an_unknown_value() -> None:
-    """Only criteria that were asked for constrain anything."""
-    assert matches({}, listing(pets_allowed=None, available_from=None, furnished="unknown"))
 
+    assert matches({}, listing(pets_allowed=None, available_from=None, furnished="unknown"))
 
 def test_furnishing_unknown_is_not_a_reason_to_withhold() -> None:
     assert matches({"furnished": ["furnished"]}, listing(furnished="unknown"))
 
-
 def test_a_value_that_contradicts_the_criterion_still_rejects() -> None:
-    """The other half of the rule, and the half that makes filters mean anything."""
+
     assert not matches({"furnished": ["furnished"]}, listing(furnished="unfurnished"))
     assert not matches({"pets_allowed": True}, listing(pets_allowed=False))
     assert not matches({"price_pcm": {"max": 2000}}, listing(price_pcm=2500))
     assert not matches({"bedrooms": {"min": 2}}, listing(bedrooms=1))
 
-
 def test_an_agency_listing_still_fails_a_landlord_direct_filter() -> None:
-    """`False` is a statement and rejects; `None` is silence and passes. Conflating
-    them rejected every source that does not report agency status."""
+
     assert not matches({"landlord_direct_only": True}, listing(is_landlord_direct=False))
     assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=None))
-
-
-# ── tri-state flags ───────────────────────────────────────────────────────
-
 
 def test_pets_wanted_excludes_only_a_stated_no() -> None:
     assert matches({"pets_allowed": True}, listing(pets_allowed=True))
     assert not matches({"pets_allowed": True}, listing(pets_allowed=False))
-    # Silence passes, and the alert says "Pets not stated" so the recipient knows
-    # this is the one thing the listing has not answered. Rejecting silence made
-    # this criterion a mute off switch for sources that never mention pets.
-    assert matches({"pets_allowed": True}, listing(pets_allowed=None))
 
+    assert matches({"pets_allowed": True}, listing(pets_allowed=None))
 
 def test_a_flag_can_be_required_to_be_false() -> None:
     assert matches({"bills_included": False}, listing(bills_included=False))
     assert not matches({"bills_included": False}, listing(bills_included=True))
 
-
 def test_a_null_flag_in_criteria_means_do_not_filter() -> None:
-    """`null` and `false` are different instructions and must not be conflated."""
+
     for value in (True, False, None):
         assert matches({"bills_included": None}, listing(bills_included=value))
-
-
-# ── geography ─────────────────────────────────────────────────────────────
-
 
 def test_district_list() -> None:
     criteria = {"areas": {"postcode_districts": ["SE16", "SE8", "E14"]}}
     assert matches(criteria, listing(postcode_district="SE16"))
     assert not matches(criteria, listing(postcode_district="E1"))
 
-
 def test_district_matching_is_exact_not_a_prefix() -> None:
-    """E1 must not admit E14, the same trap as in discovery."""
+
     criteria = {"areas": {"postcode_districts": ["E1"]}}
     assert matches(criteria, listing(postcode_district="E1", tfl_zone=None))
     assert not matches(criteria, listing(postcode_district="E14", tfl_zone=None))
 
-
 def test_district_and_zone_are_alternatives() -> None:
-    """Both name the same geography, so satisfying either is enough."""
+
     criteria = {"areas": {"postcode_districts": ["W1"], "tfl_zones": [2]}}
     assert matches(criteria, listing(postcode_district="SE16", tfl_zone=2))
     assert matches(criteria, listing(postcode_district="W1", tfl_zone=5))
     assert not matches(criteria, listing(postcode_district="SE16", tfl_zone=5))
 
-
 def test_unknown_location_fails_an_area_filter() -> None:
     criteria = {"areas": {"postcode_districts": ["SE16"]}}
     assert not matches(criteria, listing(postcode_district=None, tfl_zone=None))
 
-
 def test_empty_areas_constrain_nothing() -> None:
     assert matches({"areas": {}}, listing(postcode_district=None, tfl_zone=None))
-
-
-# ── dates and terms ───────────────────────────────────────────────────────
-
 
 def test_available_before() -> None:
     criteria = {"available_from": {"before": "2026-09-15"}}
@@ -176,34 +128,27 @@ def test_available_before() -> None:
     assert matches(criteria, listing(available_from=date(2026, 9, 15)))
     assert not matches(criteria, listing(available_from=date(2026, 9, 16)))
 
-
 def test_available_after() -> None:
     criteria = {"available_from": {"after": "2026-09-01"}}
     assert not matches(criteria, listing(available_from=date(2026, 8, 1)))
     assert matches(criteria, listing(available_from=date(2026, 9, 2)))
 
-
 def test_dates_are_accepted_as_strings_or_dates() -> None:
     criteria = {"available_from": {"before": date(2026, 9, 15)}}
     assert matches(criteria, listing(available_from="2026-09-01"))
 
-
 def test_minimum_tenancy_is_a_ceiling_on_the_landlords_demand() -> None:
-    """Someone wanting six months cannot take a place demanding twelve."""
+
     criteria = {"min_tenancy_max_months": 6}
     assert matches(criteria, listing(min_tenancy_months=6))
     assert not matches(criteria, listing(min_tenancy_months=12))
 
-
 def test_landlord_direct_only() -> None:
     assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=True))
-    # None is silence and passes; False is "listed by an agency" and does not.
+
     assert matches({"landlord_direct_only": True}, listing(is_landlord_direct=None))
     assert not matches({"landlord_direct_only": True}, listing(is_landlord_direct=False))
     assert matches({"landlord_direct_only": False}, listing(is_landlord_direct=None))
-
-
-# ── a realistic set of criteria ────────────────────────────────────────────
 
 REALISTIC = {
     "price_pcm": {"min": 1200, "max": 2200},
@@ -218,10 +163,8 @@ REALISTIC = {
     "notify": {"new_listings": True, "price_drop": False},
 }
 
-
 def test_a_realistic_subscription_matches_a_suitable_listing() -> None:
     assert matches(REALISTIC, listing())
-
 
 @pytest.mark.parametrize(
     ("field", "value", "expected_in_reason"),
@@ -243,28 +186,21 @@ def test_each_criterion_can_reject_and_says_why(
     assert not verdict
     assert expected_in_reason in verdict.reason, verdict.reason
 
-
-# ── eligibility ───────────────────────────────────────────────────────────
-
 SUBSCRIBED_AT = datetime(2026, 8, 7, 10, 0)
 
-
-
 def test_existing_stock_at_subscription_time_is_not_news() -> None:
-    """Otherwise the relationship opens with a burst of listings nobody asked for."""
+
     older = listing(first_seen_at=SUBSCRIBED_AT - timedelta(hours=1))
     verdict = is_eligible(older, backfill_from=SUBSCRIBED_AT)
     assert not verdict
     assert "before the subscription" in verdict.reason
 
-
 def test_a_listing_seen_after_subscribing_is_eligible() -> None:
     newer = listing(first_seen_at=SUBSCRIBED_AT + timedelta(minutes=1))
     assert is_eligible(newer, backfill_from=SUBSCRIBED_AT)
 
-
 def test_eligibility_and_suitability_are_separate_questions() -> None:
-    """A listing can be a perfect home and still not be worth messaging about now."""
+
     older = listing(first_seen_at=SUBSCRIBED_AT - timedelta(days=1))
     assert matches(REALISTIC, older)
     assert not is_eligible(older, backfill_from=SUBSCRIBED_AT)
