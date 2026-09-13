@@ -3,10 +3,13 @@ REM Install the scheduled tasks. Run once, from an elevated prompt.
 REM
 REM   scripts\win\install-task.cmd
 REM
-REM Three tasks, not one: ingest reads the feed, drain sends what it queued, and
-REM report checks for silence. Separate because their failure modes are, and drain
-REM is offset by two minutes so a batch goes out in the same cycle it was queued in
-REM rather than waiting for the next.
+REM Four tasks, not one. ingest reads the feed, drain sends what it queued, rollup
+REM totals the day into daily_stats so the console reads counts instead of computing
+REM them, and report checks for silence.
+REM
+REM The offsets matter: drain at +2 so a batch goes out in the cycle it was queued
+REM in rather than waiting for the next, and rollup at +3 so it counts a delivery
+REM that has already happened rather than one about to.
 
 setlocal
 for %%I in ("%~dp0..\..") do set PROJECT=%%~fI
@@ -17,6 +20,9 @@ schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:00 ^
 
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:02 ^
   /TN "home drain" /TR "%RUN% drain"
+
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:03 ^
+  /TN "home rollup" /TR "%RUN% rollup"
 
 schtasks /Create /F /RL LIMITED /SC HOURLY /MO 1 /ST 00:20 ^
   /TN "home report" /TR "cmd /c cd /d \"%PROJECT%\" && .venv\Scripts\python.exe scripts\report.py >> logs\report.log 2>&1"

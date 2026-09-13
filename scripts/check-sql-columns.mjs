@@ -25,7 +25,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 const MIGRATIONS = "db/migrations";
-const SOURCES = ["apps/web/lib", "apps/web/app"];
+const SOURCES = ["apps/web/lib", "apps/web/app", "worker", "scripts"];
 
 // ── the schema, from the migrations ────────────────────────────────────────
 
@@ -152,10 +152,41 @@ const PSEUDO_TABLES = new Set(["excluded"]);
 
 // ── the queries ────────────────────────────────────────────────────────────
 
-/** Every template literal that looks like SQL, with the file and line it is on. */
+/**
+ * Every string that looks like SQL, with the file and line it is on.
+ *
+ * Two languages, two quoting styles. The worker's queries live in Python triple
+ * quotes and the web's in template literals, and both were written from memory of
+ * the schema — so both need checking. Leaving the worker out was how `daily_stats`
+ * got its first query unverified.
+ */
 function queriesIn(path) {
   const text = readFileSync(path, "utf8");
   const found = [];
+
+  if (path.endsWith(".py")) {
+    for (const match of text.matchAll(/"""([\s\S]*?)"""/g)) {
+      if (!/\b(SELECT|INSERT|UPDATE|DELETE)\b/i.test(match[1])) continue;
+      found.push({
+        sql: match[1],
+        line: text.slice(0, match.index).split("\n").length,
+        rowType: undefined,
+        text,
+      });
+    }
+    // Single-line queries too: `conn.execute("UPDATE … ")` is common and just as
+    // capable of naming a column that is not there.
+    for (const match of text.matchAll(/"((?:[^"\\\n]|\\.)*?\b(?:SELECT|INSERT|UPDATE|DELETE)\b(?:[^"\\\n]|\\.)*?)"/gi)) {
+      found.push({
+        sql: match[1],
+        line: text.slice(0, match.index).split("\n").length,
+        rowType: undefined,
+        text,
+      });
+    }
+    return found;
+  }
+
   for (const match of text.matchAll(/`([^`]*?(?:SELECT|INSERT|UPDATE|DELETE)[^`]*?)`/gi)) {
     // The row type the caller declared for this query, if it named one. It is what
     // makes the timestamp check precise rather than noisy: a temporal column with no
@@ -175,9 +206,10 @@ function queriesIn(path) {
 function filesUnder(dir) {
   const out = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "__pycache__" || entry.name === "node_modules") continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...filesUnder(path));
-    else if (/\.tsx?$/.test(entry.name)) out.push(path);
+    else if (/\.(tsx?|py)$/.test(entry.name)) out.push(path);
   }
   return out;
 }
@@ -215,7 +247,14 @@ for (const dir of SOURCES) {
       const whole = sql
         .replace(/--[^\n]*/g, " ")
         .replace(/'[^']*'/g, " ' ' ")
-        .replace(/\$\d+/g, " ");
+        .replace(/\$\d+/g, " ")
+        .replace(/%\((\w+)\)s|%s/g, " ")
+        // Interpolations: ${…} in a template literal, {…} in a Python f-string.
+        // The name inside is a JavaScript or Python variable holding a fragment of
+        // SQL, not a column — and the fragment it holds is itself built from a
+        // column tuple this tool has already checked where it is declared.
+        .replace(/\$\{[^}]*\}/g, " ")
+        .replace(/\{[^}]*\}/g, " ");
 
       // Each arm of a UNION is its own scope, and checking them together is how a
       // missing column hides: with five arms in one query, a column belonging to the

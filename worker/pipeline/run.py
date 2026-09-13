@@ -13,6 +13,7 @@ from worker.pipeline.outbox import (
     queue_matches,
     seed_new_subscriptions,
 )
+from worker.pipeline.rollup import run_rollup
 
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
@@ -29,6 +30,10 @@ def run_job(
     suppress_delivery: bool = False,
     districts: frozenset[str] | None = None,
 ) -> str:
+
+    if job == "rollup":
+        run_rollup(conn, run, dry_run=cfg.dry_run)
+        return "ok"
 
     if job == "drain":
 

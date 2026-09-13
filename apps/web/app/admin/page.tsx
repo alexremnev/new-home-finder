@@ -1,11 +1,12 @@
 import { cookies } from "next/headers";
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import {
   byDistrict, byPrice, delivery, eventCounts, events, jobHealth, knownJobs, overview,
-  planMix, problems, recentComps, recentPayments, recentRuns, sentPerDay, subscribers,
-  unparseableShare, visitsPerDay,
+  fromRollup, planMix, problems, recentComps, recentPayments, recentRuns, subscribers,
+  unparseableShare,
   type Filters, type Range,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
@@ -69,12 +70,17 @@ export default async function AdminPage({
     stats, plans, sent, visits, districts, prices, people, faults, payments, comps,
     runs, health, log, levels, jobs, feedHealth, sending,
   ] = await Promise.all([
-    overview(), planMix(), sentPerDay(days), visitsPerDay(days),
+    overview(), planMix(), fromRollup(days), fromRollup(days),
     byDistrict(days), byPrice(days), subscribers(), problems(),
     recentPayments(), recentComps(), recentRuns(), jobHealth(),
     events(filters), eventCounts(filters), knownJobs(), unparseableShare(days),
     delivery(),
   ]);
+
+  const sentSeries = sent.map((d) => ({ label: d.day, value: d.alerts_sent }));
+  const intakeSeries = sent.map((d) => ({ label: d.day, value: d.listings_added }));
+  const visitSeries = visits.map((d) => ({ label: d.day, value: d.visitors }));
+  const rolledAt = sent.filter((d) => d.computed_at).pop()?.computed_at ?? null;
 
   return (
     <div className="admin">
@@ -228,10 +234,18 @@ export default async function AdminPage({
                 note="free tier's share" />
         </div>
 
-        <TimeSeries data={sent} title={`Alerts delivered · last ${days} day${days === 1 ? "" : "s"}`} />
+        <TimeSeries data={sentSeries}
+                    title={`Alerts delivered · last ${days} day${days === 1 ? "" : "s"}`} />
+        <TimeSeries data={intakeSeries} title="New listings taken in" />
         <TimeSeries data={feedHealth} unit="%"
                     title="Messages the parser could not read, % of the day's messages" />
-        <TimeSeries data={visits} title={`Unique visitors · last ${days} day${days === 1 ? "" : "s"}`} />
+        <TimeSeries data={visitSeries}
+                    title={`Unique visitors · last ${days} day${days === 1 ? "" : "s"}`} />
+        <p className="hint">
+          {rolledAt
+            ? `Counted once by the rollup job, not on every page load. Last recomputed ${rolledAt.slice(0, 16).replace("T", " ")}.`
+            : "Never computed. Run `worker rollup` or every day here reads zero — the numbers are not missing, they have not been counted yet."}
+        </p>
         <Bars data={districts} title="Alerts by district" />
         <Columns data={prices} title="Alerts by rent, in £250 bands"
                  format={(n) => "£" + comma(n)} />
@@ -244,13 +258,15 @@ export default async function AdminPage({
           <thead>
             <tr>
               <th>#</th><th>Plan</th><th>Until</th><th>Filter</th>
-              <th className="num">Sent</th><th className="num">Held</th><th>Extend</th>
+              <th className="num">Sent</th><th className="num">Held</th><th></th>
             </tr>
           </thead>
           <tbody>
             {people.map((person) => (
               <tr key={person.user_id}>
-                <td className="muted">{person.user_id}</td>
+                <td>
+                  <Link href={`/admin/users/${person.user_id}`}>{person.user_id}</Link>
+                </td>
                 <td>
                   {person.plan_display ?? person.plan}
                   {person.status !== "active" && (
@@ -267,14 +283,9 @@ export default async function AdminPage({
                 <td className="num muted">{comma(person.withheld)}</td>
                 <td>
 
-                  <form method="post" action="/api/admin/extend" className="inline-form">
-                    <input type="hidden" name="user_id" value={person.user_id} />
-                    <input type="number" name="days" min={1} max={365}
-                           defaultValue={14} aria-label="Days" />
-                    <input type="text" name="reason" placeholder="why"
-                           aria-label="Reason" maxLength={200} />
-                    <button type="submit" className="ghost">Extend</button>
-                  </form>
+                  <Link href={`/admin/users/${person.user_id}`} className="ghost">
+                    Open
+                  </Link>
                 </td>
               </tr>
             ))}

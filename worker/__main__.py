@@ -15,7 +15,7 @@ from worker.pipeline.run import run_job
 
 Row = dict[str, Any]
 
-JOBS = ("ingest", "drain")
+JOBS = ("ingest", "drain", "rollup")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="worker")

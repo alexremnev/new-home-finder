@@ -36,6 +36,7 @@ while true; do
   uv run python -m worker ingest --trigger schedule || echo "loop: ingest failed, carrying on"
   sleep "$HALF"
   uv run python -m worker drain --trigger schedule || echo "loop: drain failed, carrying on"
+  uv run python -m worker rollup --trigger schedule || echo "loop: rollup failed, carrying on"
 
   # Sleep the remainder of the interval rather than a fixed amount, so a slow run
   # does not push the schedule later and later. If a cycle overruns, the next one

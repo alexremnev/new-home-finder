@@ -48,37 +48,6 @@ export async function planMix(): Promise<Slice[]> {
   );
 }
 
-export async function sentPerDay(days: Range): Promise<Slice[]> {
-  return query<Slice>(
-    `WITH span AS (
-       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
-     )
-     SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
-            count(n.id)::int                AS value
-       FROM span
-       LEFT JOIN notifications n
-              ON n.status = 'sent' AND n.sent_at::date = span.day
-      GROUP BY span.day
-      ORDER BY span.day`,
-    [days],
-  );
-}
-
-export async function visitsPerDay(days: Range): Promise<Slice[]> {
-  return query<Slice>(
-    `WITH span AS (
-       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
-     )
-     SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
-            coalesce(count(v.visitor_hash), 0)::int AS value
-       FROM span
-       LEFT JOIN site_visits v ON v.day = span.day
-      GROUP BY span.day
-      ORDER BY span.day`,
-    [days],
-  );
-}
-
 export async function byDistrict(days: Range, limit = 12): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(l.postcode_district, '—') AS label, count(*)::int AS value
@@ -397,5 +366,176 @@ export async function delivery(): Promise<Delivery> {
     rows[0] ?? {
       oldest_queued_mins: null, median_latency_secs: null, failed_24h: 0, skipped_24h: 0,
     }
+  );
+}
+
+export type Person = {
+  user_id: number;
+  status: string;
+  plan: string;
+  plan_display: string | null;
+  plan_until: string | null;
+  joined: string;
+  consent_at: string | null;
+  consent_source: string | null;
+  stopped_at: string | null;
+  payment_ref: string | null;
+  channel: string | null;
+  address: string | null;
+  verified_at: string | null;
+  subscription_id: number | null;
+  criteria: Record<string, unknown> | null;
+  backfill_from: string | null;
+  seeded_at: string | null;
+  sent: number;
+  queued: number;
+  failed: number;
+  withheld: number;
+  last_sent_at: string | null;
+  first_sent_at: string | null;
+  paid_total_pence: number;
+  paid_count: number;
+  last_paid_at: string | null;
+  comped_days: number;
+};
+
+export async function person(userId: number): Promise<Person | null> {
+  const rows = await query<Person>(
+    `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
+            u.plan_until::text, u.created_at::text AS joined, u.consent_at::text,
+            u.consent_source, u.stopped_at::text, u.payment_ref,
+            uc.channel, uc.address, uc.verified_at::text,
+            s.id AS subscription_id, s.criteria,
+            s.backfill_from::text, s.seeded_at::text,
+            (SELECT count(*)::int FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'sent')            AS sent,
+            (SELECT count(*)::int FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'queued')          AS queued,
+            (SELECT count(*)::int FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'failed')          AS failed,
+            (SELECT count(*)::int FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'skipped'
+                AND n.error = 'share')                                 AS withheld,
+            (SELECT max(n.sent_at)::text FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'sent')            AS last_sent_at,
+            (SELECT min(n.sent_at)::text FROM notifications n
+              WHERE n.user_id = u.id AND n.status = 'sent')            AS first_sent_at,
+            (SELECT coalesce(sum(pm.amount_pence), 0)::int FROM payments pm
+              WHERE pm.user_id = u.id)                                 AS paid_total_pence,
+            (SELECT count(*)::int FROM payments pm
+              WHERE pm.user_id = u.id)                                 AS paid_count,
+            (SELECT max(pm.created_at)::text FROM payments pm
+              WHERE pm.user_id = u.id)                                 AS last_paid_at,
+            (SELECT coalesce(sum((a.detail->>'days')::int), 0)::int
+               FROM admin_actions a
+              WHERE a.user_id = u.id AND a.action = 'extend_plan')      AS comped_days
+       FROM users u
+       LEFT JOIN plans p          ON p.key = u.plan
+       LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
+       LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
+      WHERE u.id = $1`,
+    [userId],
+  );
+  return rows[0] ?? null;
+}
+
+export type Delivered = {
+  id: number;
+  status: string;
+  error: string | null;
+  created_at: string;
+  sent_at: string | null;
+  price_pcm: number | null;
+  bedrooms: number | null;
+  district: string | null;
+  url: string | null;
+};
+
+export async function deliveredTo(userId: number, limit = 50): Promise<Delivered[]> {
+  return query<Delivered>(
+    `SELECT n.id, n.status, n.error, n.created_at::text, n.sent_at::text,
+            l.price_pcm, l.bedrooms, l.postcode_district AS district, l.url
+       FROM notifications n
+       LEFT JOIN listings l ON l.id = n.listing_id
+      WHERE n.user_id = $1
+      ORDER BY n.created_at DESC
+      LIMIT $2`,
+    [userId, limit],
+  );
+}
+
+export type PaidBy = {
+  id: number;
+  plan: string;
+  amount_pence: number;
+  provider: string;
+  provider_ref: string | null;
+  granted_days: number | null;
+  created_at: string;
+};
+
+export async function paymentsBy(userId: number): Promise<PaidBy[]> {
+  return query<PaidBy>(
+    `SELECT id, plan, amount_pence, provider, provider_ref, granted_days,
+            created_at::text
+       FROM payments WHERE user_id = $1 ORDER BY created_at DESC`,
+    [userId],
+  );
+}
+
+export type Touch = {
+  id: number;
+  action: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+};
+
+export async function historyOf(userId: number): Promise<Touch[]> {
+  return query<Touch>(
+    `SELECT id, action, detail, created_at::text
+       FROM admin_actions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
+    [userId],
+  );
+}
+
+export async function wantedBy(userId: number): Promise<string[]> {
+  const rows = await query<{ channel: string }>(
+    `SELECT channel FROM channel_interest WHERE user_id = $1 ORDER BY channel`,
+    [userId],
+  );
+  return rows.map((r) => r.channel);
+}
+
+export async function sellablePlans(): Promise<{ key: string; display_name: string }[]> {
+  return query<{ key: string; display_name: string }>(
+    `SELECT key, display_name FROM plans ORDER BY price_pence, key`,
+  );
+}
+
+export async function fromRollup(days: Range): Promise<{
+  day: string;
+  alerts_sent: number;
+  alerts_withheld: number;
+  visitors: number;
+  listings_added: number;
+  messages_stored: number;
+  revenue_pence: number;
+  computed_at: string | null;
+}[]> {
+  return query(
+    `WITH span AS (
+       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
+     )
+     SELECT to_char(span.day, 'YYYY-MM-DD') AS day,
+            coalesce(d.alerts_sent, 0)      AS alerts_sent,
+            coalesce(d.alerts_withheld, 0)  AS alerts_withheld,
+            coalesce(d.visitors, 0)         AS visitors,
+            coalesce(d.listings_added, 0)   AS listings_added,
+            coalesce(d.messages_stored, 0)  AS messages_stored,
+            coalesce(d.revenue_pence, 0)    AS revenue_pence,
+            d.computed_at::text
+       FROM span LEFT JOIN daily_stats d ON d.day = span.day
+      ORDER BY span.day`,
+    [days],
   );
 }

@@ -1,0 +1,319 @@
+import { cookies } from "next/headers";
+import Link from "next/link";
+import { notFound, redirect } from "next/navigation";
+
+import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
+import {
+  deliveredTo, historyOf, paymentsBy, person, sellablePlans, wantedBy,
+} from "@/lib/admin-queries";
+import { describeCriteria, type Criteria } from "@/lib/criteria";
+
+import { Stat } from "../../charts";
+
+export const dynamic = "force-dynamic";
+
+const pounds = (pence: number) =>
+  "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 2 });
+const comma = (n: number) => n.toLocaleString("en-GB");
+const when = (value: string | null) => (value ? value.slice(0, 16).replace("T", " ") : "—");
+
+function ago(value: string | null): string {
+  if (!value) return "never";
+  const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000);
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60 * 48) return `${Math.round(minutes / 60)} h ago`;
+  return `${Math.round(minutes / 1440)} days ago`;
+}
+
+export default async function UserPage({
+  params, searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ done?: string; error?: string }>;
+}) {
+  const jar = await cookies();
+  if (!(await sessionIsValid(jar.get(SESSION_COOKIE)?.value))) redirect("/admin/login");
+
+  const { id } = await params;
+  const userId = Number(id);
+  if (!Number.isInteger(userId) || userId <= 0) notFound();
+
+  const { done } = await searchParams;
+  const [who, feed, paid, history, wants, plans] = await Promise.all([
+    person(userId), deliveredTo(userId), paymentsBy(userId), historyOf(userId),
+    wantedBy(userId), sellablePlans(),
+  ]);
+  if (!who) notFound();
+
+  const live = who.status === "active";
+  const expired = who.plan_until !== null && new Date(who.plan_until) < new Date();
+
+  return (
+    <div className="admin">
+      <header className="admin-head">
+        <div>
+          <p className="crumb">
+            <Link href="/admin">Console</Link> / user {who.user_id}
+          </p>
+          <h1>
+            {who.plan_display ?? who.plan}
+            <span className={`badge ${live ? "good" : "warning"}`}> {who.status}</span>
+            {expired && <span className="badge warning"> expired</span>}
+          </h1>
+          <p className="hint">
+            Joined {when(who.joined)} · consent {who.consent_source ?? "—"}{" "}
+            {when(who.consent_at)}
+          </p>
+        </div>
+      </header>
+
+      {done && <p className="note">{done}.</p>}
+
+      <section>
+        <div className="stats">
+          <Stat label="Alerts delivered" value={comma(who.sent)}
+                note={`last ${ago(who.last_sent_at)}`} />
+          <Stat label="Held back by the plan" value={comma(who.withheld)}
+                note="free tier's share" />
+          <Stat label="Paid in total" value={pounds(who.paid_total_pence)}
+                note={`${who.paid_count} payment${who.paid_count === 1 ? "" : "s"}, last ${ago(who.last_paid_at)}`} />
+          <Stat label="Plan runs to"
+                value={who.plan_until ? who.plan_until.slice(0, 10) : "no end"}
+                note={who.comped_days > 0 ? `${who.comped_days} days comped` : undefined} />
+        </div>
+      </section>
+
+      <section>
+        <h2>Account</h2>
+        <table className="grid kv">
+          <tbody>
+            <tr><th>User id</th><td>{who.user_id}</td></tr>
+            <tr>
+              <th>Channel</th>
+              <td>
+                {who.channel ?? "none"}
+                {who.address ? ` · ${who.address}` : ""}
+                {who.verified_at ? ` · verified ${when(who.verified_at)}` : " · unverified"}
+              </td>
+            </tr>
+            <tr><th>Payment ref</th><td>{who.payment_ref ?? "—"}</td></tr>
+            <tr><th>Stopped at</th><td>{when(who.stopped_at)}</td></tr>
+            <tr>
+              <th>Queue</th>
+              <td>
+                {comma(who.queued)} waiting · {comma(who.failed)} failed
+              </td>
+            </tr>
+            <tr>
+              <th>Wants elsewhere</th>
+              <td>{wants.length ? wants.join(", ") : "—"}</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section>
+        <h2>Filter</h2>
+        {who.criteria ? (
+          <>
+            <pre className="criteria-block">
+              {describeCriteria(who.criteria as Criteria)}
+            </pre>
+            <p className="hint">
+              Subscription {who.subscription_id} · only listings after{" "}
+              {when(who.backfill_from)} ·{" "}
+              {who.seeded_at ? `starter batch sent ${when(who.seeded_at)}` : "starter batch owed"}
+            </p>
+            <details>
+              <summary className="disclosure-inline">The stored criteria</summary>
+              <pre className="criteria-block raw">
+                {JSON.stringify(who.criteria, null, 2)}
+              </pre>
+            </details>
+          </>
+        ) : (
+          <p className="hint">No active filter.</p>
+        )}
+      </section>
+
+      <section>
+        <h2>Actions</h2>
+        <div className="actions">
+          <form method="post" action="/api/admin/user" className="inline-form">
+            <input type="hidden" name="action" value="extend_plan" />
+            <input type="hidden" name="user_id" value={who.user_id} />
+            <input type="number" name="days" min={1} max={365} defaultValue={14}
+                   aria-label="Days" />
+            <input type="text" name="reason" placeholder="why" aria-label="Reason"
+                   maxLength={200} />
+            <button type="submit" className="ghost">Extend, free</button>
+          </form>
+
+          <form method="post" action="/api/admin/user" className="inline-form">
+            <input type="hidden" name="action" value="set_plan" />
+            <input type="hidden" name="user_id" value={who.user_id} />
+            <select name="plan" aria-label="Plan" defaultValue={who.plan}>
+              {plans.map((plan) => (
+                <option key={plan.key} value={plan.key}>
+                  {plan.display_name}
+                </option>
+              ))}
+            </select>
+            <input type="text" name="reason" placeholder="why" aria-label="Reason"
+                   maxLength={200} />
+            <button type="submit" className="ghost">Move to plan</button>
+          </form>
+
+          <form method="post" action="/api/admin/user" className="inline-form">
+            <input type="hidden" name="action" value={live ? "pause" : "resume"} />
+            <input type="hidden" name="user_id" value={who.user_id} />
+            <button type="submit" className="ghost">
+              {live ? "Pause delivery" : "Resume delivery"}
+            </button>
+          </form>
+
+          <form method="post" action="/api/admin/user" className="inline-form">
+            <input type="hidden" name="action"
+                   value={who.status === "blocked" ? "unblock" : "block"} />
+            <input type="hidden" name="user_id" value={who.user_id} />
+            <input type="text" name="reason" placeholder="why" aria-label="Reason"
+                   maxLength={200} />
+            <button type="submit" className="ghost">
+              {who.status === "blocked" ? "Unblock" : "Block"}
+            </button>
+          </form>
+        </div>
+
+        <div className="danger">
+          <h2>Erase</h2>
+          <p className="hint">
+            Removes the chat id, the tokens and the filter — everything that names
+            this person.{" "}
+            {who.paid_count > 0
+              ? `The ${who.paid_count} payment${who.paid_count === 1 ? "" : "s"} stay, attached to an account that no longer names anybody: a financial record has to survive a request to be forgotten, and the person does not have to.`
+              : "There are no payments, so the row goes entirely."}
+          </p>
+          <form method="post" action="/api/admin/user" className="inline-form">
+            <input type="hidden" name="action" value="erase" />
+            <input type="hidden" name="user_id" value={who.user_id} />
+            <input type="text" name="reason" placeholder="why — recorded"
+                   aria-label="Reason" maxLength={200} required />
+            <button type="submit" className="ghost danger-button">
+              {who.paid_count > 0 ? "Erase personal data" : "Delete this account"}
+            </button>
+          </form>
+        </div>
+      </section>
+
+      <section>
+        <h2>
+          Payments <span className="section-note">{who.paid_count}</span>
+        </h2>
+        {paid.length === 0 ? (
+          <p className="hint">Never paid.</p>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>When</th><th>Plan</th><th className="num">Amount</th>
+                <th className="num">Days</th><th>How</th><th>Reference</th>
+              </tr>
+            </thead>
+            <tbody>
+              {paid.map((one) => (
+                <tr key={one.id}>
+                  <td className="muted">{when(one.created_at)}</td>
+                  <td>{one.plan}</td>
+                  <td className="num">{pounds(one.amount_pence)}</td>
+                  <td className="num muted">{one.granted_days ?? "—"}</td>
+                  <td>{one.provider}</td>
+                  <td className="muted wrap">{one.provider_ref ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section>
+        <h2>
+          What was sent{" "}
+          <span className="section-note">
+            newest {feed.length} of {comma(who.sent + who.queued + who.failed + who.withheld)}
+          </span>
+        </h2>
+        {feed.length === 0 ? (
+          <p className="hint">Nothing yet.</p>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr>
+                <th>Queued</th><th>Sent</th><th>State</th>
+                <th className="num">Rent</th><th className="num">Beds</th>
+                <th>Where</th><th>Listing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feed.map((one) => (
+                <tr key={one.id}>
+                  <td className="muted">{when(one.created_at)}</td>
+                  <td className="muted">{when(one.sent_at)}</td>
+                  <td>
+                    <span
+                      className={`badge ${
+                        one.status === "sent"
+                          ? "good"
+                          : one.status === "failed"
+                            ? "critical"
+                            : "warning"
+                      }`}
+                    >
+                      {one.status}
+                      {one.error ? ` · ${one.error}` : ""}
+                    </span>
+                  </td>
+                  <td className="num">
+                    {one.price_pcm === null ? "—" : "£" + comma(one.price_pcm)}
+                  </td>
+                  <td className="num muted">{one.bedrooms ?? "—"}</td>
+                  <td className="muted">{one.district ?? "—"}</td>
+                  <td className="wrap">
+                    {one.url ? (
+                      <a href={one.url} target="_blank" rel="noreferrer">
+                        open
+                      </a>
+                    ) : (
+                      "—"
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      <section>
+        <h2>What we did to this account</h2>
+        {history.length === 0 ? (
+          <p className="hint">Nothing. Every action from this page is recorded here.</p>
+        ) : (
+          <table className="grid">
+            <thead>
+              <tr><th>When</th><th>What</th><th>Detail</th></tr>
+            </thead>
+            <tbody>
+              {history.map((one) => (
+                <tr key={one.id}>
+                  <td className="muted">{when(one.created_at)}</td>
+                  <td><strong>{one.action}</strong></td>
+                  <td className="wrap muted counters">{JSON.stringify(one.detail)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </div>
+  );
+}

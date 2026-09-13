@@ -1,33 +1,11 @@
-/* The look, in the spirit of the UK property portals — Rightmove above all.
- *
- * What those sites do, and why each of it is load-bearing rather than decorative:
- *
- *   1. A deep near-navy for text and headers, never pure black. It reads as
- *      considered where black reads as a default, and it lets the accent sit on it
- *      without vibrating.
- *   2. One loud accent, used only on the thing you are meant to press. Rightmove's
- *      is a bright teal-green; everything else on their page is navy, white or grey.
- *   3. White cards on a soft grey field. The card is what makes a form feel like a
- *      short task rather than an endless page.
- *   4. Generous, even vertical rhythm and 8px-ish radii everywhere.
- *
- * Said plainly: this is *in the spirit of*, not a copy. I cannot open their site
- * from here, so the exact hexes are from memory of the brand rather than sampled,
- * and the layout is ours. If a colour looks off against the real thing, it is one
- * line in the block below.
- *
- * Element selectors rather than a class per node, because this markup is a form and
- * a form is already semantic. Styling what things *are* means a field added next
- * month arrives dressed without anybody remembering to dress it. */
-
 :root {
-  --ink: #262637;          /* navy-plum: headings and body */
+  --ink: #262637;
   --ink-soft: #6a6a7c;
   --line: #e4e4ea;
   --line-strong: #cfcfda;
-  --bg: #f6f6f8;           /* the field the cards sit on */
+  --bg: #f6f6f8;
   --card: #fff;
-  --accent: #00a884;       /* the press-me colour */
+  --accent: #00a884;
   --accent-dim: #008e70;
   --accent-wash: #e6f7f2;
   --bad: #c0392b;
@@ -40,32 +18,13 @@
 
 html { -webkit-text-size-adjust: 100%; }
 
-/* The backdrop: a London sunset behind the City, drawn rather than photographed.
- *
- * Said plainly, because it matters if you were expecting a photograph: this is a CSS
- * gradient with an inline SVG skyline, not a picture of London Bridge. Two reasons,
- * and the second is the real one:
- *
- *   1. A photograph is a binary file. Nothing here can add one, and a hotlinked
- *      image is somebody else's server deciding whether your page has a background.
- *   2. A photograph behind a form has to be dimmed until it is nearly invisible or
- *      it eats the text — at which point it is an expensive gradient.
- *
- * To use a real photograph: drop it in `public/` and set the `--backdrop` custom
- * property below to `url("/your-photo.jpg")`. Keep the scrim: white cards on an
- * undimmed photograph are unreadable in a way that is hard to notice on the machine
- * you chose the photograph on.
- *
- * The silhouette is the City from the south bank — the Shard's spike, the Gherkin's
- * dome, Tower Bridge's two towers. It is suggestive, not accurate, and at 8% opacity
- * behind a card it is meant to be felt rather than read. */
 body::before {
   content: "";
   position: fixed;
   inset: 0;
   z-index: -1;
   background:
-    /* the skyline, sitting on the horizon */
+
     var(--backdrop, url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1400' height='240' preserveAspectRatio='none' viewBox='0 0 1400 240'%3E%3Cpath fill='%23262637' fill-opacity='0.5' d='M0 240V196h38v-28h26v28h34v-52h30v52h22v-18h28v18h40v-96l16-30 16 30v96h34v-40h30v40h30v-64h26v-14h10v14h26v64h44v-30h34v30h30v-120l14-26 14 26v120h34v-44h28v44h46v-70h12v-22h10v22h12v70h40v-34h30v34h34v-58h26v58h40v-150l18-34 18 34v150h30v-46h30v46h44v-26h32v26h36v-74h28v74h40v-40h30v40h38v-54h26v54h30v-30h34v30z'/%3E%3C/svg%3E"));
   background-repeat: no-repeat;
   background-position: bottom center;
@@ -77,8 +36,7 @@ body::before {
 body {
   margin: 0;
   padding: 3rem 1.25rem 5rem;
-  /* Sunset above, the page's own grey below, meeting where the skyline sits. Kept
-     pale: this is behind a form, and a form is read. */
+
   background:
     linear-gradient(
       180deg,
@@ -96,17 +54,12 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* One box, centred once. Everything inside inherits its width, which is what
-   stops a wide screen pulling the pieces apart. */
 .shell {
   width: 100%;
   max-width: 40rem;
   margin: 0 auto;
 }
 
-/* The console is a reading surface, not a task, and it lives inside the same
-   shell. Without this it renders at the form's width and every table row wraps.
-   `:has()` rather than a second layout: one wrapper stays one wrapper. */
 .shell:has(.admin) { max-width: 64rem; }
 
 h1 {
@@ -126,8 +79,6 @@ h1 {
 
 a { color: var(--accent-dim); }
 
-/* ── the card ───────────────────────────────────────────────────────────── */
-
 form, .panel {
   padding: 1.75rem 1.75rem 2rem;
   border: 1px solid var(--line);
@@ -136,8 +87,6 @@ form, .panel {
   box-shadow: var(--shadow);
 }
 
-/* Each question is a band, separated by a rule that stops short of the card edge
-   so the card still reads as one object. */
 form > div,
 form > label,
 form > fieldset {
@@ -171,8 +120,6 @@ form p,
   font-size: 0.8125rem;
   line-height: 1.4;
 }
-
-/* ── controls ───────────────────────────────────────────────────────────── */
 
 input[type="text"],
 input[type="number"],
@@ -210,8 +157,6 @@ input[type="radio"] {
   flex: none;
 }
 
-/* Choices read as rows you can hit, which matters more on a phone than a tidy
-   inline list does on a desktop. */
 .choices { display: flex; flex-wrap: wrap; gap: 0.5rem 1.5rem; }
 
 .choices label,
@@ -222,8 +167,6 @@ fieldset label {
   font-weight: 400;
   margin: 0;
 }
-
-/* ── the rent slider ────────────────────────────────────────────────────── */
 
 .slider { margin-top: 0.35rem; }
 
@@ -268,8 +211,6 @@ input[type="range"]::-moz-range-track {
   background: var(--line-strong);
 }
 
-/* The thumb is deliberately large: this is the one control people drag, and a
-   16px target is a miss on a phone. */
 input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 1.4rem;
@@ -293,8 +234,6 @@ input[type="range"]::-moz-range-thumb {
 input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px var(--accent-wash);
 }
-
-/* ── buttons ────────────────────────────────────────────────────────────── */
 
 button[type="submit"],
 .cta {
@@ -322,8 +261,6 @@ button[type="submit"]:disabled {
   background: #c2c2ce;
   cursor: not-allowed;
 }
-
-/* ── chosen areas ───────────────────────────────────────────────────────── */
 
 .chips { margin-top: 0.85rem; }
 
@@ -353,13 +290,9 @@ button[type="submit"]:disabled {
 
 .chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-wash); }
 
-/* Four quick picks, offered above the field so somebody with no idea where to
-   start has one. */
 .quick { margin-bottom: 0.75rem; }
 
 .quick .chip { font-size: 0.875rem; }
-
-/* ── the done screen ────────────────────────────────────────────────────── */
 
 .done-tick {
   display: grid;
@@ -420,7 +353,6 @@ button[type="submit"]:disabled {
   font-weight: 600;
 }
 
-/* The heart fills rather than appearing, so the press has somewhere to land. */
 .vote-button .heart { font-size: 1.05rem; line-height: 1; }
 
 .vote-button.voted .heart { animation: pop 260ms ease; }
@@ -430,8 +362,6 @@ button[type="submit"]:disabled {
   45% { transform: scale(1.35); }
   100% { transform: scale(1); }
 }
-
-/* ── notices ────────────────────────────────────────────────────────────── */
 
 .note {
   padding: 0.9rem 1.1rem;
@@ -455,8 +385,6 @@ form p.error {
   line-height: 1.45;
 }
 
-/* ── narrow screens ─────────────────────────────────────────────────────── */
-
 @media (max-width: 34rem) {
   body { padding: 1.75rem 1rem 4rem; }
   h1 { font-size: 1.6rem; }
@@ -464,16 +392,6 @@ form p.error {
   input[type="number"], input[type="date"] { width: 100%; }
   .choices { gap: 0.5rem 1rem; }
 }
-
-/* ── the admin console ────────────────────────────────────────────────────────
- *
- * Wider than the form, because the form is a task and this is a reading surface:
- * a table of filters at 40rem wraps every row.
- *
- * The chart tokens are the validated palette's chrome and ink, kept as custom
- * properties so the light and dark values swap in one place — and so the chart
- * bodies are written against roles rather than raw hex. Marks carry the series
- * colour; text never does. */
 
 .admin {
   --chart-surface: #fff;
@@ -514,8 +432,6 @@ form p.error {
   box-shadow: var(--shadow);
 }
 
-/* ── stat tiles ───────────────────────────────────────────────────────────── */
-
 .stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
@@ -535,13 +451,9 @@ form p.error {
 
 .stat-label { color: var(--ink-soft); font-size: 0.8125rem; }
 
-/* Proportional figures: these are standalone numbers, not a column that has to
-   align vertically. Tabular is reserved for the tables below. */
 .stat-value { font-size: 1.75rem; font-weight: 700; letter-spacing: -0.02em; }
 
 .stat-note { color: var(--chart-muted); font-size: 0.75rem; }
-
-/* ── the range control ────────────────────────────────────────────────────── */
 
 .range { display: flex; gap: 0.4rem; margin-bottom: 1.25rem; }
 
@@ -563,8 +475,6 @@ form p.error {
   font-weight: 600;
 }
 
-/* ── charts ───────────────────────────────────────────────────────────────── */
-
 .chart { margin: 0 0 1.75rem; }
 
 .chart:last-child { margin-bottom: 0; }
@@ -579,7 +489,6 @@ form p.error {
 
 .chart-empty { color: var(--chart-muted); font-size: 0.875rem; }
 
-/* Axis ticks align in a column, so these are the one place for tabular figures. */
 .chart-svg .tick {
   fill: var(--chart-muted);
   font-size: 11px;
@@ -596,8 +505,6 @@ form p.error {
   font-variant-numeric: tabular-nums;
 }
 
-/* On a filled mark, so it is white rather than ink — the one exception, and it is
-   still not the series colour. */
 .chart-svg .on-mark {
   fill: #fff;
   font-size: 12px;
@@ -623,8 +530,6 @@ form p.error {
   border-radius: 2px;
   flex: none;
 }
-
-/* ── tables ───────────────────────────────────────────────────────────────── */
 
 .grid {
   width: 100%;
@@ -661,10 +566,6 @@ form p.error {
   line-height: 1.4;
 }
 
-/* ── status badges ────────────────────────────────────────────────────────── */
-/* Icon and word together, always. Two of these sit below 3:1 on white by design,
-   and the pairing is what stops colour carrying the meaning alone. */
-
 .badge {
   display: inline-flex;
   align-items: center;
@@ -682,8 +583,6 @@ form p.error {
 .badge.critical { background: #fbe9e9; color: #8f2323; }
 
 .ok-line { display: flex; align-items: center; gap: 0.6rem; margin: 0; font-size: 0.9375rem; }
-
-/* ── row actions ──────────────────────────────────────────────────────────── */
 
 .inline-form { display: flex; gap: 0.3rem; align-items: center; }
 
@@ -706,23 +605,11 @@ form p.error {
 .ghost:hover { border-color: var(--accent); background: var(--accent-wash); }
 
 @media (max-width: 52rem) {
-  /* The tables are the reason: a filter description and six columns do not fit a
-     phone, and squeezing them makes both unreadable. Scrolling one axis is the
-     lesser evil. */
+
   .admin section { overflow-x: auto; }
   .grid { min-width: 44rem; }
   .admin-head { flex-direction: column; }
 }
-
-/* ── the two-thumb slider ─────────────────────────────────────────────────────
- *
- * One control, two grabbable thumbs. The inputs are invisible and transparent to
- * the pointer; only their thumbs take events, so both can be grabbed even where
- * they overlap. What is seen is the track and the fill underneath them.
- *
- * `-webkit-` and `-moz-` blocks cannot be combined into one selector list: a
- * browser that does not know one of the pseudo-elements throws the whole rule away,
- * so every duplicated block below is duplicated on purpose. */
 
 .range2 { margin-top: 0.25rem; }
 
@@ -740,7 +627,6 @@ form p.error {
   height: 1.6rem;
 }
 
-/* The groove. A pseudo-element so the fill can sit over it without a third node. */
 .range2-track::before {
   content: "";
   position: absolute;
@@ -772,8 +658,7 @@ form p.error {
   appearance: none;
   background: none;
   border: none;
-  /* The element ignores the pointer so the one underneath is reachable; the thumb
-     takes it back. This is what makes two stacked sliders behave as one control. */
+
   pointer-events: none;
 }
 
@@ -832,8 +717,6 @@ form p.error {
   font-size: 0.75rem;
 }
 
-/* ── the room stepper ─────────────────────────────────────────────────────── */
-
 .stepper input[type="range"] {
   width: 100%;
   appearance: none;
@@ -851,12 +734,7 @@ form p.error {
   font-size: 0.75rem;
 }
 
-/* The current stop is named twice — as the big value above and as the bold tick
-   below — because on a six-stop track the thumb sits between labels as often as
-   over one. */
 .stepper-ticks .on { color: var(--accent-dim); font-weight: 700; }
-
-/* ── a note that is not an error ───────────────────────────────────────────── */
 
 .notice {
   margin: 0.5rem 0 0;
@@ -864,18 +742,6 @@ form p.error {
   font-size: 0.8125rem;
   font-weight: 600;
 }
-
-/* ── the console's sign-in ─────────────────────────────────────────────────────
- *
- * Its own layout rather than the form card, because it is not a task in a flow — it
- * is a door. Centred in the viewport, narrow, and with nothing else on the page: the
- * only thing to do here is one thing, and anything else would be a place to look
- * instead of doing it.
- *
- * The form card's own rules would fight this: `form > label` there is a question
- * band with a rule under it, which on a single-field form draws a line under the
- * only field. So the parts are styled here and the shared rules are overridden
- * where they land wrong. */
 
 .signin {
   display: grid;
@@ -915,8 +781,6 @@ form p.error {
   text-align: center;
 }
 
-/* The form inside is not a card — the card is the wrapper. Padding, border and
-   shadow are cleared rather than left to inherit the sheet treatment. */
 .signin-form {
   padding: 0;
   border: none;
@@ -939,18 +803,11 @@ form p.error {
   font-size: 0.75rem;
 }
 
-/* Counter strings are read as pairs, so they need the space kept and the digits
-   aligned enough to compare two rows at a glance. */
 .grid .counters {
   font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
   font-size: 0.75rem;
   white-space: pre-wrap;
 }
-
-/* ── the console's filter bar and live control ────────────────────────────────
- *
- * One row of controls above everything, so it reads as applying to the page rather
- * than to whichever card it sits nearest. */
 
 .filters {
   display: flex;
@@ -978,8 +835,6 @@ form p.error {
 
 .filter-group a:hover { border-color: var(--accent); text-decoration: none; }
 
-/* The selected filter is filled, not tinted. On a row of eight chips a tint is a
-   guess and a fill is an answer. */
 .filter-group a.range-on,
 .live-choices button.range-on {
   border-color: var(--ink);
@@ -1030,8 +885,6 @@ form p.error {
   gap: 0.5rem;
 }
 
-/* How old what you are looking at is. Stated always, because a stale number with no
-   timestamp is worse than no number — it is believed. */
 .live-age {
   color: var(--ink-soft);
   font-size: 0.75rem;
@@ -1068,13 +921,6 @@ form p.error {
   .filter-search input[type="text"] { width: 100%; }
 }
 
-/* ── choosing a plan ──────────────────────────────────────────────────────────
- *
- * Two cards side by side, and only one of them marked. Marking both would be no
- * recommendation, and marking the cheaper one would be a recommendation against the
- * thing worth recommending — the longer plan is the better value per day, which is
- * the only honest reason to point at it. */
-
 .plans {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
@@ -1091,8 +937,6 @@ form p.error {
   box-shadow: var(--shadow);
 }
 
-/* A border and a tinted head, not a different colour scheme. The recommended card
-   should read as the same card with a note on it. */
 .plan-best { border-color: var(--accent); border-width: 2px; }
 
 .plan-flag {
@@ -1116,7 +960,6 @@ form p.error {
   color: var(--ink-soft);
 }
 
-/* Proportional figures: a standalone number, not a column to align. */
 .plan-price {
   font-size: 2.25rem;
   font-weight: 700;
