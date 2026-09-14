@@ -42,6 +42,14 @@ def content_hash(body: str | None, links: list[str]) -> str:
     material = normalised + "\n" + "\n".join(sorted(set(links)))
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
+def button_url(button: Any) -> str | None:
+
+    for holder in (button, getattr(button, "type", None)):
+        url = getattr(holder, "url", None)
+        if url:
+            return str(url)
+    return None
+
 def urls_of(message: Any) -> list[str]:
 
     found: list[str] = []
@@ -49,9 +57,9 @@ def urls_of(message: Any) -> list[str]:
     markup = getattr(message, "reply_markup", None)
     for row in getattr(markup, "rows", None) or []:
         for button in getattr(row, "buttons", None) or []:
-            url = getattr(button, "url", None)
+            url = button_url(button)
             if url:
-                found.append(str(url))
+                found.append(url)
 
     for entity in getattr(message, "entities", None) or []:
         url = getattr(entity, "url", None)
