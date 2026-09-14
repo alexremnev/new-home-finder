@@ -4,5 +4,10 @@ Description=Tell the ops chat that %i failed
 [Service]
 Type=oneshot
 User=finder
+# The alert quotes journalctl for the failed unit. Logs of a system unit are
+# readable by root and this group only, and without it the quote comes back
+# empty while journalctl's complaint goes to /dev/null — an alert that says
+# a job failed and nothing about why.
+SupplementaryGroups=systemd-journal
 EnvironmentFile=/etc/london-home-finder.env
 ExecStart=/opt/london-home-finder/deploy/notify-failure.sh %i

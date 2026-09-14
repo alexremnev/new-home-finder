@@ -14,8 +14,15 @@ MSG="/tmp/lhf-alert-$JOB.txt"
 {
   echo "Worker failed: $JOB on $(hostname) at $(date -u '+%H:%M UTC')"
   echo
-  journalctl -u "london-home-finder@$JOB.service" -u "london-home-finder-$JOB.service" \
-    -n 25 --no-pager 2>/dev/null | grep -iE "error|traceback|failed|SUMMARY" | tail -12
+  LOG=$(journalctl -u "london-home-finder@$JOB.service" \
+        -u "london-home-finder-$JOB.service" -n 25 --no-pager 2>&1)
+  EXCERPT=$(echo "$LOG" | grep -iE "error|traceback|failed|SUMMARY" | tail -12)
+  if [ -n "$EXCERPT" ]; then
+    echo "$EXCERPT"
+  else
+    echo "Nothing matched in the journal; it answered:"
+    echo "$LOG" | head -3
+  fi
   echo
   echo "journalctl -u london-home-finder@$JOB -n 60"
   echo "Further alerts for this job are held for the rest of the hour."
