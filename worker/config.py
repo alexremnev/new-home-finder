@@ -12,7 +12,6 @@ class ConfigError(RuntimeError):
 class Config:
     database_url: str
     telegram_token: str | None
-    telegram_ops_chat: str | None
     run_url: str | None
     dry_run: bool
 
@@ -28,7 +27,6 @@ class Config:
         return cls(
             database_url=database_url,
             telegram_token=_opt("TELEGRAM_TOKEN"),
-            telegram_ops_chat=_opt("TELEGRAM_OPS_CHAT"),
             run_url=_opt("RUN_URL"),
             dry_run=dry_run,
         )

@@ -183,10 +183,15 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
     return found
 
 def tell_ops(message: str) -> None:
-    token = os.environ.get("TELEGRAM_TOKEN")
+    token = os.environ.get("TELEGRAM_OPS_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
     chat = os.environ.get("TELEGRAM_OPS_CHAT")
     if not token or not chat:
-        print("report: TELEGRAM_TOKEN or TELEGRAM_OPS_CHAT not set; not alerting", file=sys.stderr)
+        print(
+            "report: no alert sent. Set TELEGRAM_OPS_CHAT, and either "
+            "TELEGRAM_OPS_TOKEN for a separate alerting bot or TELEGRAM_TOKEN "
+            "to reuse the one that serves users.",
+            file=sys.stderr,
+        )
         return
     request = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/sendMessage",

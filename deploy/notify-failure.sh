@@ -2,7 +2,8 @@
 set -u
 JOB="${1:-unknown}"
 
-[ -z "${TELEGRAM_TOKEN:-}" ] && exit 0
+TOKEN="${TELEGRAM_OPS_TOKEN:-${TELEGRAM_TOKEN:-}}"
+[ -z "$TOKEN" ] && exit 0
 [ -z "${TELEGRAM_OPS_CHAT:-}" ] && exit 0
 
 FLAG="/tmp/lhf-alerted-$JOB-$(date +%Y%m%d%H)"
@@ -30,6 +31,6 @@ if [ "$(wc -c < "$MSG")" -gt 3500 ]; then
 fi
 
 curl -s -m 20 -o /dev/null -X POST \
-  "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
+  "https://api.telegram.org/bot$TOKEN/sendMessage" \
   --data-urlencode "chat_id=$TELEGRAM_OPS_CHAT" \
   --data-urlencode "text@$MSG"
