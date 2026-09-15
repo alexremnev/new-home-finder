@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from worker.contracts.notify import NOTIFIERS, SendResult, build_notifier
 from worker.notify.telegram import render_listing
+from worker.notify.plans import withheld_notice
 from worker.pipeline.outbox import (
     MAX_ATTEMPTS,
     alert_for,
+    digest_due,
     interleave_by_user,
+    listing_actions,
     listing_view,
     outcome_for,
 )
@@ -64,6 +68,63 @@ def test_a_kind_with_nothing_to_render_is_refused() -> None:
 
     assert alert_for(row(kind="welcome")) is None
     assert alert_for(row(kind="nonsense")) is None
+
+def test_full_access_gets_an_ignore_button_keyed_to_the_notification() -> None:
+    alert = alert_for(row(id=77))
+    assert alert is not None
+    assert [(a.label, a.callback, a.url) for a in alert.actions] == [
+        ("Ignore", "ignore:77", None)
+    ]
+
+def test_a_restricted_listing_offers_payment_instead_of_dismissal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "londonhomefinderbot")
+    alert = alert_for(row(delivery_share=20, plan_key="trial"))
+    assert alert is not None
+    assert [a.label for a in alert.actions] == ["Get full access"]
+    assert alert.actions[0].url == "https://t.me/londonhomefinderbot?start=pay"
+    assert alert.actions[0].callback is None
+
+def test_without_a_bot_username_there_is_no_broken_button(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    assert listing_actions(listing_view(row(delivery_share=20)), 1) == []
+
+def test_a_lapsed_trial_and_a_lapsed_plan_are_told_apart() -> None:
+    assert listing_view(row(delivery_share=20, plan_key="trial")).lapsed == "trial"
+    assert listing_view(row(delivery_share=20, plan_key="month")).lapsed == "plan"
+
+def test_nothing_is_said_to_lapse_when_nothing_is_withheld() -> None:
+
+    assert listing_view(row(delivery_share=100, plan_key="trial")).lapsed is None
+    assert listing_view(row(plan_key="trial")).lapsed is None
+
+@pytest.mark.parametrize(
+    ("hour", "due"),
+    [(0, False), (9, False), (19, False), (20, True), (21, True), (23, True)],
+)
+def test_the_digest_waits_for_the_end_of_the_london_day(hour: int, due: bool) -> None:
+    london = ZoneInfo("Europe/London")
+    assert digest_due(datetime(2026, 9, 15, hour, 30, tzinfo=london)) is due
+
+def test_the_digest_hour_is_london_not_utc() -> None:
+
+    # 19:30 UTC in September is 20:30 in London: due, though UTC says otherwise.
+    assert digest_due(datetime(2026, 9, 15, 19, 30, tzinfo=timezone.utc)) is True
+    assert digest_due(datetime(2026, 9, 15, 18, 30, tzinfo=timezone.utc)) is False
+
+def test_the_digest_counts_what_matched_and_names_what_is_missing() -> None:
+    assert withheld_notice(12, 20) == (
+        "🔒 12 new listings today — you're missing 80%! "
+        "Upgrade now to unlock instant notifications."
+    )
+
+def test_the_digest_agrees_with_itself_about_one_listing() -> None:
+    assert "1 new listing today" in withheld_notice(1, 20)
+    assert "1 new listings" not in withheld_notice(1, 20)
 
 def test_a_price_drop_reuses_the_listing_shape() -> None:
 

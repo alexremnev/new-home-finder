@@ -7,7 +7,8 @@ import pathlib
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
@@ -116,6 +117,28 @@ def fmt(value: Any) -> str:
         return value.strftime("%Y-%m-%d %H:%M")
     return str(value)
 
+QUIET_FROM = 22
+QUIET_UNTIL = 9
+LONDON = ZoneInfo("Europe/London")
+
+def awake_hours(since: datetime, until: datetime) -> float:
+
+    start = since.astimezone(LONDON)
+    end = until.astimezone(LONDON)
+    if end <= start:
+        return 0.0
+
+    awake = 0.0
+    step = start
+    while step < end:
+        boundary = min(step + timedelta(hours=1), end)
+        hour = step.hour
+        asleep = hour >= QUIET_FROM or hour < QUIET_UNTIL
+        if not asleep:
+            awake += (boundary - step).total_seconds() / 3600
+        step = boundary
+    return awake
+
 def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
 
     found: list[str] = []
@@ -128,10 +151,13 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
     if latest is None:
         found.append("no source messages have ever been stored — the reader has not run")
     else:
-        age = (datetime.now(timezone.utc) - latest).total_seconds() / 3600
+        # Measured in hours when a listing would be expected, not wall clock.
+        # Nobody posts a flat at 03:00, so counting the night makes the alert fire
+        # every morning about a silence that means nothing.
+        age = awake_hours(latest, datetime.now(timezone.utc))
         if age > quiet_hours:
             found.append(
-                f"no new source message for {age:.1f}h "
+                f"no new source message in {age:.1f}h of posting hours "
                 f"(last {latest:%Y-%m-%d %H:%M}) — reader stopped, or the feed went quiet"
             )
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict
 from typing import Any
 
@@ -154,12 +153,19 @@ def withheld_digests(conn: Conn, *, limit: int = 200) -> list[Row]:
         conn.execute(
             """
             WITH due AS (
-                SELECT n.user_id, count(*) AS withheld
+                SELECT n.user_id,
+                       count(*) FILTER (
+                           WHERE n.status = 'skipped' AND n.error = 'share'
+                       ) AS withheld,
+                       count(*) AS matched
                   FROM notifications n
                   JOIN users u ON u.id = n.user_id AND u.status = 'active'
-                 WHERE n.status = 'skipped' AND n.error = 'share'
+                 WHERE n.kind = 'new_listing'
                    AND n.created_at > now() - interval '24 hours'
                  GROUP BY n.user_id
+                HAVING count(*) FILTER (
+                           WHERE n.status = 'skipped' AND n.error = 'share'
+                       ) > 0
                  LIMIT %s
             ),
             claimed AS (
@@ -168,8 +174,18 @@ def withheld_digests(conn: Conn, *, limit: int = 200) -> list[Row]:
                 ON CONFLICT (user_id, day) DO NOTHING
                 RETURNING user_id, withheld
             )
-            SELECT c.user_id, c.withheld, uc.channel, uc.address
+            SELECT c.user_id, c.withheld, d.matched, uc.channel, uc.address,
+                   CASE
+                       WHEN u.plan_until IS NULL OR u.plan_until > now()
+                           THEN p.delivery_share
+                       ELSE coalesce(lapsed.delivery_share, 0)
+                   END AS delivery_share
               FROM claimed c
+              JOIN due d            ON d.user_id = c.user_id
+              JOIN users u          ON u.id = c.user_id
+              JOIN plans p          ON p.key = u.plan
+              LEFT JOIN plan_settings ps ON ps.id
+              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
               JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
             """,
             (limit,),
@@ -202,6 +218,7 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
             f"""
             SELECT n.id, n.user_id, n.channel, n.kind, n.attempts,
                    uc.address, src.display_name AS source_display, {columns},
+                   u.plan AS plan_key,
                    -- The same CASE as `active_subscriptions`, for the same reason:
                    -- the live plan's share while it is live, the lapsed tier's once
                    -- it is not. Selected here so the renderer can name the share in

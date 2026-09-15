@@ -9,6 +9,7 @@ from worker.contracts.notify import Action, Alert, ListingView, Recipient
 from worker.notify.telegram import (
     TelegramNotifier,
     is_blocked_by_user,
+    keyboard_for,
     money,
     plural,
     render,
@@ -75,10 +76,40 @@ def test_pets_appear_only_when_the_listing_allows_them() -> None:
     assert "Pets" not in render_listing(view(pets_allowed=False))
     assert "Pets" not in render_listing(view(pets_allowed=None))
 
-def test_the_share_is_named_when_a_plan_withholds_matches() -> None:
-    assert "20% of new listings" in render_listing(view(share=20))
-    assert "💎" not in render_listing(view(share=100))
-    assert "💎" not in render_listing(view())
+def test_an_ended_trial_is_named_as_a_trial() -> None:
+    text = render_listing(view(share=20, lapsed="trial"))
+    assert "🔒 <b>Your free trial has ended." in text
+    assert "only 20% of available properties" in text
+    assert "Please make a payment to restore full access.</b>" in text
+    assert "plan has ended" not in text
+
+def test_an_ended_plan_is_not_called_a_trial() -> None:
+    text = render_listing(view(share=20, lapsed="plan"))
+    assert "🔒 <b>Your plan has ended." in text
+    assert "limited to 20% of property listings" in text
+    assert "Upgrade today for full access</b>" in text
+    assert "missing 80%" in text
+    assert "free trial" not in text
+
+def test_the_share_comes_from_the_plan_rather_than_a_fixed_number() -> None:
+
+    assert "only 10% of available properties" in render_listing(
+        view(share=10, lapsed="trial")
+    )
+    assert "missing 90%" in render_listing(view(share=10, lapsed="plan"))
+
+def test_full_access_is_told_nothing_about_upgrading() -> None:
+    for full in (view(share=100), view(share=None), view()):
+        text = render_listing(full)
+        assert "🔒" not in text
+        assert "ended" not in text
+
+def test_no_blank_line_separates_the_details_from_the_link() -> None:
+
+    text = render_listing(view())
+    lines = text.split("\n")
+    assert lines[-1] == view().url
+    assert lines[-2] != ""
 
 def test_the_postcode_links_to_a_map_and_the_listing_link_is_bare() -> None:
     text = render_listing(view(postcode="SE16 4TH"))
@@ -112,14 +143,42 @@ def test_prices_are_grouped() -> None:
     assert money(12000) == "£12,000"
     assert money(900) == "£900"
 
-def test_a_text_alert_renders_its_actions_as_plain_links() -> None:
+def test_an_action_becomes_a_button_and_not_a_line_of_text() -> None:
     alert = Alert(
         kind="stopped", text="Thanks for using the service.",
         actions=[Action(label="Leave a review", url="https://x/review")],
     )
-    text = render(alert)
-    assert "Thanks for using the service." in text
-    assert "Leave a review: https://x/review" in text
+    assert render(alert) == "Thanks for using the service."
+    assert keyboard_for(alert) == {
+        "inline_keyboard": [[{"text": "Leave a review", "url": "https://x/review"}]]
+    }
+
+def test_a_callback_action_carries_data_rather_than_a_url() -> None:
+    alert = Alert(kind="listing", listing=view(), actions=[
+        Action(label="Ignore", callback="ignore:77"),
+    ])
+    assert keyboard_for(alert) == {
+        "inline_keyboard": [[{"text": "Ignore", "callback_data": "ignore:77"}]]
+    }
+
+def test_each_action_gets_its_own_row_in_the_order_given() -> None:
+    alert = Alert(kind="expiring", text="x", actions=[
+        Action(label="Upgrade today for full access", url="https://t.me/bot?start=pay"),
+        Action(label="Pause all notifications", callback="pause"),
+    ])
+    keyboard = keyboard_for(alert)
+    assert keyboard is not None
+    assert [row[0]["text"] for row in keyboard["inline_keyboard"]] == [
+        "Upgrade today for full access",
+        "Pause all notifications",
+    ]
+
+def test_an_action_with_neither_a_url_nor_a_callback_is_dropped() -> None:
+
+    assert keyboard_for(Alert(kind="ops", text="x", actions=[Action(label="Nothing")])) is None
+
+def test_no_actions_means_no_keyboard_at_all() -> None:
+    assert keyboard_for(Alert(kind="ops", text="x")) is None
 
 def test_a_listing_alert_without_a_listing_is_a_programming_error() -> None:
     with pytest.raises(ValueError):

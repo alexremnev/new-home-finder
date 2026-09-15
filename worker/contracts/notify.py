@@ -13,7 +13,8 @@ class Recipient(BaseModel):
 
 class Action(BaseModel):
     label: str
-    url: str
+    url: str | None = None
+    callback: str | None = None
 
 class ListingView(BaseModel):
 
@@ -40,6 +41,7 @@ class ListingView(BaseModel):
     deposit_pcm: float | None = None
 
     share: int | None = None
+    lapsed: Literal["trial", "plan"] | None = None
 
 class Alert(BaseModel):
     kind: AlertKind

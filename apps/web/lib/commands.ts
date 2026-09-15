@@ -4,6 +4,7 @@ export type Command =
   | { kind: "show" }
   | { kind: "update" }
   | { kind: "upgrade" }
+  | { kind: "resume" }
   | { kind: "grant"; ref: string; plan: string; days: number }
   | { kind: "menu" }
   | { kind: "help"; reason?: string };
@@ -44,6 +45,7 @@ export function parseCommand(text: string | undefined): Command {
   if (word === "/update") return { kind: "update" };
 
   if (word === "/pay" || word === "/upgrade" || word === "/plan") return { kind: "upgrade" };
+  if (word === "/resume" || word === "/unpause") return { kind: "resume" };
   if (word === "/menu") return { kind: "menu" };
   if (word === "/help") return { kind: "help" };
 

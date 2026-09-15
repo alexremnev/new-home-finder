@@ -3,9 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from datetime import datetime
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from worker.config import Config, ConfigError
 from worker.db import connect

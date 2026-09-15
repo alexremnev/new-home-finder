@@ -9,8 +9,15 @@ import {
 } from "@/lib/criteria";
 import { query, transaction } from "@/lib/db";
 import {
+  CHANGE_FILTER,
+  FILTERS_BUTTON,
   LINK_EXPIRED,
+  NOTHING_TO_PAUSE,
+  NOTHING_TO_RESUME,
   NOTHING_TO_STOP,
+  PAUSED,
+  RESUMED,
+  SET_FILTERS,
   STOPPED,
   WELCOME,
   noFilterYet,
@@ -31,6 +38,7 @@ import {
 import {
   answerCallback,
   chatIdOf,
+  deleteMessage,
   type Keyboard,
   sendMessage,
   setMyCommands,
@@ -61,12 +69,7 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   try {
     if (update.callback_query) {
-
-      if (update.callback_query.id) {
-        await answerCallback(update.callback_query.id, "That message is out of date")
-          .catch(() => undefined);
-      }
-      await sendToForm(chatId, false);
+      await pressed(chatId, update.callback_query);
     } else {
       await handle(chatId, update.message?.text);
     }
@@ -90,6 +93,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   if (command.kind === "menu") return pushMenu(chatId);
 
   if (command.kind === "update") return sendToForm(chatId, true);
+  if (command.kind === "resume") return resume(chatId);
 
   const account = await accountForChat(chatId);
   if (!account) {
@@ -220,21 +224,133 @@ async function offerUpgrade(chatId: string, account: Account): Promise<void> {
 
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {
   const where = `${siteUrl()}/`;
-  await sendMessage(
-    chatId,
-    [
-      existing
-        ? "Set your search up again here:"
-        : "Set your search up here — it takes a minute:",
-      "",
-      where,
-      "",
-      existing
-        ? "Saving replaces your current filter. Until you do, it keeps working as it is."
-        : "Then press Connect Telegram at the end and the alerts start.",
-    ].join("\n"),
-    [[{ text: existing ? "Change my search" : "Set up my search", url: where }]],
+  await sendMessage(chatId, existing ? CHANGE_FILTER : SET_FILTERS, [
+    [{ text: FILTERS_BUTTON, url: where }],
+  ]);
+}
+
+async function pressed(
+  chatId: string,
+  press: NonNullable<Update["callback_query"]>,
+): Promise<void> {
+  const data = press.data ?? "";
+  const messageId = press.message?.message_id;
+
+  if (data.startsWith("ignore:")) {
+    const id = Number(data.slice("ignore:".length));
+    return ignoreListing(chatId, press.id, messageId, id);
+  }
+  if (data === "pause") {
+    if (press.id) await answerCallback(press.id).catch(() => undefined);
+    return pause(chatId);
+  }
+
+  if (press.id) {
+    await answerCallback(press.id, "That message is out of date").catch(() => undefined);
+  }
+  await sendToForm(chatId, false);
+}
+
+async function ignoreListing(
+  chatId: string,
+  callbackId: string | undefined,
+  messageId: number | undefined,
+  notificationId: number,
+): Promise<void> {
+  if (!Number.isInteger(notificationId) || notificationId < 1) {
+    if (callbackId) await answerCallback(callbackId, "That button is malformed").catch(() => undefined);
+    return;
+  }
+
+  // Scoped to this chat's own account: the id travels through Telegram, where
+  // anyone could send it back, so ownership is checked rather than assumed.
+  const rows = await query<{ id: string }>(
+    `UPDATE notifications n SET ignored_at = now()
+       WHERE n.id = $1
+         AND EXISTS (
+           SELECT 1 FROM user_channels uc
+            WHERE uc.user_id = n.user_id
+              AND uc.channel = 'telegram'
+              AND uc.address = $2
+         )
+     RETURNING n.id`,
+    [notificationId, chatId],
   );
+
+  if (rows.length === 0) {
+    if (callbackId) {
+      await answerCallback(callbackId, "That message is out of date").catch(() => undefined);
+    }
+    return;
+  }
+
+  const removed = messageId === undefined ? false : await deleteMessage(chatId, messageId);
+  if (callbackId) {
+    await answerCallback(
+      callbackId,
+      removed ? undefined : "Noted. Telegram will not let me delete a message this old.",
+    ).catch(() => undefined);
+  }
+}
+
+async function pause(chatId: string): Promise<void> {
+  const paused = await transaction(async (run) => {
+    const users = await run(
+      `SELECT u.id FROM users u
+         JOIN user_channels uc ON uc.user_id = u.id
+        WHERE uc.channel = 'telegram' AND uc.address = $1
+        FOR UPDATE OF u`,
+      [chatId],
+    );
+    const userId = users[0]?.id;
+    if (userId === undefined) return false;
+
+    const stilled = await run(
+      `UPDATE subscriptions SET active = false
+        WHERE user_id = $1 AND active RETURNING id`,
+      [userId],
+    );
+    if (stilled.length === 0) return false;
+
+    // Anything already queued would otherwise still be drained: claim_queued
+    // reads the outbox, not the subscription.
+    await run(`DELETE FROM notifications WHERE user_id = $1 AND status = 'queued'`, [userId]);
+    return true;
+  });
+
+  await sendMessage(chatId, paused ? PAUSED : NOTHING_TO_PAUSE);
+}
+
+async function resume(chatId: string): Promise<void> {
+  const woken = await transaction(async (run) => {
+    const users = await run(
+      `SELECT u.id FROM users u
+         JOIN user_channels uc ON uc.user_id = u.id
+        WHERE uc.channel = 'telegram' AND uc.address = $1
+        FOR UPDATE OF u`,
+      [chatId],
+    );
+    const userId = users[0]?.id;
+    if (userId === undefined) return false;
+
+    // Only the newest, and its backfill moves to now: resuming should not
+    // replay everything that appeared while the alerts were off.
+    const rows = await run(
+      `UPDATE subscriptions SET active = true, backfill_from = now()
+        WHERE id = (
+          SELECT id FROM subscriptions
+           WHERE user_id = $1 AND NOT active
+           ORDER BY created_at DESC LIMIT 1
+        )
+        RETURNING id`,
+      [userId],
+    );
+    if (rows.length === 0) return false;
+    await run(`UPDATE users SET status = 'active' WHERE id = $1 AND status = 'stopped'`, [userId]);
+    return true;
+  });
+
+  await sendMessage(chatId, woken ? RESUMED : NOTHING_TO_RESUME);
 }
 
 async function pushMenu(chatId: string): Promise<void> {

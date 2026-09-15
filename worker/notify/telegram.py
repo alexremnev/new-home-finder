@@ -49,10 +49,6 @@ def size_of(text: str | None) -> str | None:
         flags=re.IGNORECASE,
     )
 
-def _bot_username() -> str:
-
-    return (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
-
 def render_listing(view: ListingView) -> str:
 
     lines = ["🏠 <b>New listing spotted!</b>"]
@@ -88,18 +84,31 @@ def render_listing(view: ListingView) -> str:
     if view.furnished and view.furnished != "unknown":
         lines.append("🛋 " + escape(view.furnished.capitalize()))
 
-    if view.share is not None and view.share < 100:
-        lines.append("")
-        lines.append(
-            f"💎 You're currently seeing only {view.share}% of new listings. "
-            "Upgrade to Premium and get access to every new property the moment it "
-            "hits the market."
-        )
-
-    lines.append("")
     lines.append(escape(view.url))
 
+    notice = restriction_notice(view)
+    if notice:
+        lines.append("")
+        lines.append(notice)
+
     return "\n".join(lines)
+
+def restriction_notice(view: ListingView) -> str | None:
+
+    if view.share is None or view.share >= 100:
+        return None
+    missing = 100 - view.share
+    if view.lapsed == "trial":
+        return (
+            f"🔒 <b>Your free trial has ended. You are currently receiving only "
+            f"{view.share}% of available properties. Please make a payment to "
+            f"restore full access.</b>"
+        )
+    return (
+        f"🔒 <b>Your plan has ended. Access is now limited to {view.share}% of "
+        f"property listings. Upgrade today for full access</b> — you are missing "
+        f"{missing}% of what matches."
+    )
 
 def render(alert: Alert) -> str:
     if alert.kind == "listing":
@@ -108,11 +117,17 @@ def render(alert: Alert) -> str:
         text = render_listing(alert.listing)
     else:
         text = alert.text or ""
-        if alert.actions:
-            text += "\n\n" + "\n".join(
-                f"{action.label}: {action.url}" for action in alert.actions
-            )
     return text[:LIMIT]
+
+def keyboard_for(alert: Alert) -> dict[str, Any] | None:
+
+    rows: list[list[dict[str, str]]] = []
+    for action in alert.actions:
+        if action.url:
+            rows.append([{"text": action.label, "url": action.url}])
+        elif action.callback:
+            rows.append([{"text": action.label, "callback_data": action.callback}])
+    return {"inline_keyboard": rows} if rows else None
 
 Sender = Callable[[str, dict[str, Any]], dict[str, Any]]
 
@@ -149,32 +164,14 @@ class TelegramNotifier:
     def send(self, to: Recipient, alert: Alert) -> SendResult:
         if not self.token:
             return SendResult(ok=False, error="no telegram token configured", retryable=False)
+        keyboard = keyboard_for(alert)
         payload = {
             "chat_id": to.address,
             "text": render(alert),
 
             "parse_mode": "HTML",
 
-            **(
-                {
-                    "reply_markup": {
-                        "inline_keyboard": [[
-                            {
-                                "text": "💎 Upgrade to Premium",
-                                "url": f"https://t.me/{_bot_username()}?start=pay",
-                            }
-                        ]]
-                    }
-                }
-                if (
-                    alert.kind == "listing"
-                    and alert.listing is not None
-                    and alert.listing.share is not None
-                    and alert.listing.share < 100
-                    and _bot_username()
-                )
-                else {}
-            ),
+            **({"reply_markup": keyboard} if keyboard else {}),
             "link_preview_options": (
                 {
                     "url": alert.listing.url,

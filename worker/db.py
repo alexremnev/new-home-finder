@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import random
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager

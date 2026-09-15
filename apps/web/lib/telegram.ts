@@ -57,6 +57,10 @@ export async function sendMessage(
   });
 }
 
+export async function deleteMessage(chatId: string, messageId: number): Promise<boolean> {
+  return call("deleteMessage", { chat_id: chatId, message_id: messageId });
+}
+
 export async function answerCallback(callbackId: string, text?: string): Promise<boolean> {
   return call("answerCallbackQuery", {
     callback_query_id: callbackId,

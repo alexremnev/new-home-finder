@@ -26,6 +26,30 @@ export const STOPPED = [
 
 export const NOTHING_TO_STOP = "You have no active filter, so there is nothing to stop.";
 
+export const SET_FILTERS = "Set up your search criteria";
+
+export const CHANGE_FILTER = "\u270f\ufe0f Change my filter";
+
+export const FILTERS_BUTTON = "\ud83c\udfaf Set Filters";
+
+export const PAUSED = [
+  "Paused. No further alerts will be sent.",
+  "",
+  "Your filter is kept exactly as it is — /resume turns the alerts back on with",
+  "nothing to set up again.",
+].join("\n");
+
+export const NOTHING_TO_PAUSE = "You have no active filter, so there is nothing to pause.";
+
+export const RESUMED = "Alerts are back on. Your filter is unchanged.";
+
+export const NOTHING_TO_RESUME = [
+  "You have no paused filter to turn back on.",
+  "",
+  "If you stopped with /stop, the filter was deleted — set one up again and the",
+  "alerts start.",
+].join("\n");
+
 export function noFilterYet(site: string): string {
   return [
     "You don't have a filter yet — set one up here and the alerts start:",

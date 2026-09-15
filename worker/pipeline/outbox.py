@@ -2,14 +2,23 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import psycopg
 
 from worker import store
-from worker.contracts.notify import Alert, AlertKind, ListingView, Recipient, SendResult
+from worker.contracts.notify import (
+    Action,
+    Alert,
+    AlertKind,
+    ListingView,
+    Recipient,
+    SendResult,
+)
 from worker.notify import build_notifier
-from worker.notify.plans import notice_for, withheld_notice
+from worker.notify.plans import notice_for, upgrade_link, withheld_notice
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -19,6 +28,12 @@ Conn = psycopg.Connection[Row]
 MAX_ATTEMPTS = 5
 
 BATCH = 250
+
+# The digest is a summary of the day, so it goes out when the day is over rather
+# than whenever the first drain after midnight happens to run. London time, not
+# the database's UTC: it is addressed to a person in London.
+DIGEST_HOUR = 20
+DIGEST_ZONE = ZoneInfo("Europe/London")
 
 ALERT_KINDS: dict[str, AlertKind] = {
     "new_listing": "listing",
@@ -165,6 +180,9 @@ def outcome_for(result: SendResult, *, attempts: int, max_attempts: int = MAX_AT
 
 def listing_view(row: Row) -> ListingView:
 
+    raw_share = row.get("delivery_share")
+    share = int(raw_share) if raw_share is not None and int(raw_share) < 100 else None
+
     return ListingView(
         price_pcm=int(row["price_pcm"]),
         bedrooms=int(row["bedrooms"]),
@@ -187,17 +205,34 @@ def listing_view(row: Row) -> ListingView:
         address=(row.get("raw") or {}).get("address"),
         size_text=(row.get("raw") or {}).get("size"),
 
-        share=(lambda v: int(v) if v is not None and int(v) < 100 else None)(
-            row.get("delivery_share")
+        share=share,
+        # Named only when something is actually withheld. A live trial and both
+        # paid plans send everything, so a restricted trial is an ended trial.
+        lapsed=(
+            None
+            if share is None
+            else ("trial" if str(row.get("plan_key") or "") == "trial" else "plan")
         ),
     )
+
+def listing_actions(view: ListingView, notification_id: int) -> list[Action]:
+
+    if view.share is not None and view.share < 100:
+        link = upgrade_link()
+        return [Action(label="Get full access", url=link)] if link else []
+    return [Action(label="Ignore", callback=f"ignore:{notification_id}")]
 
 def alert_for(row: Row) -> Alert | None:
 
     kind = ALERT_KINDS.get(str(row["kind"]))
     if kind != "listing":
         return None
-    return Alert(kind=kind, listing=listing_view(row))
+    view = listing_view(row)
+    return Alert(kind=kind, listing=view, actions=listing_actions(view, int(row["id"])))
+
+def digest_due(now: datetime | None = None) -> bool:
+
+    return (now or datetime.now(DIGEST_ZONE)).astimezone(DIGEST_ZONE).hour >= DIGEST_HOUR
 
 def interleave_by_user(batch: list[Row]) -> list[Row]:
 
@@ -333,16 +368,29 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
         if dry_run:
             stage.set("suppressed", True)
             return
-        for row in store.withheld_digests(conn):
-            notifier = build_notifier(str(row["channel"]))
-            if notifier is None or not row["address"]:
-                stage.count("digest_unreachable")
-                continue
-            result = notifier.send(
-                Recipient(channel=str(row["channel"]), address=str(row["address"])),
-                Alert(kind="expiring", text=withheld_notice(int(row["withheld"]))),
-            )
-            stage.count("digest_sent" if result.ok else "digest_failed")
+        if digest_due():
+            link = upgrade_link()
+            for row in store.withheld_digests(conn):
+                notifier = build_notifier(str(row["channel"]))
+                if notifier is None or not row["address"]:
+                    stage.count("digest_unreachable")
+                    continue
+                actions = [Action(label="Pause all notifications", callback="pause")]
+                if link:
+                    actions.insert(0, Action(label="Upgrade today for full access", url=link))
+                result = notifier.send(
+                    Recipient(channel=str(row["channel"]), address=str(row["address"])),
+                    Alert(
+                        kind="expiring",
+                        text=withheld_notice(
+                            int(row["matched"]), int(row["delivery_share"] or 0)
+                        ),
+                        actions=actions,
+                    ),
+                )
+                stage.count("digest_sent" if result.ok else "digest_failed")
+        else:
+            stage.count("digest_not_due")
 
         due = store.claim_plan_notices(conn)
         stage.set("notices", len(due))

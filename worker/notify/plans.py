@@ -5,6 +5,15 @@ from datetime import datetime
 
 SITE = os.environ.get("SITE_URL", "https://london-rent-alerts.vercel.app").rstrip("/")
 
+def bot_username() -> str:
+
+    return (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
+
+def upgrade_link() -> str | None:
+
+    name = bot_username()
+    return f"https://t.me/{name}?start=pay" if name else None
+
 KEPT = "Your filter is kept exactly as it is — paying turns the alerts back on with nothing to set up again."
 
 def _when(plan_until: datetime | None) -> str:
@@ -63,18 +72,11 @@ def notice_for(plan: str, plan_until: datetime | None, stage: str) -> str:
         return expiry_notice(plan)
     return expiring_notice(plan, plan_until, stage)
 
-def withheld_notice(withheld: int) -> str:
+def withheld_notice(matched: int, share: int) -> str:
 
-    one = withheld == 1
-    listings = "listing" if one else "listings"
-    was = "was" if one else "were"
-    return "\n".join(
-        [
-            f"{withheld} more {listings} matched your filter today and {was} not sent.",
-            "",
-            "You're on the free plan, which sends a share of what matches.",
-            "The paid plan sends everything, as it appears.",
-            "",
-            "/pay — 2 weeks of every match",
-        ]
+    listings = "listing" if matched == 1 else "listings"
+    missing = 100 - share
+    return (
+        f"🔒 {matched} new {listings} today — you're missing {missing}%! "
+        "Upgrade now to unlock instant notifications."
     )
