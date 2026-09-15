@@ -262,34 +262,38 @@ async function ignoreListing(
     return;
   }
 
-  // Scoped to this chat's own account: the id travels through Telegram, where
-  // anyone could send it back, so ownership is checked rather than assumed.
-  const rows = await query<{ id: string }>(
-    `UPDATE notifications n SET ignored_at = now()
-       WHERE n.id = $1
-         AND EXISTS (
-           SELECT 1 FROM user_channels uc
-            WHERE uc.user_id = n.user_id
-              AND uc.channel = 'telegram'
-              AND uc.address = $2
-         )
-     RETURNING n.id`,
-    [notificationId, chatId],
-  );
-
-  if (rows.length === 0) {
-    if (callbackId) {
-      await answerCallback(callbackId, "That message is out of date").catch(() => undefined);
-    }
-    return;
-  }
-
+  // Hiding the message comes first and depends on nothing else. Telegram only
+  // lets a bot delete its own message in the chat the press came from, so this
+  // cannot reach anybody else's alert however the callback data was forged, and
+  // the button keeps working when the bookkeeping below cannot.
   const removed = messageId === undefined ? false : await deleteMessage(chatId, messageId);
+
   if (callbackId) {
     await answerCallback(
       callbackId,
-      removed ? undefined : "Noted. Telegram will not let me delete a message this old.",
+      removed ? undefined : "Telegram will not let me delete a message this old.",
     ).catch(() => undefined);
+  }
+
+  // Scoped to this chat's own account, and allowed to fail: a record of the
+  // dismissal is worth having and worth nothing next to the message going away.
+  try {
+    await query(
+      `UPDATE notifications n SET ignored_at = now()
+         WHERE n.id = $1
+           AND EXISTS (
+             SELECT 1 FROM user_channels uc
+              WHERE uc.user_id = n.user_id
+                AND uc.channel = 'telegram'
+                AND uc.address = $2
+           )`,
+      [notificationId, chatId],
+    );
+  } catch (error) {
+    console.error("could not record a dismissal", {
+      notificationId,
+      error: String(error),
+    });
   }
 }
 
