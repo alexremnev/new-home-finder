@@ -1,4 +1,4 @@
-import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
+import { FURNISHED } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
@@ -35,7 +35,6 @@ export default async function Page() {
         <SubscribeForm
           districts={codes}
           maxDistricts={plan?.max_districts ?? 1}
-          propertyTypes={[...PROPERTY_TYPES]}
           furnished={[...FURNISHED]}
           names={names}
         />

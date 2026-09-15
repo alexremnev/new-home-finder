@@ -7,7 +7,6 @@ import { neighbourhoodAreas, type Area } from "../lib/neighbourhoods";
 type Props = {
   districts: string[];
   maxDistricts: number;
-  propertyTypes: string[];
   furnished: string[];
 
   names?: Record<string, string>;
@@ -24,7 +23,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, propertyTypes: _types, furnished, names = {},
+  districts, maxDistricts, furnished, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

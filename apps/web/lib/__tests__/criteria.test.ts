@@ -27,16 +27,34 @@ describe("checkboxes", () => {
   });
 
   it("accepts a single value and a group alike", () => {
-    expect(parseForm({ property_types: "flat" }, ENABLED).property_types).toEqual(["flat"]);
+    expect(parseForm({ furnished: "furnished" }, ENABLED).furnished).toEqual(["furnished"]);
     expect(
-      parseForm({ property_types: ["flat", "house"] }, ENABLED).property_types,
-    ).toEqual(["flat", "house"]);
+      parseForm({ furnished: ["furnished", "part"] }, ENABLED).furnished,
+    ).toEqual(["furnished", "part"]);
   });
 
   it("drops a value that is not in the vocabulary", () => {
 
-    expect(parseForm({ property_types: ["flat", "castle"] }, ENABLED).property_types)
-      .toEqual(["flat"]);
+    expect(parseForm({ furnished: ["furnished", "velvet"] }, ENABLED).furnished)
+      .toEqual(["furnished"]);
+  });
+
+  it("ignores a criterion the form does not collect", () => {
+
+    // The form asks for areas, rent, bedrooms, bathrooms, a date, furnishing and
+    // pets. Anything else reaching this route was hand-crafted, and accepting it
+    // would put a filter in the database that nobody can see or change.
+    const criteria = parseForm(
+      {
+        districts: ["SE16"],
+        property_types: ["flat"],
+        bills_included: "on",
+        landlord_direct_only: "on",
+        min_tenancy_max_months: "12",
+      },
+      ENABLED,
+    );
+    expect(Object.keys(criteria)).toEqual(["areas"]);
   });
 
   it("de-duplicates", () => {

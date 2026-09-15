@@ -52,9 +52,6 @@ export function criteriaCard(criteria: Criteria): string {
   const bathrooms = span(criteria.bathrooms, String);
   if (bathrooms) lines.push(`🛁 Bathrooms: ${bathrooms}`);
 
-  if (criteria.property_types?.length) {
-    lines.push(`🏠 Type: ${criteria.property_types.join(", ")}`);
-  }
   if (criteria.furnished?.length) {
     lines.push(`🛋 Furnishing: ${criteria.furnished.join(", ")}`);
   }
@@ -72,11 +69,6 @@ export function criteriaCard(criteria: Criteria): string {
   }
 
   if (criteria.pets_allowed) lines.push("🐾 Pets must be allowed");
-  if (criteria.bills_included) lines.push("💡 Bills must be included");
-  if (criteria.landlord_direct_only) lines.push("🤝 From the landlord directly");
-  if (criteria.min_tenancy_max_months !== undefined) {
-    lines.push(`📝 Minimum tenancy: no more than ${criteria.min_tenancy_max_months} months`);
-  }
 
   return lines.join("\n");
 }

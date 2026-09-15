@@ -3,34 +3,27 @@ import { describe, expect, it } from "vitest";
 import type { Criteria } from "../criteria";
 import { criteriaCard, criteriaSet } from "../messages";
 
+// Every field the form can send, and nothing else: see parseForm.
 const full: Criteria = {
   areas: { postcode_districts: ["SE16", "E14", "SE8"] },
   price_pcm: { min: 1200, max: 2000 },
-  bedrooms: { min: 1, max: 2 },
+  bedrooms: { min: 1 },
   bathrooms: { min: 1 },
-  property_types: ["flat", "studio"],
   furnished: ["furnished"],
   available_from: { after: "2026-10-01", before: "2026-10-21" },
   pets_allowed: true,
-  bills_included: true,
-  landlord_direct_only: true,
-  min_tenancy_max_months: 12,
 };
 
 describe("the criteria card", () => {
-  it("states every choice the person made", () => {
+  it("states every choice the person made and invents none", () => {
     expect(criteriaCard(full).split("\n")).toEqual([
       "📍 Areas: SE16, E14, SE8",
       "💷 Rent: £1,200–£2,000 a month",
-      "🛏 Bedrooms: 1–2",
+      "🛏 Bedrooms: 1 or more",
       "🛁 Bathrooms: 1 or more",
-      "🏠 Type: flat, studio",
       "🛋 Furnishing: furnished",
       "📅 Available: 1 Oct 2026 – 21 Oct 2026",
       "🐾 Pets must be allowed",
-      "💡 Bills must be included",
-      "🤝 From the landlord directly",
-      "📝 Minimum tenancy: no more than 12 months",
     ]);
   });
 
@@ -80,9 +73,7 @@ describe("the criteria card", () => {
   });
 
   it("omits a requirement that was not asked for", () => {
-    const card = criteriaCard({ pets_allowed: false, bills_included: false });
-    expect(card).not.toContain("Pets");
-    expect(card).not.toContain("Bills");
+    expect(criteriaCard({ pets_allowed: false })).not.toContain("Pets");
   });
 });
 
