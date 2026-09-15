@@ -1,14 +1,112 @@
+import type { Criteria } from "./criteria";
 import type { Account } from "./plans";
 import { lapsedShare, paidPlans, siteUrl } from "./plans";
 
-export const WELCOME = [
-  "You're subscribed. I'll message you when a new listing matches your filter.",
-  "",
-  "Nothing arrives for listings that were already on the market when you signed up —",
-  "only what appears from now on.",
-  "",
-  "/stop — delete my filter and stop the messages",
-].join("\n");
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function prettyDay(iso: string): string {
+  const [year, month, day] = iso.split("-").map(Number);
+  const name = month === undefined ? undefined : MONTHS[month - 1];
+  return year && day && name ? `${day} ${name} ${year}` : iso;
+}
+
+function pounds(amount: number): string {
+  return "£" + amount.toLocaleString("en-GB");
+}
+
+// A studio has no bedrooms, and "0" reads like a mistake rather than a choice.
+const bedroom = (count: number) => (count === 0 ? "studio" : String(count));
+
+function span(
+  value: { min?: number; max?: number } | undefined,
+  render: (n: number) => string,
+): string | null {
+  const min = value?.min;
+  const max = value?.max;
+  if (min === undefined && max === undefined) return null;
+  if (min !== undefined && max !== undefined) {
+    return min === max ? render(min) : `${render(min)}\u2013${render(max)}`;
+  }
+  if (max !== undefined) return `up to ${render(max)}`;
+  return `${render(min as number)} or more`;
+}
+
+// The criteria as the person chose them, one line each. Separate from
+// `describeCriteria`, which the admin uses: a table of accounts wants the facts
+// dense and unadorned, a message to one person wants them readable.
+export function criteriaCard(criteria: Criteria): string {
+  const lines: string[] = [];
+
+  const areas = criteria.areas?.postcode_districts ?? [];
+  lines.push(`📍 Areas: ${areas.length ? areas.join(", ") : "everywhere covered"}`);
+
+  const rent = span(criteria.price_pcm, pounds);
+  if (rent) lines.push(`💷 Rent: ${rent} a month`);
+
+  const bedrooms = span(criteria.bedrooms, bedroom);
+  if (bedrooms) lines.push(`🛏 Bedrooms: ${bedrooms}`);
+
+  const bathrooms = span(criteria.bathrooms, String);
+  if (bathrooms) lines.push(`🛁 Bathrooms: ${bathrooms}`);
+
+  if (criteria.property_types?.length) {
+    lines.push(`🏠 Type: ${criteria.property_types.join(", ")}`);
+  }
+  if (criteria.furnished?.length) {
+    lines.push(`🛋 Furnishing: ${criteria.furnished.join(", ")}`);
+  }
+
+  const after = criteria.available_from?.after;
+  const before = criteria.available_from?.before;
+  if (after || before) {
+    const when =
+      after && before
+        ? `${prettyDay(after)} \u2013 ${prettyDay(before)}`
+        : after
+          ? `from ${prettyDay(after)}`
+          : `by ${prettyDay(before as string)}`;
+    lines.push(`📅 Available: ${when}`);
+  }
+
+  if (criteria.pets_allowed) lines.push("🐾 Pets must be allowed");
+  if (criteria.bills_included) lines.push("💡 Bills must be included");
+  if (criteria.landlord_direct_only) lines.push("🤝 From the landlord directly");
+  if (criteria.min_tenancy_max_months !== undefined) {
+    lines.push(`📝 Minimum tenancy: no more than ${criteria.min_tenancy_max_months} months`);
+  }
+
+  return lines.join("\n");
+}
+
+const FOOTER = ["/current — show this again", "/stop — delete my filter and stop"];
+
+export function criteriaSet(criteria: Criteria): string {
+  return [
+    "✅ Your search criteria are set",
+    "",
+    criteriaCard(criteria),
+    "",
+    "I'll message you as soon as a new listing matches. Nothing arrives for listings",
+    "that were already on the market — only what appears from now on.",
+    "",
+    ...FOOTER,
+  ].join("\n");
+}
+
+export function criteriaChanged(criteria: Criteria): string {
+  return [
+    "✏️ Your search criteria are updated",
+    "",
+    criteriaCard(criteria),
+    "",
+    "This replaces what you had before. Alerts carry on with the new filter.",
+    "",
+    ...FOOTER,
+  ].join("\n");
+}
 
 export const LINK_EXPIRED = [
   "That link has expired. Please fill the form again and use the new link —",

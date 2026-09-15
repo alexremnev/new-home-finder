@@ -1,12 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { BOT_MENU, COMMAND_HELP, parseCommand } from "@/lib/commands";
-import {
-  describeCriteria,
-  enforceLimits,
-  InvalidForm,
-  type Criteria,
-} from "@/lib/criteria";
+import { enforceLimits, InvalidForm, type Criteria } from "@/lib/criteria";
 import { query, transaction } from "@/lib/db";
 import {
   CHANGE_FILTER,
@@ -19,7 +14,9 @@ import {
   RESUMED,
   SET_FILTERS,
   STOPPED,
-  WELCOME,
+  criteriaCard,
+  criteriaChanged,
+  criteriaSet,
   noFilterYet,
   planLine,
   upgradeInvitation,
@@ -108,7 +105,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
         return;
       }
       const body = [
-        describeCriteria((account.criteria ?? {}) as Criteria),
+        criteriaCard((account.criteria ?? {}) as Criteria),
         "",
         planLine(account.plan_name, account.plan_until, planIsLive(account)),
         "",
@@ -156,6 +153,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
     );
     let userId = rows[0]?.user_id;
     if (userId === undefined) return null;
+    let returning = false;
 
     await run(
       `UPDATE users
@@ -176,6 +174,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
     const existing = owner[0]?.user_id as number | undefined;
 
     if (existing !== undefined) {
+      returning = true;
 
       await run(`UPDATE subscriptions SET active = false WHERE user_id = $1 AND active`, [
         existing,
@@ -204,14 +203,22 @@ async function start(chatId: string, token: string | null): Promise<void> {
          DO UPDATE SET address = EXCLUDED.address, verified_at = now()`,
       [userId, chatId],
     );
-    return userId;
+    return { userId, returning };
   });
 
   if (claimed === null) {
     await sendMessage(chatId, LINK_EXPIRED);
     return;
   }
-  await sendMessage(chatId, WELCOME);
+
+  // Read back rather than trust the form: this is what the filter will actually
+  // match on, after the district limit and the rest of enforceLimits.
+  const account = await accountForChat(chatId);
+  const criteria = (account?.criteria ?? {}) as Criteria;
+  await sendMessage(
+    chatId,
+    claimed.returning ? criteriaChanged(criteria) : criteriaSet(criteria),
+  );
 }
 
 async function offerUpgrade(chatId: string, account: Account): Promise<void> {
