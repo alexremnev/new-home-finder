@@ -1,5 +1,5 @@
 import type { Account } from "./plans";
-import { paidPlans, siteUrl } from "./plans";
+import { lapsedShare, paidPlans, siteUrl } from "./plans";
 
 export const WELCOME = [
   "You're subscribed. I'll message you when a new listing matches your filter.",
@@ -14,7 +14,7 @@ export const LINK_EXPIRED = [
   "That link has expired. Please fill the form again and use the new link —",
   "it takes a moment.",
   "",
-  process.env.SITE_URL ?? "https://london-rent-alerts.vercel.app",
+  process.env.SITE_URL ?? "https://londonhomefinder.co.uk",
 ].join("\n");
 
 export const STOPPED = [
@@ -69,11 +69,17 @@ function money(pence: number): string {
 
 export async function upgradeInvitation(account: Account, token?: string): Promise<string> {
   const plans = await paidPlans();
+  const share = await lapsedShare().catch(() => null);
   const lines = [
     planLine(account.plan_name, account.plan_until, true),
     `Districts you can watch now: ${account.max_districts}`,
-    "",
   ];
+  if (share !== null && share < 100) {
+    lines.push(
+      `Once a plan ends you receive ${share}% of what matches. A paid plan sends all of it.`,
+    );
+  }
+  lines.push("");
   if (!plans.length) {
     lines.push("There is nothing to upgrade to at the moment.");
     return lines.join("\n");

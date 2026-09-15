@@ -1,4 +1,4 @@
-import { accountForToken, paidPlans } from "@/lib/plans";
+import { accountForToken, lapsedShare, paidPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +17,7 @@ export default async function UpgradePage({
   const token = t ?? "";
   const account = token ? await accountForToken(token, "upgrade").catch(() => null) : null;
   const plans = await paidPlans().catch(() => []);
+  const share = await lapsedShare().catch(() => null);
 
   if (!account) {
     return (
@@ -47,8 +48,8 @@ export default async function UpgradePage({
     <>
       <h1>Every listing, the moment it appears</h1>
       <p className="lede">
-        The free plan sends a share of what matches your filter. A paid plan sends all
-        of it — same filter, nothing else to set up.
+        The free plan sends {share === null ? "a share" : `${share}%`} of what matches
+        your filter. A paid plan sends all of it — same filter, nothing else to set up.
       </p>
 
       <div className="plans">
@@ -64,7 +65,11 @@ export default async function UpgradePage({
               <div className="plan-price">{money(plan.price_pence)}</div>
               {rate && <p className="hint">{rate}</p>}
               <ul className="plan-points">
-                <li>Every matching listing, not a share</li>
+                <li>
+                  {share === null
+                    ? "Every matching listing, not a share"
+                    : `Every matching listing, not ${share}%`}
+                </li>
                 <li>Up to {plan.max_districts} areas</li>
                 <li>
                   {plan.duration_days
@@ -86,8 +91,8 @@ export default async function UpgradePage({
       <p className="footnote">
         One payment for one period — nothing recurring, and no card kept on file by
         us. Payment is handled by Stripe; the card never touches this server. When it
-        ends the alerts drop back to the free share rather than stopping, and your
-        filter is kept either way.
+        ends the alerts drop back to {share === null ? "the free share" : `${share}%`}{" "}
+        rather than stopping, and your filter is kept either way.
       </p>
     </>
   );

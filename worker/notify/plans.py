@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-SITE = os.environ.get("SITE_URL", "https://london-rent-alerts.vercel.app").rstrip("/")
+SITE = os.environ.get("SITE_URL", "https://londonhomefinder.co.uk").rstrip("/")
 
 def bot_username() -> str:
 
@@ -22,7 +22,15 @@ def _when(plan_until: datetime | None) -> str:
 
     return plan_until.strftime("%d %b at %H:%M")
 
-def expiring_notice(plan: str, plan_until: datetime | None, stage: str) -> str:
+def _falls_back_to(share: int | None) -> str:
+
+    if share is None or share >= 100:
+        return "After that the alerts stop until you renew."
+    return f"After that you receive {share}% of what matches, until you renew."
+
+def expiring_notice(
+    plan: str, plan_until: datetime | None, stage: str, share: int | None = None
+) -> str:
 
     what = "free trial" if plan == "trial" else "subscription"
     when = _when(plan_until)
@@ -38,39 +46,44 @@ def expiring_notice(plan: str, plan_until: datetime | None, stage: str) -> str:
         [
             opening,
             "",
-            "After that the alerts stop until you renew.",
+            _falls_back_to(share),
             "",
             KEPT,
             "",
-            "/pay — 2 more weeks of alerts",
+            "/pay — full access",
         ]
     )
 
-def expiry_notice(plan: str) -> str:
+def expiry_notice(plan: str, share: int | None = None) -> str:
 
-    opening = (
-        "Your free trial has ended, so alerts have stopped."
-        if plan == "trial"
-        else "Your subscription has ended, so alerts have stopped."
-    )
+    what = "free trial" if plan == "trial" else "subscription"
+    if share is None or share >= 100:
+        opening = f"Your {what} has ended, so alerts have stopped."
+    else:
+        opening = (
+            f"Your {what} has ended. You now receive {share}% of what matches "
+            "your filter."
+        )
     return "\n".join(
         [
             opening,
             "",
             KEPT,
             "",
-            "/pay — 2 weeks of alerts",
+            "/pay — full access",
             f"{SITE}/upgrade",
             "",
             "/stop — delete my filter for good",
         ]
     )
 
-def notice_for(plan: str, plan_until: datetime | None, stage: str) -> str:
+def notice_for(
+    plan: str, plan_until: datetime | None, stage: str, share: int | None = None
+) -> str:
 
     if stage == "expired":
-        return expiry_notice(plan)
-    return expiring_notice(plan, plan_until, stage)
+        return expiry_notice(plan, share)
+    return expiring_notice(plan, plan_until, stage, share)
 
 def withheld_notice(matched: int, share: int) -> str:
 

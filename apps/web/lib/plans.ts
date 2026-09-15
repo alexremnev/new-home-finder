@@ -46,6 +46,20 @@ export async function paidPlans(): Promise<Plan[]> {
   );
 }
 
+// What an ended plan drops back to, as a percentage. Read rather than written
+// into the copy: the number is a product decision that lives in `plans`, and a
+// sentence repeating it is a sentence that will one day be wrong.
+export async function lapsedShare(): Promise<number | null> {
+  const rows = await query<{ share: number }>(
+    `SELECT p.delivery_share AS share
+       FROM plan_settings ps
+       JOIN plans p ON p.key = ps.lapsed_plan AND p.enabled
+      LIMIT 1`,
+  );
+  const share = rows[0]?.share;
+  return share === undefined || share === null ? null : Number(share);
+}
+
 export async function accountForChat(chatId: string): Promise<Account | null> {
   const rows = await query<Account>(
     `SELECT u.id AS user_id, u.status, u.plan, u.plan_until, u.payment_ref,
@@ -137,7 +151,7 @@ export function paymentRef(): string {
 }
 
 export function siteUrl(): string {
-  return (process.env.SITE_URL ?? "https://london-rent-alerts.vercel.app").replace(/\/+$/, "");
+  return (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(/\/+$/, "");
 }
 
 export function botLink(token: string): string {

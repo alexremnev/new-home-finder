@@ -112,7 +112,14 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                 ON CONFLICT (user_id, stage, plan_until) DO NOTHING
                 RETURNING user_id, stage, plan_until, plan
             )
-            SELECT c.user_id, c.stage, c.plan_until, c.plan, uc.channel, uc.address
+            SELECT c.user_id, c.stage, c.plan_until, c.plan, uc.channel, uc.address,
+                   -- What the alerts fall back to, so the notice can say so rather
+                   -- than claiming they stop. Nobody is cut off any more.
+                   (SELECT lapsed.delivery_share
+                      FROM plan_settings ps
+                      JOIN plans lapsed
+                        ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
+                     LIMIT 1) AS lapsed_share
               FROM claimed c
               JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
             """,

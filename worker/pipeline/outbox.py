@@ -404,7 +404,13 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 Recipient(channel=str(row["channel"]), address=str(row["address"])),
                 Alert(
                     kind="expired" if notice_stage == "expired" else "expiring",
-                    text=notice_for(str(row["plan"]), row["plan_until"], notice_stage),
+                    text=notice_for(
+                        str(row["plan"]),
+                        row["plan_until"],
+                        notice_stage,
+                        None if row.get("lapsed_share") is None
+                        else int(row["lapsed_share"]),
+                    ),
                 ),
             )
             if result.ok:

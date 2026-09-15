@@ -13,7 +13,7 @@ export const BOT_MENU: { command: string; description: string }[] = [
   { command: "start", description: "Start a new search" },
   { command: "update", description: "Update my search" },
   { command: "current", description: "Show my current criteria" },
-  { command: "pay", description: "2 weeks of alerts" },
+  { command: "pay", description: "Full access" },
   { command: "stop", description: "Delete my filter and stop" },
 ];
 
@@ -65,6 +65,6 @@ export function parseCommand(text: string | undefined): Command {
 export const COMMAND_HELP = [
   "/current — the filter I'm using for you",
   "",
-  "/pay — 2 weeks of alerts",
+  "/pay — full access",
   "/stop — delete my filter and stop the messages",
 ].join("\n");

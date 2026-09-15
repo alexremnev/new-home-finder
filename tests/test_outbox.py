@@ -8,7 +8,7 @@ import pytest
 
 from worker.contracts.notify import NOTIFIERS, SendResult, build_notifier
 from worker.notify.telegram import render_listing
-from worker.notify.plans import withheld_notice
+from worker.notify.plans import notice_for, withheld_notice
 from worker.pipeline.outbox import (
     MAX_ATTEMPTS,
     alert_for,
@@ -125,6 +125,33 @@ def test_the_digest_counts_what_matched_and_names_what_is_missing() -> None:
 def test_the_digest_agrees_with_itself_about_one_listing() -> None:
     assert "1 new listing today" in withheld_notice(1, 20)
     assert "1 new listings" not in withheld_notice(1, 20)
+
+def test_an_ended_plan_says_what_arrives_instead_of_claiming_silence() -> None:
+    text = notice_for("month", datetime(2026, 9, 15, 12, tzinfo=timezone.utc), "expired", 20)
+    assert "You now receive 20% of what matches your filter." in text
+    assert "have stopped" not in text
+
+def test_an_ending_plan_names_the_share_it_falls_back_to() -> None:
+    for stage in ("day", "hour"):
+        text = notice_for("trial", datetime(2026, 9, 15, 12, tzinfo=timezone.utc), stage, 20)
+        assert "you receive 20% of what matches, until you renew." in text
+        assert "the alerts stop" not in text
+
+def test_without_a_lapsed_tier_the_old_wording_stands() -> None:
+
+    # A share of 100, or none configured, means there is no fallback: then the
+    # alerts really do stop, and saying otherwise would be the lie.
+    for share in (None, 100):
+        assert "alerts have stopped" in notice_for("month", None, "expired", share)
+        assert "the alerts stop until you renew" in notice_for("month", None, "day", share)
+
+def test_no_notice_promises_a_period_no_plan_sells() -> None:
+
+    moment = datetime(2026, 9, 15, 12, tzinfo=timezone.utc)
+    for stage in ("day", "hour", "expired"):
+        for plan in ("trial", "week", "month"):
+            assert "2 weeks" not in notice_for(plan, moment, stage, 20)
+            assert "2 more weeks" not in notice_for(plan, moment, stage, 20)
 
 def test_a_price_drop_reuses_the_listing_shape() -> None:
 
