@@ -15,7 +15,6 @@ import {
   SET_FILTERS,
   STOPPED,
   criteriaCard,
-  criteriaChanged,
   criteriaSet,
   noFilterYet,
   planLine,
@@ -153,7 +152,6 @@ async function start(chatId: string, token: string | null): Promise<void> {
     );
     let userId = rows[0]?.user_id;
     if (userId === undefined) return null;
-    let returning = false;
 
     await run(
       `UPDATE users
@@ -174,7 +172,6 @@ async function start(chatId: string, token: string | null): Promise<void> {
     const existing = owner[0]?.user_id as number | undefined;
 
     if (existing !== undefined) {
-      returning = true;
 
       await run(`UPDATE subscriptions SET active = false WHERE user_id = $1 AND active`, [
         existing,
@@ -203,7 +200,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
          DO UPDATE SET address = EXCLUDED.address, verified_at = now()`,
       [userId, chatId],
     );
-    return { userId, returning };
+    return userId;
   });
 
   if (claimed === null) {
@@ -214,11 +211,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
   // Read back rather than trust the form: this is what the filter will actually
   // match on, after the district limit and the rest of enforceLimits.
   const account = await accountForChat(chatId);
-  const criteria = (account?.criteria ?? {}) as Criteria;
-  await sendMessage(
-    chatId,
-    claimed.returning ? criteriaChanged(criteria) : criteriaSet(criteria),
-  );
+  await sendMessage(chatId, criteriaSet((account?.criteria ?? {}) as Criteria));
 }
 
 async function offerUpgrade(chatId: string, account: Account): Promise<void> {

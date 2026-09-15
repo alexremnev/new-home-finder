@@ -81,8 +81,10 @@ export function criteriaCard(criteria: Criteria): string {
   return lines.join("\n");
 }
 
-const FOOTER = ["/current — show this again", "/stop — delete my filter and stop"];
-
+// The same message whether this is a first filter or a replacement. Saving the
+// form sets backfill_from to now either way, so the closing sentence is equally
+// true of both, and a person who has just changed their criteria wants to read
+// the criteria rather than be told that they changed them.
 export function criteriaSet(criteria: Criteria): string {
   return [
     "✅ Your search criteria are set",
@@ -92,19 +94,8 @@ export function criteriaSet(criteria: Criteria): string {
     "I'll message you as soon as a new listing matches. Nothing arrives for listings",
     "that were already on the market — only what appears from now on.",
     "",
-    ...FOOTER,
-  ].join("\n");
-}
-
-export function criteriaChanged(criteria: Criteria): string {
-  return [
-    "✏️ Your search criteria are updated",
-    "",
-    criteriaCard(criteria),
-    "",
-    "This replaces what you had before. Alerts carry on with the new filter.",
-    "",
-    ...FOOTER,
+    "/current — show this again",
+    "/stop — delete my filter and stop",
   ].join("\n");
 }
 

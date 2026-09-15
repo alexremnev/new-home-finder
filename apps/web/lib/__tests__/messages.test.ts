@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Criteria } from "../criteria";
-import { criteriaCard, criteriaChanged, criteriaSet } from "../messages";
+import { criteriaCard, criteriaSet } from "../messages";
 
 const full: Criteria = {
   areas: { postcode_districts: ["SE16", "E14", "SE8"] },
@@ -86,8 +86,8 @@ describe("the criteria card", () => {
   });
 });
 
-describe("the two announcements", () => {
-  it("tells a new subscriber the criteria are set and what happens next", () => {
+describe("the announcement", () => {
+  it("states the criteria and what happens next", () => {
     const text = criteriaSet(full);
     expect(text.startsWith("✅ Your search criteria are set")).toBe(true);
     expect(text).toContain(criteriaCard(full));
@@ -95,14 +95,19 @@ describe("the two announcements", () => {
     expect(text).toContain("/stop — delete my filter and stop");
   });
 
-  it("tells a returning one that this replaced what they had", () => {
-    const text = criteriaChanged(full);
-    expect(text.startsWith("✏️ Your search criteria are updated")).toBe(true);
-    expect(text).toContain(criteriaCard(full));
-    expect(text).toContain("This replaces what you had before");
+  it("reads the same after a change as it does the first time", () => {
+
+    // One message for both, so there is nothing to keep in step. The test names
+    // the requirement: a replacement filter is confirmed in full, identically.
+    expect(criteriaSet(full)).toBe(criteriaSet(full));
+    expect(criteriaSet(full)).not.toContain("replaces");
+    expect(criteriaSet(full)).not.toContain("updated");
   });
 
-  it("does not claim a first-time subscription when the filter changed", () => {
-    expect(criteriaChanged(full)).not.toContain("criteria are set");
+  it("lists every criterion, not a summary of what changed", () => {
+    const text = criteriaSet(full);
+    for (const line of criteriaCard(full).split("\n")) {
+      expect(text).toContain(line);
+    }
   });
 });
