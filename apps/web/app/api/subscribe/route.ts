@@ -9,6 +9,7 @@ import {
   paymentRef,
   signupPlan,
   START_TTL_MINUTES,
+  whatsappLink,
 } from "@/lib/plans";
 
 export const runtime = "nodejs";
@@ -42,7 +43,11 @@ export async function POST(request: Request): Promise<NextResponse> {
     throw error;
   }
 
+  // One token per messenger. Whichever link is opened claims this search; the
+  // other stops working, because a search has one destination. The two
+  // messengers are otherwise unconnected — separate accounts, separate plans.
   const token = newToken();
+  const waToken = newToken();
 
   await transaction(async (run) => {
     const users = await run(
@@ -68,8 +73,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     );
     await run(
       `INSERT INTO user_tokens (token, user_id, purpose, expires_at)
-       VALUES ($1, $2, 'start', now() + make_interval(mins => $3::int))`,
-      [token, userId, START_TTL_MINUTES],
+       VALUES ($1, $2, 'start',    now() + make_interval(mins => $3::int)),
+              ($4, $2, 'whatsapp', now() + make_interval(mins => $3::int))`,
+      [token, userId, START_TTL_MINUTES, waToken],
     );
   });
 
@@ -80,6 +86,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     plan: plan.display_name,
     trial_days: plan.duration_days,
     url: botLink(token),
+    // Absent until a business is registered, and the form hides the button then.
+    whatsapp: process.env.WA_PHONE_NUMBER_ID ? whatsappLink(waToken) : null,
     expires_in_minutes: START_TTL_MINUTES,
   });
 }

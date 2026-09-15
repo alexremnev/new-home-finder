@@ -143,6 +143,15 @@ export async function issueToken(
   return token;
 }
 
+// The mirror of botLink. wa.me opens WhatsApp with the message already typed,
+// so linking a number costs one tap — and the inbound message is what proves the
+// number belongs to the person, exactly as /start <token> does on Telegram.
+export function whatsappLink(token: string): string | null {
+  const number = (process.env.WHATSAPP_NUMBER ?? "").replace(/\D/g, "");
+  if (!number) return null;
+  return `https://wa.me/${number}?text=${encodeURIComponent(`Link my alerts: ${token}`)}`;
+}
+
 export function paymentRef(): string {
   const alphabet = "23456789BCDFGHJKMNPQRSTVWXZ";
   const bytes = randomBytes(6);

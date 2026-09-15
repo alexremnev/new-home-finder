@@ -1,0 +1,314 @@
+from __future__ import annotations
+
+import re
+from datetime import date, datetime, timedelta, timezone
+from html import unescape
+from typing import Any
+
+import pytest
+
+from worker.contracts.notify import Action, Alert, ListingView, Recipient
+from worker.notify.telegram import render_listing as render_telegram
+from worker.notify.whatsapp import (
+    WhatsAppNotifier,
+    digits,
+    render,
+    render_listing,
+    template_params,
+    window_open,
+)
+
+def view(**overrides: Any) -> ListingView:
+    values: dict[str, Any] = {
+        "price_pcm": 1950,
+        "bedrooms": 2,
+        "property_type": "flat",
+        "district": "SE16",
+        "postcode": "SE16 4TH",
+        "zone": 2,
+        "available_from": date(2026, 9, 12),
+        "furnished": "furnished",
+        "pets_allowed": True,
+        "bills_included": False,
+        "min_tenancy_months": 12,
+        "source_display": "OpenRent",
+        "is_landlord_direct": True,
+        "url": "https://www.openrent.co.uk/property-to-rent/london/x/123",
+    }
+    values.update(overrides)
+    return ListingView(**values)
+
+def facts(text: str) -> list[str]:
+
+    # The wording with the markup taken off, so the two channels can be compared
+    # on what they say rather than on how they say it. The anchor goes too: the
+    # map link is Telegram's way of showing a postcode, not a separate fact.
+    stripped = re.sub(r"</?b>|\*|</a>", "", text)
+    stripped = re.sub(r'<a href="[^"]*">', "", stripped)
+    return [unescape(line) for line in stripped.split("\n")]
+
+def test_both_channels_state_the_same_facts_in_the_same_order() -> None:
+    subject = view(
+        share=20, lapsed="trial", bathrooms=2, size_text="47.29 sq m",
+        area="Bow & Bromley", address="Flat 3, Ropery St",
+    )
+    assert facts(render_listing(subject)) == facts(render_telegram(subject))
+
+def test_they_agree_on_a_studio_a_room_and_full_access_too() -> None:
+
+    for extra in (
+        {"bedrooms": 0, "property_type": "studio"},
+        {"bedrooms": 1, "property_type": "room"},
+        {"share": None, "postcode": None},
+        {"share": 10, "lapsed": "plan", "pets_allowed": None, "furnished": "unknown"},
+    ):
+        subject = view(**extra)
+        assert facts(render_listing(subject)) == facts(render_telegram(subject)), extra
+
+def test_emphasis_uses_the_marker_whatsapp_understands() -> None:
+    text = render_listing(view())
+    assert "🏠 *New listing spotted!*" in text
+    assert "💷 *£1,950/month*" in text
+    assert "<b>" not in text and "</b>" not in text
+
+def test_the_only_link_is_the_listing_so_the_preview_is_the_flat() -> None:
+
+    text = render_listing(view(postcode="SE16 4TH"))
+    assert text.count("http") == 1
+    assert "maps.google" not in text and "google.com/maps" not in text
+    assert text.split("\n")[-1] == view().url
+
+def test_the_restricted_notice_is_emphasised_and_last() -> None:
+    text = render_listing(view(share=20, lapsed="plan"))
+    assert text.endswith(
+        "🔒 *Your plan has ended. Access is now limited to 20% of property "
+        "listings. Upgrade today for full access* — you are missing 80% of what matches."
+    )
+
+def test_a_button_only_action_is_left_out_rather_than_described() -> None:
+
+    alert = Alert(kind="listing", listing=view(), actions=[
+        Action(label="Ignore", callback="ignore:7"),
+    ])
+    assert "Ignore" not in render(alert)
+
+def test_a_link_action_becomes_a_line() -> None:
+    alert = Alert(kind="expiring", text="Your plan ends tomorrow.", actions=[
+        Action(label="Upgrade today for full access", url="https://t.me/bot?start=pay"),
+        Action(label="Pause all notifications", callback="pause"),
+    ])
+    text = render(alert)
+    assert text.startswith("Your plan ends tomorrow.")
+    assert "Upgrade today for full access: https://t.me/bot?start=pay" in text
+    assert "Pause all notifications" not in text
+
+@pytest.mark.parametrize(
+    ("given", "expected"),
+    [("+44 7700 900123", "447700900123"), ("447700900123", "447700900123"),
+     ("(44) 7700-900123", "447700900123"), ("no digits here", "")],
+)
+def test_a_number_is_reduced_to_its_digits(given: str, expected: str) -> None:
+    assert digits(given) == expected
+
+def sent_through(**response: Any) -> tuple[list[dict[str, Any]], Any]:
+    calls: list[dict[str, Any]] = []
+
+    def sender(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        calls.append({"url": url, "payload": payload, "headers": headers})
+        return response
+
+    return calls, sender
+
+def notifier(sender: Any = None, **extra: Any) -> WhatsAppNotifier:
+    settings: dict[str, Any] = {
+        "phone_id": "1234567890",
+        "token": "EAAG-secret",
+        "template": "new_listing",
+        "language": "en",
+        "link_prefix": "https://londonhomefinder.co.uk/l",
+    }
+    settings.update(extra)
+    return WhatsAppNotifier(sender=sender, **settings)
+
+def hours_ago(count: float) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(hours=count)
+
+def test_the_window_is_open_for_a_day_and_not_a_minute_longer() -> None:
+    assert window_open(hours_ago(0.1)) is True
+    assert window_open(hours_ago(23.9)) is True
+    assert window_open(hours_ago(24.1)) is False
+    assert window_open(None) is False
+
+def test_a_naive_timestamp_is_read_as_utc_rather_than_crashing() -> None:
+
+    # psycopg returns tz-aware values, but a hand-built view or a test fixture
+    # may not, and comparing the two raises.
+    assert window_open(datetime.utcnow().replace(tzinfo=None)) is True
+
+def test_inside_the_window_the_message_is_the_same_one_telegram_gets() -> None:
+    calls, sender = sent_through(messages=[{"id": "wamid.1"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="+44 7700 900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    assert result.ok and result.provider_msg_id == "wamid.1"
+    body = calls[0]["payload"]
+    assert body["type"] == "text"
+    assert body["to"] == "447700900123"
+    assert body["text"]["preview_url"] is True
+    assert "🏠 *New listing spotted!*" in body["text"]["body"]
+    assert calls[0]["headers"]["Authorization"] == "Bearer EAAG-secret"
+    assert calls[0]["url"].endswith("/1234567890/messages")
+
+def test_outside_the_window_it_becomes_the_approved_template() -> None:
+    calls, sender = sent_through(messages=[{"id": "wamid.2"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(listing_id=4242)),
+    )
+    assert result.ok
+    body = calls[0]["payload"]
+    assert body["type"] == "template"
+    assert body["template"]["name"] == "new_listing"
+    assert body["template"]["language"] == {"code": "en"}
+
+    parts = body["template"]["components"]
+    assert [p["type"] for p in parts] == ["body", "button"]
+    assert [p["text"] for p in parts[0]["parameters"]] == [
+        "SE16 4TH", "£1,950", "2 Bedrooms", "—", "Available from 12 September 2026",
+        "Furnished",
+    ]
+    assert parts[1]["parameters"][0]["text"] == "4242"
+
+def test_a_template_parameter_is_never_empty_and_never_wraps() -> None:
+
+    # Meta rejects both, and an absent fact is the normal case.
+    params = template_params(
+        view(area=None, address=None, postcode=None, district=None, bathrooms=None,
+             available_from=None, furnished="unknown", size_text=None)
+    )
+    assert all(p and "\n" not in p for p in params), params
+    assert params.count("—") == 4
+
+def test_a_long_address_is_flattened_rather_than_broken() -> None:
+    params = template_params(view(area="Canary\nWharf", address="Flat 3,\n  Ropery St"))
+    assert params[0] == "Canary Wharf, Flat 3, Ropery St"
+
+def test_a_studio_and_a_room_keep_their_names_in_the_template() -> None:
+    assert template_params(view(bedrooms=0, property_type="studio"))[2] == "Studio"
+    assert (
+        template_params(view(bedrooms=1, property_type="room"))[2]
+        == "Room in a shared flat"
+    )
+
+def test_without_a_listing_id_the_button_is_left_off_rather_than_broken() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(listing_id=None)),
+    )
+    parts = calls[0]["payload"]["template"]["components"]
+    assert [p["type"] for p in parts] == ["body"]
+
+def test_a_plan_notice_outside_the_window_waits_rather_than_being_refused() -> None:
+    result = notifier().send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expiring", text="Your plan ends tomorrow."),
+    )
+    assert not result.ok and result.retryable
+    assert "no template" in (result.error or "")
+
+def test_a_plan_notice_inside_the_window_goes_as_text() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(2)),
+        Alert(kind="expiring", text="Your plan ends tomorrow."),
+    )
+    assert result.ok
+    assert calls[0]["payload"]["text"]["preview_url"] is False
+
+def test_no_template_configured_is_a_setting_rather_than_a_retry() -> None:
+    result = notifier(template=None).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=None),
+        Alert(kind="listing", listing=view()),
+    )
+    assert not result.ok and not result.retryable
+    assert "WA_TEMPLATE_NAME" in (result.error or "")
+
+def test_missing_credentials_fail_without_pretending_to_retry() -> None:
+    result = WhatsAppNotifier(None, None).send(
+        Recipient(channel="whatsapp", address="447700900123"),
+        Alert(kind="listing", listing=view()),
+    )
+    assert not result.ok and not result.retryable
+    assert "WA_PHONE_NUMBER_ID" in (result.error or "")
+
+def test_an_address_that_is_not_a_number_is_not_retried_forever() -> None:
+    result = notifier().send(
+        Recipient(channel="whatsapp", address="someone@example.com"),
+        Alert(kind="listing", listing=view()),
+    )
+    assert not result.ok and not result.retryable and result.recipient_gone
+
+@pytest.mark.parametrize(
+    ("code", "retryable", "gone"),
+    [
+        (130429, True, False),
+        (131048, True, False),
+        (500, True, False),
+        (503, True, False),
+        (131026, False, True),
+        (131052, False, True),
+        (131047, False, False),
+        (132000, False, False),
+        (132015, False, False),
+        (133010, False, False),
+    ],
+)
+def test_which_graph_errors_are_worth_another_attempt(
+    code: int, retryable: bool, gone: bool
+) -> None:
+    _, sender = sent_through(error={"code": code, "message": "no"})
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    assert not result.ok
+    assert result.retryable is retryable
+    assert result.recipient_gone is gone
+
+def test_a_whatsapp_code_is_not_mistaken_for_an_http_status() -> None:
+
+    # Every WhatsApp error code has five or six digits, so treating "500 or more"
+    # as a server error made all of them retryable — including a template that
+    # does not match its parameters, which will never succeed.
+    _, sender = sent_through(error={"code": 132000, "message": "parameter mismatch"})
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    assert not result.retryable
+
+def test_a_code_hidden_in_error_data_is_still_recognised() -> None:
+    _, sender = sent_through(
+        error={"code": 131000, "message": "generic", "error_data": {"details_code": 131026}}
+    )
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    assert result.recipient_gone and not result.retryable
+
+def test_the_channel_reads_its_own_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("WA_PHONE_NUMBER_ID", "999")
+    monkeypatch.setenv("WA_ACCESS_TOKEN", "from-env")
+    monkeypatch.setenv("WA_TEMPLATE_NAME", "listing_v2")
+    built = WhatsAppNotifier.from_env()
+    assert built.phone_id == "999"
+    assert built.token == "from-env"
+    assert built.template == "listing_v2"
+
+def test_ops_alerts_do_not_go_to_customers_on_whatsapp() -> None:
+
+    assert notifier().supports("listing")
+    assert not notifier().supports("ops")

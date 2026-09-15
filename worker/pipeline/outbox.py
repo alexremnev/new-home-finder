@@ -184,6 +184,7 @@ def listing_view(row: Row) -> ListingView:
     share = int(raw_share) if raw_share is not None and int(raw_share) < 100 else None
 
     return ListingView(
+        listing_id=(None if row.get("listing_id") is None else int(row["listing_id"])),
         price_pcm=int(row["price_pcm"]),
         bedrooms=int(row["bedrooms"]),
         property_type=row["property_type"],
@@ -321,7 +322,12 @@ def drain(
                 continue
 
             result = notifier.send(
-                Recipient(channel=channel, address=str(row["address"])), alert
+                Recipient(
+                    channel=channel,
+                    address=str(row["address"]),
+                    last_inbound=row.get("last_inbound_at"),
+                ),
+                alert,
             )
             decision = outcome_for(result, attempts=int(row["attempts"]))
             if decision.stop_user:

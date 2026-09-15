@@ -989,3 +989,35 @@ form p.error {
 }
 
 .plan .cta { margin-top: 0; }
+
+/* WhatsApp and Telegram, in their own colours */
+.cta-telegram,
+.cta-whatsapp {
+  display: block;
+  text-align: center;
+}
+
+.cta-telegram {
+  background: #229ed9;
+  border-color: #229ed9;
+  color: #fff;
+}
+
+.cta-whatsapp {
+  margin-top: 0.75rem;
+  background: #25d366;
+  border-color: #1faa53;
+  color: #05291a;
+}
+
+.cta-whatsapp:hover,
+.cta-whatsapp:focus-visible {
+  background: #1faa53;
+  color: #fff;
+}
+
+.cta-telegram:hover,
+.cta-telegram:focus-visible {
+  background: #1b87ba;
+  color: #fff;
+}

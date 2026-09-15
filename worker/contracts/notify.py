@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
@@ -10,6 +10,11 @@ AlertKind = Literal["listing", "welcome", "stopped", "expiring", "expired", "ops
 class Recipient(BaseModel):
     channel: str
     address: str = Field(description="chat id, E.164 phone, or email; never logged")
+    # WhatsApp allows free-form text only within 24 hours of the person's last
+    # message, and an approved template outside it. Which one a listing becomes
+    # depends on this, so it travels with the address rather than being looked up
+    # again by a notifier that has no database.
+    last_inbound: datetime | None = None
 
 class Action(BaseModel):
     label: str
@@ -18,6 +23,9 @@ class Action(BaseModel):
 
 class ListingView(BaseModel):
 
+    # Needed by any channel that cannot link to three portals directly and has
+    # to route through ours. Optional so a view can still be built by hand.
+    listing_id: int | None = None
     price_pcm: int
     bedrooms: int
     property_type: str | None = None

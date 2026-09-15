@@ -204,7 +204,7 @@ def test_a_channel_is_built_from_its_own_configuration() -> None:
 
 def test_an_unimplemented_channel_returns_nothing_rather_than_raising() -> None:
 
-    assert build_notifier("whatsapp") is None
+    assert build_notifier("nonsense") is None
 
 def test_the_token_is_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_TOKEN", "test-token")

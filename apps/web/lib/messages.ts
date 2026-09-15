@@ -2,6 +2,17 @@ import type { Criteria } from "./criteria";
 import type { Account } from "./plans";
 import { lapsedShare, paidPlans, siteUrl } from "./plans";
 
+export function alreadyOnAnotherChannel(channel: string): string {
+  const other = channel === "telegram" ? "Telegram" : "WhatsApp";
+  return [
+    `This search already sends its alerts to ${other}.`,
+    "",
+    "One search goes to one app, so that a listing never arrives twice. If you",
+    "want alerts here as well, set up a second search — it can use the same",
+    "filter or a different one.",
+  ].join("\n");
+}
+
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

@@ -36,6 +36,7 @@ export function SubscribeForm({
   const [beds, setBeds] = useState(0);
   const [baths, setBaths] = useState(0);
   const [link, setLink] = useState<string | null>(null);
+  const [whatsapp, setWhatsapp] = useState<string | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
   const options: Area[] =
@@ -129,13 +130,18 @@ export function SubscribeForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const body = (await response.json()) as { url?: string; error?: string };
+      const body = (await response.json()) as {
+        url?: string;
+        whatsapp?: string | null;
+        error?: string;
+      };
       if (!response.ok || !body.url) {
         setError(body.error ?? "Something went wrong. Please try again.");
         setBusy(false);
         return;
       }
       setLink(body.url);
+      setWhatsapp(body.whatsapp ?? null);
       setBusy(false);
     } catch {
       setError("Could not reach the server. Please try again.");
@@ -143,7 +149,7 @@ export function SubscribeForm({
     }
   }
 
-  if (link) return <AllDone url={link} token={tokenOf(link)} />;
+  if (link) return <AllDone url={link} whatsapp={whatsapp} token={tokenOf(link)} />;
 
   const placeholder =
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
@@ -422,29 +428,36 @@ function tokenOf(url: string): string {
   const match = /[?&]start=([^&]+)/.exec(url);
   return match?.[1] ? decodeURIComponent(match[1]) : "";
 }
-
-function AllDone({ url, token }: { url: string; token: string }) {
+function AllDone({
+  url,
+  whatsapp,
+  token,
+}: {
+  url: string;
+  whatsapp: string | null;
+  token: string;
+}) {
   const [wanted, setWanted] = useState<Record<string, boolean>>({});
   const [failed, setFailed] = useState(false);
 
-  async function vote(channel: string) {
+  async function vote(choice: string) {
 
-    const next = !wanted[channel];
-    setWanted((current) => ({ ...current, [channel]: next }));
+    const next = !wanted[choice];
+    setWanted((current) => ({ ...current, [choice]: next }));
     setFailed(false);
     try {
       const response = await fetch("/api/interest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, channel }),
+        body: JSON.stringify({ token, channel: choice }),
       });
       if (!response.ok) throw new Error("rejected");
       const body = (await response.json()) as { wanted?: boolean };
       if (typeof body.wanted === "boolean") {
-        setWanted((current) => ({ ...current, [channel]: body.wanted as boolean }));
+        setWanted((current) => ({ ...current, [choice]: body.wanted as boolean }));
       }
     } catch {
-      setWanted((current) => ({ ...current, [channel]: !next }));
+      setWanted((current) => ({ ...current, [choice]: !next }));
       setFailed(true);
     }
   }
@@ -454,30 +467,34 @@ function AllDone({ url, token }: { url: string; token: string }) {
       <div className="done-tick">✓</div>
       <h1>All done</h1>
       <p className="lede">
-        Your search is saved. Connect Telegram and the alerts start — only listings
-        posted from that moment on, never a backlog.
+        Your search is saved.{" "}
+        {whatsapp ? "Choose where the alerts should arrive" : "Connect Telegram"} and
+        they start — only listings posted from that moment on, never a backlog.
       </p>
 
-      <a href={url} className="cta">
-        Connect to Telegram
+      <a href={url} className="cta cta-telegram">
+        <span aria-hidden="true">✈️</span> Connect to Telegram
       </a>
+
+      {whatsapp && (
+        <>
+          <a href={whatsapp} className="cta cta-whatsapp">
+            <span aria-hidden="true">💬</span> Connect to WhatsApp
+          </a>
+          <p className="hint">
+            One of the two — a search goes to one app, so a listing never arrives
+            twice. Want both? Fill the form in again afterwards; the two are
+            separate searches with separate plans.
+          </p>
+        </>
+      )}
 
       <div className="vote">
         <h2>Would you rather get these somewhere else?</h2>
         <p className="hint">
-          Both are on the way. Tell us which to build first — tap to vote, tap again
-          to take it back.
+          Tell us what to build next — tap to vote, tap again to take it back.
         </p>
         <div className="vote-row">
-          <button
-            type="button"
-            className={wanted.whatsapp ? "vote-button voted" : "vote-button"}
-            onClick={() => vote("whatsapp")}
-            aria-pressed={Boolean(wanted.whatsapp)}
-          >
-            <span className="heart">💬</span>
-            {wanted.whatsapp ? "WhatsApp — counted!" : "I'd want WhatsApp"}
-          </button>
           <button
             type="button"
             className={wanted.email ? "vote-button voted" : "vote-button"}
@@ -486,6 +503,15 @@ function AllDone({ url, token }: { url: string; token: string }) {
           >
             <span className="heart">{wanted.email ? "❤️" : "🤍"}</span>
             {wanted.email ? "Email — counted!" : "Email, please"}
+          </button>
+          <button
+            type="button"
+            className={wanted.sms ? "vote-button voted" : "vote-button"}
+            onClick={() => vote("sms")}
+            aria-pressed={Boolean(wanted.sms)}
+          >
+            <span className="heart">{wanted.sms ? "❤️" : "🤍"}</span>
+            {wanted.sms ? "SMS — counted!" : "Text message"}
           </button>
         </div>
         {failed && (

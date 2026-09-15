@@ -6,6 +6,7 @@ import { query, transaction } from "@/lib/db";
 import {
   CHANGE_FILTER,
   FILTERS_BUTTON,
+  alreadyOnAnotherChannel,
   LINK_EXPIRED,
   NOTHING_TO_PAUSE,
   NOTHING_TO_RESUME,
@@ -142,7 +143,9 @@ async function start(chatId: string, token: string | null): Promise<void> {
     return sendToForm(chatId, false);
   }
 
-  const claimed = await transaction(async (run) => {
+  type Claim = null | { taken: string } | { userId: number };
+
+  const claimed: Claim = await transaction<Claim>(async (run) => {
 
     const rows = await run(
       `UPDATE user_tokens SET used_at = now()
@@ -152,6 +155,18 @@ async function start(chatId: string, token: string | null): Promise<void> {
     );
     let userId = rows[0]?.user_id;
     if (userId === undefined) return null;
+
+    // One search, one destination. Without this the model is a convention: two
+    // verified channels on one account would double the digest and the notices.
+    const elsewhere = await run(
+      `SELECT channel FROM user_channels
+        WHERE user_id = $1 AND channel <> 'telegram' AND verified_at IS NOT NULL
+        LIMIT 1`,
+      [userId],
+    );
+    if (elsewhere[0] !== undefined) {
+      return { taken: String(elsewhere[0].channel) };
+    }
 
     await run(
       `UPDATE users
@@ -200,11 +215,16 @@ async function start(chatId: string, token: string | null): Promise<void> {
          DO UPDATE SET address = EXCLUDED.address, verified_at = now()`,
       [userId, chatId],
     );
-    return userId;
+
+    return { userId: Number(userId) };
   });
 
   if (claimed === null) {
     await sendMessage(chatId, LINK_EXPIRED);
+    return;
+  }
+  if ("taken" in claimed) {
+    await sendMessage(chatId, alreadyOnAnotherChannel(claimed.taken));
     return;
   }
 

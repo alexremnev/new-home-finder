@@ -223,8 +223,9 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
     return list(
         conn.execute(
             f"""
-            SELECT n.id, n.user_id, n.channel, n.kind, n.attempts,
-                   uc.address, src.display_name AS source_display, {columns},
+            SELECT n.id, n.user_id, n.channel, n.kind, n.attempts, n.listing_id,
+                   uc.address, uc.last_inbound_at,
+                   src.display_name AS source_display, {columns},
                    u.plan AS plan_key,
                    -- The same CASE as `active_subscriptions`, for the same reason:
                    -- the live plan's share while it is live, the lapsed tier's once

@@ -6,12 +6,11 @@ from typing import Any
 import pytest
 
 from worker.contracts.notify import Action, Alert, ListingView, Recipient
+from worker.notify.fields import money, plural
 from worker.notify.telegram import (
     TelegramNotifier,
     is_blocked_by_user,
     keyboard_for,
-    money,
-    plural,
     render,
     render_listing,
 )

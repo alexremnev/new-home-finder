@@ -1,89 +1,47 @@
 from __future__ import annotations
 
-import re
 from html import escape
-from urllib.parse import quote
 
 import json
 import os
 import urllib.error
 import urllib.request
 from collections.abc import Callable
-from datetime import date
 from typing import Any
 
-from worker.contracts.notify import Alert, AlertKind, ListingView, Recipient, SendResult, register_notifier
+from worker.contracts.notify import (
+    Alert,
+    AlertKind,
+    ListingView,
+    Recipient,
+    SendResult,
+    register_notifier,
+)
+from worker.notify.fields import Line, listing_fields, restriction_text
 
 API = "https://api.telegram.org/bot{token}/sendMessage"
 LIMIT = 4096
 
-MONTHS = (
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-)
+def _html(line: Line) -> str:
 
-def plural(count: int, word: str) -> str:
-    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+    body = escape(line.text)
+    if line.link:
+        body = f'<a href="{escape(line.link)}">{body}</a>'
+    if line.bold:
+        body = f"<b>{body}</b>"
+    return f"{line.icon} {body}"
 
-def money(amount: int) -> str:
-    return f"£{amount:,}".replace(",", ",")
+def restriction_notice(view: ListingView) -> str | None:
 
-def long_date(value: date) -> str:
-
-    return f"{value.day} {value:%B %Y}"
-
-def maps_link(view: ListingView) -> str | None:
-
-    if not view.postcode:
+    parts = restriction_text(view)
+    if parts is None:
         return None
-    return "https://www.google.com/maps/search/?api=1&query=" + quote(view.postcode)
-
-def size_of(text: str | None) -> str | None:
-
-    if not text:
-        return None
-    return re.sub(
-        r"(\d+(?:\.\d+)?)\s*sq\.?\s*m\b",
-        lambda m: f"{round(float(m.group(1)))} m²",
-        text,
-        flags=re.IGNORECASE,
-    )
+    emphasised, rest = parts
+    return f"🔒 <b>{escape(emphasised)}</b>{escape(rest)}"
 
 def render_listing(view: ListingView) -> str:
 
-    lines = ["🏠 <b>New listing spotted!</b>"]
-
-    where = ", ".join(part for part in (view.area, view.address) if part)
-    if where:
-        lines.append("📍 " + escape(where))
-    link = maps_link(view)
-    if view.postcode and link:
-        lines.append(f'📮 <a href="{escape(link)}">{escape(view.postcode)}</a>')
-    elif view.district:
-        lines.append("📮 " + escape(view.district))
-
-    lines.append(f"💷 <b>{money(view.price_pcm)}/month</b>")
-
-    if view.property_type == "room":
-        lines.append("🛏️ Room in a shared flat")
-    elif view.bedrooms == 0:
-        lines.append("🛏️ Studio")
-    else:
-        lines.append(f"🛏️ {plural(view.bedrooms, 'Bedroom')}")
-    if view.bathrooms:
-        lines.append(f"🛁 {plural(view.bathrooms, 'Bathroom')}")
-
-    size = size_of(view.size_text)
-    if size:
-        lines.append("📐 " + escape(size))
-    if view.available_from is not None:
-        lines.append("📅 Available from " + long_date(view.available_from))
-
-    if view.pets_allowed:
-        lines.append("🐾 Pets allowed")
-    if view.furnished and view.furnished != "unknown":
-        lines.append("🛋 " + escape(view.furnished.capitalize()))
-
+    lines = [_html(line) for line in listing_fields(view)]
     lines.append(escape(view.url))
 
     notice = restriction_notice(view)
@@ -92,23 +50,6 @@ def render_listing(view: ListingView) -> str:
         lines.append(notice)
 
     return "\n".join(lines)
-
-def restriction_notice(view: ListingView) -> str | None:
-
-    if view.share is None or view.share >= 100:
-        return None
-    missing = 100 - view.share
-    if view.lapsed == "trial":
-        return (
-            f"🔒 <b>Your free trial has ended. You are currently receiving only "
-            f"{view.share}% of available properties. Please make a payment to "
-            f"restore full access.</b>"
-        )
-    return (
-        f"🔒 <b>Your plan has ended. Access is now limited to {view.share}% of "
-        f"property listings. Upgrade today for full access</b> — you are missing "
-        f"{missing}% of what matches."
-    )
 
 def render(alert: Alert) -> str:
     if alert.kind == "listing":
