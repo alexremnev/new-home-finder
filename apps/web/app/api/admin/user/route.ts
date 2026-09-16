@@ -168,6 +168,6 @@ export async function POST(request: Request) {
   const back =
     action === "erase" && done === "deleted"
       ? `/admin?done=${encodeURIComponent(done)}`
-      : `/admin/users/${userId}?done=${encodeURIComponent(done)}`;
+      : `/admin/subscribers/${userId}?done=${encodeURIComponent(done)}`;
   return NextResponse.redirect(new URL(back, request.url), { status: 303 });
 }

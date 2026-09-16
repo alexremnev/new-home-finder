@@ -36,6 +36,69 @@ const schema = new Map(); // table -> Set(columns)
 const TEMPORAL = new Set();
 const TEMPORAL_TYPE = /\b(TIMESTAMPTZ|TIMESTAMP|DATE)\b/i;
 
+// The select item that comes back under `name`: the one aliased to it, or —
+// when nothing is aliased — the one whose trailing column is called that.
+// Splitting on top-level commas only, so a comma inside make_interval(…) or
+// coalesce(…) does not cut an item in half.
+function producing(selectList, name) {
+  const items = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < selectList.length; i += 1) {
+    const ch = selectList[i];
+    if (ch === "(") depth += 1;
+    else if (ch === ")") depth -= 1;
+    else if (ch === "," && depth === 0) {
+      items.push(selectList.slice(start, i));
+      start = i + 1;
+    }
+  }
+  items.push(selectList.slice(start));
+
+  const aliased = new RegExp(`\\bAS\\s+${name}\\s*$`, "i");
+  const bare = new RegExp(`(^|\\.)${name}\\s*$`, "i");
+  for (const one of items) {
+    const trimmed = one.trim();
+    if (aliased.test(trimmed)) return trimmed;
+  }
+  for (const one of items) {
+    const trimmed = one.trim();
+    // `u.plan_until` with no alias comes back as plan_until.
+    if (!/\bAS\b/i.test(trimmed) && bare.test(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+// The select list of the last SELECT that sits at parenthesis depth zero, which
+// for `WITH … SELECT …` is the statement's own, and for a plain SELECT is the
+// only one. Returns null when there is no SELECT outside brackets at all.
+function outerSelectList(sql) {
+  let depth = 0;
+  let selectAt = -1;
+  const word = /[A-Za-z_]+|[()]/g;
+  let match;
+  while ((match = word.exec(sql)) !== null) {
+    const token = match[0];
+    if (token === "(") depth += 1;
+    else if (token === ")") depth -= 1;
+    else if (depth === 0 && token.toUpperCase() === "SELECT") selectAt = match.index;
+  }
+  if (selectAt < 0) return null;
+
+  depth = 0;
+  word.lastIndex = selectAt + "SELECT".length;
+  while ((match = word.exec(sql)) !== null) {
+    const token = match[0];
+    if (token === "(") depth += 1;
+    else if (token === ")") depth -= 1;
+    else if (depth === 0 && token.toUpperCase() === "FROM") {
+      return sql.slice(selectAt + "SELECT".length, match.index);
+    }
+  }
+  // A SELECT with no FROM — `SELECT now()` — returns nothing worth checking.
+  return null;
+}
+
 function addColumn(table, column, type = "") {
   if (!schema.has(table)) schema.set(table, new Set());
   schema.get(table).add(column.toLowerCase());
@@ -320,8 +383,14 @@ for (const dir of SOURCES) {
       //
       // Starting from the type asks the only question that matters: this caller says
       // it will get a string called `plan_until`; does the query cast it?
-      // What the query returns: everything between SELECT and its FROM.
-      const selectList = /\bSELECT\b([\s\S]*?)\bFROM\b/i.exec(bare)?.[1];
+      // What the query returns: the select list of the OUTERMOST final SELECT.
+      //
+      // Not simply the first one. A statement beginning with `WITH span AS
+      // (SELECT …)` puts a CTE's select list first, and reading that asks about
+      // columns the caller never sees — so a cast in the real select list looked
+      // missing and a missing one looked present. Both directions were wrong,
+      // and the silent direction is the dangerous one.
+      const selectList = outerSelectList(bare);
 
       // Only the first arm. In a UNION, Postgres takes the output column names from
       // the first SELECT and ignores the rest — so the later arms select the same
@@ -333,12 +402,16 @@ for (const dir of SOURCES) {
           const [, name, declared] = field;
           const word = name.toLowerCase();
           if (!TEMPORAL.has(word) || !/\bstring\b/.test(declared)) continue;
-          // At least one occurrence carrying a cast. A column can appear twice — once
-          // cast in the select list, once bare in a predicate — and the cast one is
-          // the one that comes back.
-          const cast = new RegExp(`\\b${name}\\b[^,]{0,24}::\\s*(text|date|varchar)`, "i");
-          const aliased = new RegExp(`\\bAS\\s+${name}\\b`, "i");
-          if (cast.test(selectList) || aliased.test(selectList)) continue;
+          // The one select item that produces this output name, and whether THAT
+          // item carries a cast.
+          //
+          // Testing the whole list instead let two mistakes through. A cast
+          // anywhere satisfied a column that had none — the name appears in
+          // predicates too. And an `AS <name>` anywhere satisfied it outright,
+          // which is almost always present, so the rule mostly slept.
+          const item = producing(selectList, name);
+          if (item === null) continue; // not returned under this name at all
+          if (/::\s*(text|date|varchar)|\bto_char\s*\(/i.test(item)) continue;
           console.log(
             `  ! ${path}:${line} — ${rowType}.${name} is declared "${declared.trim()}" ` +
               `but the query returns a timestamp; it arrives as a Date. Add ::text`,

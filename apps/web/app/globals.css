@@ -18,7 +18,7 @@
 
 html { -webkit-text-size-adjust: 100%; }
 
-body::before {
+.site::before {
   content: "";
   position: fixed;
   inset: 0;
@@ -35,6 +35,19 @@ body::before {
 
 body {
   margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  /* The fallback lives inside var(): an undefined custom property makes the
+     whole `font` shorthand invalid, which would take the size and line height
+     down with the family. */
+  font: 400 16px/1.55 var(--font-sans, "Segoe UI"), system-ui, -apple-system,
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.site {
+  position: relative;
+  min-height: 100vh;
   padding: 3rem 1.25rem 5rem;
 
   background:
@@ -48,10 +61,6 @@ body {
       var(--bg) 100%
     )
     fixed;
-  color: var(--ink);
-  font: 400 16px/1.55 "Segoe UI", system-ui, -apple-system, Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
 }
 
 .shell {
@@ -1054,39 +1063,15 @@ form p.error {
 
 /* ── admin tabs ─────────────────────────────────────────────────────────── */
 
-.tabs {
-  display: flex;
-  gap: 0.25rem;
-  margin-top: 0.75rem;
-}
 
-.tab {
-  padding: 0.35rem 0.8rem;
-  border-radius: var(--radius);
-  color: var(--ink-soft);
-  font-weight: 600;
-  text-decoration: none;
-}
 
-.tab:hover { background: var(--accent-wash); text-decoration: none; }
 
-.tab-here {
-  background: var(--accent-wash);
-  color: var(--ink);
-}
 
-.tab-count {
-  display: inline-block;
-  min-width: 1.35em;
-  margin-left: 0.4rem;
-  padding: 0 0.3em;
-  border-radius: 999px;
-  background: var(--bad);
-  color: #fff;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-align: center;
-}
+
+
+
+
+
 
 /* ── support tickets ────────────────────────────────────────────────────── */
 
@@ -1143,3 +1128,391 @@ form p.error {
 }
 
 .ticket-email { color: var(--ink-soft); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   Dashboard
+
+   Dense, quiet, and the same at every width. The values are what the eye
+   should land on, so the type is small, the chrome is grey, and every number
+   is tabular — a figure that changes width makes a refreshing page jitter.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.dash {
+  --d-bg: #f7f8fa;
+  --d-card: #fff;
+  --d-line: #e3e6eb;
+  --d-ink: #1c2330;
+  --d-soft: #6b7684;
+  --d-faint: #97a0ad;
+  --d-ok: #1f9d55;
+  --d-ok-wash: #e8f6ee;
+  --d-bad: #d6353b;
+  --d-bad-wash: #fdeced;
+  --d-warn: #b7791f;
+  --d-warn-wash: #fdf4e3;
+  --d-accent: #5b4cf5;
+
+  min-height: 100vh;
+  background: var(--d-bg);
+  color: var(--d-ink);
+  font-size: 13px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
+
+.dash-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--d-line);
+  background: var(--d-card);
+}
+
+.sign-out {
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--d-line);
+  border-radius: 5px;
+  background: var(--d-card);
+  color: var(--d-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.sign-out:hover { border-color: var(--d-faint); color: var(--d-ink); }
+
+.dash-name {
+  margin-left: auto;
+  color: var(--d-faint);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tabs { display: flex; gap: 0.15rem; flex-wrap: wrap; }
+
+.tab {
+  padding: 0.3rem 0.7rem;
+  border-radius: 5px;
+  color: var(--d-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tab:hover { background: var(--d-bg); color: var(--d-ink); text-decoration: none; }
+
+.tab-count {
+  display: inline-block;
+  min-width: 1.25em;
+  margin-left: 0.35rem;
+  padding: 0 0.25em;
+  border-radius: 999px;
+  background: var(--d-bad);
+  color: #fff;
+  font-size: 10px;
+  text-align: center;
+}
+
+.dash-body { padding: 1rem; }
+
+/* One grid for every tab, so the tabs cannot drift apart. */
+.dash-row {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  margin-bottom: 0.75rem;
+}
+
+.dash-row-wide { grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr)); }
+
+.card {
+  min-width: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--d-line);
+  border-radius: 6px;
+  background: var(--d-card);
+}
+
+.card > h2,
+.card > h3 {
+  margin: 0 0 0.6rem;
+  color: var(--d-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.dash h1 {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.dash h2 { font-size: 13px; }
+
+/* ── the banner ─────────────────────────────────────────────────────────── */
+
+.verdict {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.75rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.verdict-ok   { border-color: #b9e3c9; background: var(--d-ok-wash);  color: #14683a; }
+.verdict-bad  { border-color: #f4bcbe; background: var(--d-bad-wash); color: #a12126; }
+.verdict-dot  { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.verdict-ok  .verdict-dot { background: var(--d-ok); }
+.verdict-bad .verdict-dot { background: var(--d-bad); }
+.verdict-note { margin-left: auto; font-weight: 400; font-size: 12px; opacity: 0.85; }
+
+/* ── the time range ─────────────────────────────────────────────────────── */
+
+.window-picker {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--d-line);
+  border-radius: 6px;
+  background: var(--d-card);
+}
+
+.win {
+  padding: 0.28rem 0.7rem;
+  border-right: 1px solid var(--d-line);
+  color: var(--d-soft);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.win:last-child { border-right: none; }
+.win:hover { background: var(--d-bg); text-decoration: none; }
+.win-on { background: var(--d-ink); color: #fff; }
+.win-on:hover { background: var(--d-ink); color: #fff; }
+
+.dash-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+/* ── values ─────────────────────────────────────────────────────────────── */
+
+.metric { min-width: 0; }
+
+.metric-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+
+.metric-note {
+  margin-top: 0.15rem;
+  color: var(--d-soft);
+  font-size: 11px;
+}
+
+.good { color: var(--d-ok); }
+.bad { color: var(--d-bad); }
+.warn { color: var(--d-warn); }
+
+/* ── a job ──────────────────────────────────────────────────────────────── */
+
+.job {
+  border-left: 3px solid var(--d-line);
+}
+
+.job-ok  { border-left-color: var(--d-ok); }
+.job-bad { border-left-color: var(--d-bad); }
+.job-idle { border-left-color: var(--d-faint); }
+
+.job-name {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.pill {
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.pill-ok  { background: var(--d-ok-wash);  color: #14683a; }
+.pill-bad { background: var(--d-bad-wash); color: #a12126; }
+.pill-idle { background: #eef0f3; color: var(--d-soft); }
+
+.job-numbers {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+  font-size: 12px;
+}
+
+.job-numbers b { display: block; font-size: 1.05rem; }
+.job-numbers span { color: var(--d-faint); font-size: 10px; text-transform: uppercase; }
+
+.job-error {
+  margin-top: 0.5rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  background: var(--d-bad-wash);
+  color: #a12126;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+/* ── tables ─────────────────────────────────────────────────────────────── */
+
+.dash table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.dash th {
+  padding: 0.3rem 0.5rem;
+  border-bottom: 1px solid var(--d-line);
+  color: var(--d-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: left;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.dash td {
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid #f0f2f5;
+  vertical-align: top;
+}
+
+.dash tbody tr:hover { background: var(--d-bg); }
+.dash td.num, .dash th.num { text-align: right; }
+
+.scroll-x { overflow-x: auto; }
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  vertical-align: 0.05em;
+}
+
+.dot-ok { background: var(--d-ok); }
+.dot-bad { background: var(--d-bad); }
+.dot-idle { background: var(--d-faint); }
+
+/* ── logs ───────────────────────────────────────────────────────────────── */
+
+.log-line { display: grid; grid-template-columns: 5.5rem 4.5rem 1fr; gap: 0.5rem; }
+.log-when { color: var(--d-faint); }
+.log-level { font-weight: 700; font-size: 10px; text-transform: uppercase; }
+.log-message { overflow-wrap: anywhere; }
+
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+  color: var(--d-soft);
+  font-size: 12px;
+}
+
+.pager a {
+  padding: 0.2rem 0.5rem;
+  border: 1px solid var(--d-line);
+  border-radius: 5px;
+  color: var(--d-ink);
+  text-decoration: none;
+}
+
+.pager a:hover { background: var(--d-bg); text-decoration: none; }
+.pager .off { border-color: #eef0f3; color: var(--d-faint); pointer-events: none; }
+
+/* ── what a thing means ─────────────────────────────────────────────────── */
+
+/* A dashboard full of job names explains nothing to whoever did not write
+   them. The mark is a button so it works by tap as well as by hover. */
+.why {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-left: 0.3rem;
+  border: none;
+  border-radius: 50%;
+  background: #eef0f3;
+  color: var(--d-soft);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  cursor: help;
+}
+
+.why-text {
+  position: absolute;
+  z-index: 20;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  width: max-content;
+  max-width: 17rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: var(--d-ink);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  transform: translateX(-50%);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 90ms;
+}
+
+.why:hover .why-text,
+.why:focus-visible .why-text { opacity: 1; visibility: visible; }
+
+@media (max-width: 30rem) {
+  .why-text { left: 0; transform: none; max-width: 14rem; }
+}
+
+@media (max-width: 40rem) {
+  .dash-body { padding: 0.6rem; }
+  .dash-bar { flex-wrap: wrap; gap: 0.5rem; }
+  .dash-name { display: none; }
+  .log-line { grid-template-columns: 1fr; gap: 0.1rem; }
+}

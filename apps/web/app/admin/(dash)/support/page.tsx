@@ -1,11 +1,6 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
-import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import { ticketCounts, tickets } from "@/lib/admin-queries";
-
-import { Tabs } from "../tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -29,19 +24,13 @@ function late(stamp: string | null): boolean {
 }
 
 export default async function SupportPage() {
-  const store = await cookies();
-  if (!(await sessionIsValid(store.get(SESSION_COOKIE)?.value))) {
-    redirect("/admin/login");
-  }
-
   const [rows, counts] = await Promise.all([tickets(), ticketCounts()]);
   const open = rows.filter((row) => row.status === "open");
   const handled = rows.filter((row) => row.status === "handled");
 
   return (
-    <main className="admin">
+    <>
       <h1>Support</h1>
-      <Tabs here="support" waiting={counts.open} />
 
       {open.length === 0 ? (
         <p className="lede">Nothing waiting. {counts.handled} handled so far.</p>
@@ -66,7 +55,7 @@ export default async function SupportPage() {
               {row.user_id === null ? (
                 <span title={`${row.channel} ${row.address}`}>no account</span>
               ) : (
-                <Link href={`/admin/users/${row.user_id}`}>
+                <Link href={`/admin/subscribers/${row.user_id}`}>
                   user {row.user_id}
                   {row.plan ? ` · ${row.plan}` : ""}
                 </Link>
@@ -135,6 +124,6 @@ export default async function SupportPage() {
           </table>
         </>
       )}
-    </main>
+    </>
   );
 }

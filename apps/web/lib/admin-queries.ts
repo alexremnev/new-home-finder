@@ -93,26 +93,6 @@ export type Subscriber = {
   joined: string;
 };
 
-export async function subscribers(): Promise<Subscriber[]> {
-  return query<Subscriber>(
-
-    `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
-            u.plan_until::text, u.created_at::text AS joined,
-            uc.channel, s.criteria,
-            (SELECT count(*)::int FROM notifications n
-              WHERE n.user_id = u.id AND n.status = 'sent')                 AS sent,
-            -- What the plan's share held back. Shown beside what was sent because
-            -- one without the other says nothing about whether the tier is working.
-            (SELECT count(*)::int FROM notifications n
-              WHERE n.user_id = u.id AND n.status = 'skipped' AND n.error = 'share') AS withheld
-       FROM users u
-       LEFT JOIN plans p          ON p.key = u.plan
-       LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
-       LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
-      ORDER BY u.created_at DESC
-      LIMIT 200`,
-  );
-}
 
 export type Problem = {
   kind: string;
@@ -235,38 +215,6 @@ export async function recentRuns(limit = 20): Promise<Run[]> {
   );
 }
 
-export type JobHealth = {
-  job: string;
-  last_at: string | null;
-  last_status: string | null;
-  ok_24h: number;
-  failed_24h: number;
-};
-
-export async function jobHealth(): Promise<JobHealth[]> {
-  return query<JobHealth>(
-    `SELECT job,
-            max(started_at)::text AS last_at,
-            -- The status of the most recent run, not of the whole day: "is it
-            -- working now" is the question, and a count of failures answers a
-            -- different one.
-            (array_agg(status ORDER BY started_at DESC))[1] AS last_status,
-            count(*) FILTER (WHERE status = 'ok'
-                               AND started_at > now() - interval '24 hours')::int AS ok_24h,
-            count(*) FILTER (WHERE status IN ('failed', 'degraded')
-                               AND started_at > now() - interval '24 hours')::int AS failed_24h
-       FROM job_runs
-      GROUP BY job
-      ORDER BY job`,
-  );
-}
-
-export type Filters = {
-  range: Range;
-  job?: string;
-  level?: string;
-  q?: string;
-};
 
 export type Event = {
   id: number;
@@ -279,33 +227,6 @@ export type Event = {
   ctx: Record<string, unknown>;
 };
 
-export async function events(filter: Filters, limit = 300): Promise<Event[]> {
-  return query<Event>(
-    `SELECT e.id, e.ts::text, e.level, r.job, e.stage, e.source_key, e.message, e.ctx
-       FROM job_events e
-       JOIN job_runs r ON r.id = e.run_id
-      WHERE e.ts > now() - make_interval(days => $1::int)
-        AND ($2::text IS NULL OR r.job = $2)
-        AND ($3::text IS NULL OR e.level = $3)
-        AND ($4::text IS NULL OR e.message ILIKE '%' || $4 || '%')
-      ORDER BY e.ts DESC
-      LIMIT $5`,
-    [filter.range, filter.job ?? null, filter.level ?? null, filter.q ?? null, limit],
-  );
-}
-
-export async function eventCounts(filter: Filters): Promise<Slice[]> {
-  return query<Slice>(
-    `SELECT e.level AS label, count(*)::int AS value
-       FROM job_events e
-       JOIN job_runs r ON r.id = e.run_id
-      WHERE e.ts > now() - make_interval(days => $1::int)
-        AND ($2::text IS NULL OR r.job = $2)
-      GROUP BY 1
-      ORDER BY 2 DESC`,
-    [filter.range, filter.job ?? null],
-  );
-}
 
 export async function knownJobs(): Promise<string[]> {
   const rows = await query<{ job: string }>(
@@ -314,26 +235,6 @@ export async function knownJobs(): Promise<string[]> {
   return rows.map((r) => r.job);
 }
 
-export async function unparseableShare(days: Range): Promise<Slice[]> {
-  return query<Slice>(
-    `WITH span AS (
-       SELECT generate_series(current_date - ($1::int - 1), current_date, interval '1 day')::date AS day
-     )
-     SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
-            coalesce(
-              round(
-                100.0 * count(m.id) FILTER (WHERE m.status = 'unparseable')
-                / nullif(count(m.id), 0)
-              )::int,
-              0
-            ) AS value
-       FROM span
-       LEFT JOIN source_messages m ON m.stored_at::date = span.day
-      GROUP BY span.day
-      ORDER BY span.day`,
-    [days],
-  );
-}
 
 export type Delivery = {
   oldest_queued_mins: number | null;
@@ -580,4 +481,331 @@ export async function ticketCounts(): Promise<{ open: number; handled: number }>
        FROM support_tickets`,
   ).catch(() => []);
   return rows[0] ?? { open: 0, handled: 0 };
+}
+
+// ── the dashboard, on an hours window rather than whole days ──────────────
+//
+// Every query below takes hours, because "the last hour" is the question a
+// dashboard is opened with and `make_interval(days => …)` cannot express it.
+
+export type JobState = {
+  job: string;
+  last_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+  runs: number;
+  ok: number;
+  bad: number;
+  skipped: number;
+  median_secs: number | null;
+};
+
+// Every job that has run in the window, plus the ones that should have. A job
+// missing from job_runs is the interesting case — silence, not health — and a
+// name that stopped existing should not haunt the page forever.
+export const EXPECTED_JOBS = ["ingest", "drain", "rollup", "report"] as const;
+
+export async function jobStates(hours: number): Promise<JobState[]> {
+  return query<JobState>(
+    `WITH expected AS (SELECT unnest($2::text[]) AS job),
+     seen AS (
+       SELECT DISTINCT job FROM job_runs
+        WHERE started_at > now() - make_interval(hours => $1::int)
+     ),
+     all_jobs AS (SELECT job FROM expected UNION SELECT job FROM seen),
+     windowed AS (
+       SELECT job, status, started_at, finished_at, error
+         FROM job_runs
+        WHERE started_at > now() - make_interval(hours => $1::int)
+     ),
+     SELECT a.job,
+            -- Scalar subqueries rather than a CTE join: the cast has to be
+            -- visible in the select list, and the index on started_at makes
+            -- three of them cheap.
+            (SELECT max(started_at)::text FROM job_runs j WHERE j.job = a.job)
+              AS last_at,
+            (SELECT j.status FROM job_runs j WHERE j.job = a.job
+              ORDER BY j.started_at DESC LIMIT 1) AS last_status,
+            (SELECT j.error FROM job_runs j WHERE j.job = a.job
+              ORDER BY j.started_at DESC LIMIT 1) AS last_error,
+            count(w.*)::int    AS runs,
+            count(w.*) FILTER (WHERE w.status = 'ok')::int AS ok,
+            count(w.*) FILTER (WHERE w.status IN ('failed', 'degraded'))::int AS bad,
+            count(w.*) FILTER (WHERE w.status = 'skipped_locked')::int AS skipped,
+            round(
+              percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY extract(epoch FROM w.finished_at - w.started_at)
+              )
+            )::int AS median_secs
+       FROM all_jobs a
+       LEFT JOIN windowed w ON w.job = a.job
+      GROUP BY a.job
+      ORDER BY a.job`,
+    [Math.round(hours), [...EXPECTED_JOBS]],
+  ).catch(() => []);
+}
+
+export type RunPoint = { label: string; ok: number; bad: number };
+
+// One column per bucket: green for clean runs, red for the rest. Reading a
+// timeline is how you tell "it broke once" from "it has been broken all day".
+export async function runPoints(hours: number, minutes: number): Promise<RunPoint[]> {
+  return query<RunPoint>(
+    `WITH span AS (
+       SELECT generate_series(
+                date_trunc('hour', now() - make_interval(hours => $1::int)),
+                now(),
+                make_interval(mins => $2::int)
+              ) AS bucket
+     )
+     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+            count(r.*) FILTER (WHERE r.status = 'ok')::int AS ok,
+            count(r.*) FILTER (WHERE r.status IN ('failed', 'degraded'))::int AS bad
+       FROM span
+       LEFT JOIN job_runs r
+              ON r.started_at >= span.bucket
+             AND r.started_at <  span.bucket + make_interval(mins => $2::int)
+      GROUP BY span.bucket
+      ORDER BY span.bucket`,
+    [Math.round(hours), Math.round(minutes)],
+  ).catch(() => []);
+}
+
+export type LogPage = { rows: Event[]; total: number };
+
+export async function logPage(
+  hours: number,
+  filter: { job?: string; level?: string; q?: string },
+  page: number,
+  perPage = 10,
+): Promise<LogPage> {
+  const args = [
+    Math.round(hours),
+    filter.job ?? null,
+    filter.level ?? null,
+    filter.q ?? null,
+  ];
+  const where = `e.ts > now() - make_interval(hours => $1::int)
+        AND ($2::text IS NULL OR r.job = $2)
+        AND ($3::text IS NULL OR e.level = $3)
+        AND ($4::text IS NULL OR e.message ILIKE '%' || $4 || '%')`;
+
+  const [rows, counted] = await Promise.all([
+    query<Event>(
+      `SELECT e.id, e.ts::text, e.level, r.job, e.stage, e.source_key, e.message, e.ctx
+         FROM job_events e JOIN job_runs r ON r.id = e.run_id
+        WHERE ${where}
+        ORDER BY e.ts DESC
+        LIMIT $5 OFFSET $6`,
+      [...args, perPage, Math.max(0, page - 1) * perPage],
+    ).catch(() => []),
+    query<{ total: number }>(
+      `SELECT count(*)::int AS total
+         FROM job_events e JOIN job_runs r ON r.id = e.run_id
+        WHERE ${where}`,
+      args,
+    ).catch(() => []),
+  ]);
+  return { rows, total: counted[0]?.total ?? 0 };
+}
+
+export type SubscriberRow = {
+  user_id: number;
+  status: string;
+  plan: string;
+  plan_until: string | null;
+  channel: string | null;
+  districts: string | null;
+  sent_window: number;
+  sent_total: number;
+  failed_window: number;
+  last_sent: string | null;
+  created_at: string;
+};
+
+export async function subscriberPage(
+  hours: number,
+  page: number,
+  perPage = 20,
+): Promise<{ rows: SubscriberRow[]; total: number }> {
+  const [rows, counted] = await Promise.all([
+    query<SubscriberRow>(
+      `SELECT u.id AS user_id, u.status, u.plan,
+              u.plan_until::text AS plan_until,
+              uc.channel,
+              s.label AS districts,
+              (SELECT count(*)::int FROM notifications n
+                WHERE n.user_id = u.id AND n.status = 'sent'
+                  AND n.sent_at > now() - make_interval(hours => $1::int)) AS sent_window,
+              (SELECT count(*)::int FROM notifications n
+                WHERE n.user_id = u.id AND n.status = 'sent') AS sent_total,
+              (SELECT count(*)::int FROM notifications n
+                WHERE n.user_id = u.id AND n.status = 'failed'
+                  AND n.created_at > now() - make_interval(hours => $1::int)) AS failed_window,
+              (SELECT max(n.sent_at)::text FROM notifications n
+                WHERE n.user_id = u.id AND n.status = 'sent') AS last_sent,
+              u.created_at::text AS created_at
+         FROM users u
+         LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
+         LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
+        WHERE u.status <> 'erased'
+        ORDER BY u.created_at DESC
+        LIMIT $2 OFFSET $3`,
+      [Math.round(hours), perPage, Math.max(0, page - 1) * perPage],
+    ).catch(() => []),
+    query<{ total: number }>(
+      `SELECT count(*)::int AS total FROM users WHERE status <> 'erased'`,
+    ).catch(() => []),
+  ]);
+  return { rows, total: counted[0]?.total ?? 0 };
+}
+
+// Half-hour buckets, as asked: fine enough to show when the alerts actually
+// arrive and coarse enough that a week still fits on one line.
+export async function alertBuckets(
+  userId: number,
+  hours: number,
+  minutes = 30,
+): Promise<Slice[]> {
+  return query<Slice>(
+    `WITH span AS (
+       SELECT generate_series(
+                date_trunc('hour', now() - make_interval(hours => $2::int)),
+                now(),
+                make_interval(mins => $3::int)
+              ) AS bucket
+     )
+     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+            count(n.*)::int AS value
+       FROM span
+       LEFT JOIN notifications n
+              ON n.user_id = $1
+             AND n.status = 'sent'
+             AND n.sent_at >= span.bucket
+             AND n.sent_at <  span.bucket + make_interval(mins => $3::int)
+      GROUP BY span.bucket
+      ORDER BY span.bucket`,
+    [userId, Math.round(hours), Math.round(minutes)],
+  ).catch(() => []);
+}
+
+export type PaymentSummary = {
+  taken_pence: number;
+  payments: number;
+  payers: number;
+  refunds: number;
+};
+
+export async function paymentSummary(days: number): Promise<PaymentSummary> {
+  const rows = await query<PaymentSummary>(
+    `SELECT coalesce(sum(amount_pence) FILTER (WHERE amount_pence > 0), 0)::int
+              AS taken_pence,
+            count(*) FILTER (WHERE amount_pence > 0)::int AS payments,
+            count(DISTINCT user_id)::int                  AS payers,
+            count(*) FILTER (WHERE amount_pence < 0)::int AS refunds
+       FROM payments
+      WHERE created_at > now() - make_interval(days => $1::int)`,
+    [Math.round(days)],
+  ).catch(() => []);
+  return rows[0] ?? { taken_pence: 0, payments: 0, payers: 0, refunds: 0 };
+}
+
+export async function paymentSeries(days: number): Promise<Slice[]> {
+  return query<Slice>(
+    `WITH span AS (
+       SELECT generate_series(current_date - ($1::int - 1), current_date,
+                              interval '1 day')::date AS day
+     )
+     SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
+            coalesce(sum(p.amount_pence), 0)::int AS value
+       FROM span
+       LEFT JOIN payments p ON p.created_at::date = span.day
+      GROUP BY span.day
+      ORDER BY span.day`,
+    [Math.round(days)],
+  ).catch(() => []);
+}
+
+export async function paymentsByPlan(days: number): Promise<Slice[]> {
+  return query<Slice>(
+    `SELECT coalesce(pl.display_name, p.plan) AS label,
+            sum(p.amount_pence)::int          AS value
+       FROM payments p
+       LEFT JOIN plans pl ON pl.key = p.plan
+      WHERE p.created_at > now() - make_interval(days => $1::int)
+      GROUP BY 1 ORDER BY 2 DESC`,
+    [Math.round(days)],
+  ).catch(() => []);
+}
+
+export async function paymentsByProvider(days: number): Promise<Slice[]> {
+  return query<Slice>(
+    `SELECT provider AS label, count(*)::int AS value
+       FROM payments
+      WHERE created_at > now() - make_interval(days => $1::int)
+      GROUP BY 1 ORDER BY 2 DESC`,
+    [Math.round(days)],
+  ).catch(() => []);
+}
+
+// Live rather than from daily_stats, because an hour window cannot be answered
+// by rows that are one per day. `daily_stats` keeps its job — the hourly report
+// reads it, and it outlives the raw rows — but the dashboard asks the source.
+
+export async function alertPoints(hours: number, minutes: number): Promise<Slice[]> {
+  return bucketed(
+    `notifications`,
+    `sent_at`,
+    `status = 'sent'`,
+    hours,
+    minutes,
+  );
+}
+
+export async function intakePoints(hours: number, minutes: number): Promise<Slice[]> {
+  return bucketed(`listings`, `first_seen_at`, `true`, hours, minutes);
+}
+
+export async function messagePoints(hours: number, minutes: number): Promise<Slice[]> {
+  return bucketed(`source_messages`, `stored_at`, `true`, hours, minutes);
+}
+
+export async function unparseablePoints(hours: number, minutes: number): Promise<Slice[]> {
+  return bucketed(
+    `source_messages`,
+    `stored_at`,
+    `status = 'unparseable'`,
+    hours,
+    minutes,
+  );
+}
+
+// One shape for all four. The table, column and predicate are written here and
+// never come from a request, so there is nothing for a caller to inject.
+async function bucketed(
+  table: "notifications" | "listings" | "source_messages",
+  column: "sent_at" | "first_seen_at" | "stored_at",
+  predicate: string,
+  hours: number,
+  minutes: number,
+): Promise<Slice[]> {
+  return query<Slice>(
+    `WITH span AS (
+       SELECT generate_series(
+                date_trunc('hour', now() - make_interval(hours => $1::int)),
+                now(),
+                make_interval(mins => $2::int)
+              ) AS bucket
+     )
+     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+            count(t.*)::int AS value
+       FROM span
+       LEFT JOIN ${table} t
+              ON ${predicate}
+             AND t.${column} >= span.bucket
+             AND t.${column} <  span.bucket + make_interval(mins => $2::int)
+      GROUP BY span.bucket
+      ORDER BY span.bucket`,
+    [Math.round(hours), Math.round(minutes)],
+  ).catch(() => []);
 }

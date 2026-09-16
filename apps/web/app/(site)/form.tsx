@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { neighbourhoodAreas, type Area } from "../lib/neighbourhoods";
+import { neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
 
 import { TelegramMark, WhatsAppMark } from "./logos";
 

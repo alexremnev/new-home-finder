@@ -1,14 +1,13 @@
-import { cookies } from "next/headers";
 import Link from "next/link";
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 
-import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import {
-  deliveredTo, historyOf, paymentsBy, person, sellablePlans, wantedBy,
+  alertBuckets, deliveredTo, historyOf, paymentsBy, person, sellablePlans, wantedBy,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
 
-import { Stat } from "../../charts";
+import { Metric, Series, Why } from "../../charts";
+import { DEFAULT_WINDOW, WindowPicker, windowFrom } from "../../window";
 
 export const dynamic = "force-dynamic";
 
@@ -29,19 +28,18 @@ export default async function UserPage({
   params, searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ done?: string; error?: string }>;
+  searchParams: Promise<{ done?: string; error?: string; w?: string }>;
 }) {
-  const jar = await cookies();
-  if (!(await sessionIsValid(jar.get(SESSION_COOKIE)?.value))) redirect("/admin/login");
 
   const { id } = await params;
   const userId = Number(id);
   if (!Number.isInteger(userId) || userId <= 0) notFound();
 
-  const { done } = await searchParams;
-  const [who, feed, paid, history, wants, plans] = await Promise.all([
+  const { done, w } = await searchParams;
+  const win = windowFrom(w ?? DEFAULT_WINDOW);
+  const [who, feed, paid, history, wants, plans, buckets] = await Promise.all([
     person(userId), deliveredTo(userId), paymentsBy(userId), historyOf(userId),
-    wantedBy(userId), sellablePlans(),
+    wantedBy(userId), sellablePlans(), alertBuckets(userId, win.hours, 30),
   ]);
   if (!who) notFound();
 
@@ -49,11 +47,11 @@ export default async function UserPage({
   const expired = who.plan_until !== null && new Date(who.plan_until) < new Date();
 
   return (
-    <div className="admin">
-      <header className="admin-head">
+    <>
+      <header className="dash-head">
         <div>
           <p className="crumb">
-            <Link href="/admin">Console</Link> / user {who.user_id}
+            <Link href="/admin/subscribers">Subscribers</Link> / {who.user_id}
           </p>
           <h1>
             {who.plan_display ?? who.plan}
@@ -69,15 +67,27 @@ export default async function UserPage({
 
       {done && <p className="note">{done}.</p>}
 
+      <div className="dash-head">
+        <WindowPicker here={`/admin/subscribers/${who.user_id}`} chosen={win.key} />
+      </div>
+
+      <div className="card" style={{ marginBottom: "0.75rem" }}>
+        <h2>
+          Alerts delivered, half-hour buckets
+          <Why text="Каждая точка — 30 минут. Видно не только сколько человек получил, но и когда: ровная линия у нуля с редкими всплесками — это норма для узкого фильтра, а пустота весь день при активном плане — повод посмотреть канал доставки." />
+        </h2>
+        <Series data={buckets} />
+      </div>
+
       <section>
         <div className="stats">
-          <Stat label="Alerts delivered" value={comma(who.sent)}
+          <Metric label="Alerts delivered" value={comma(who.sent)}
                 note={`last ${ago(who.last_sent_at)}`} />
-          <Stat label="Held back by the plan" value={comma(who.withheld)}
+          <Metric label="Held back by the plan" value={comma(who.withheld)}
                 note="free tier's share" />
-          <Stat label="Paid in total" value={pounds(who.paid_total_pence)}
+          <Metric label="Paid in total" value={pounds(who.paid_total_pence)}
                 note={`${who.paid_count} payment${who.paid_count === 1 ? "" : "s"}, last ${ago(who.last_paid_at)}`} />
-          <Stat label="Plan runs to"
+          <Metric label="Plan runs to"
                 value={who.plan_until ? who.plan_until.slice(0, 10) : "no end"}
                 note={who.comped_days > 0 ? `${who.comped_days} days comped` : undefined} />
         </div>
@@ -314,6 +324,6 @@ export default async function UserPage({
           </table>
         )}
       </section>
-    </div>
+    </>
   );
 }
