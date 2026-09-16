@@ -539,3 +539,45 @@ export async function fromRollup(days: Range): Promise<{
     [days],
   );
 }
+
+export type Ticket = {
+  id: number;
+  user_id: number | null;
+  channel: string;
+  address: string;
+  body: string;
+  email: string | null;
+  status: string;
+  submitted_at: string | null;
+  handled_at: string | null;
+  handled_note: string | null;
+  plan: string | null;
+};
+
+// Open first and oldest first within that: the message promises 24 hours, so the
+// order of the list is the order of the promise.
+export async function tickets(limit = 200): Promise<Ticket[]> {
+  return query<Ticket>(
+    `SELECT t.id, t.user_id, t.channel, t.address, coalesce(t.body, '') AS body,
+            t.email, t.status,
+            t.submitted_at::text AS submitted_at,
+            t.handled_at::text   AS handled_at,
+            t.handled_note,
+            u.plan
+       FROM support_tickets t
+       LEFT JOIN users u ON u.id = t.user_id
+      WHERE t.status IN ('open', 'handled')
+      ORDER BY (t.status = 'open') DESC, t.submitted_at
+      LIMIT $1`,
+    [limit],
+  ).catch(() => []);
+}
+
+export async function ticketCounts(): Promise<{ open: number; handled: number }> {
+  const rows = await query<{ open: number; handled: number }>(
+    `SELECT count(*) FILTER (WHERE status = 'open')::int    AS open,
+            count(*) FILTER (WHERE status = 'handled')::int AS handled
+       FROM support_tickets`,
+  ).catch(() => []);
+  return rows[0] ?? { open: 0, handled: 0 };
+}

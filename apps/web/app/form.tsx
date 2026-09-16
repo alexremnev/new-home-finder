@@ -4,13 +4,18 @@ import { useState } from "react";
 
 import { neighbourhoodAreas, type Area } from "../lib/neighbourhoods";
 
+import { TelegramMark, WhatsAppMark } from "./logos";
+
 type Props = {
   districts: string[];
   maxDistricts: number;
   furnished: string[];
+  whatsappReady: boolean;
 
   names?: Record<string, string>;
 };
+
+type Channel = "telegram" | "whatsapp";
 
 const RENT_MIN = 400;
 const RENT_MAX = 10_000;
@@ -23,7 +28,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, furnished, names = {},
+  districts, maxDistricts, furnished, whatsappReady, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,8 +40,7 @@ export function SubscribeForm({
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
   const [beds, setBeds] = useState(0);
   const [baths, setBaths] = useState(0);
-  const [link, setLink] = useState<string | null>(null);
-  const [whatsapp, setWhatsapp] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
   const options: Area[] =
@@ -100,6 +104,14 @@ export function SubscribeForm({
     setError(null);
     setBusy(true);
 
+    // Which button was pressed. `new FormData(form)` does not include the
+    // submitter, so it is read from the event.
+    const submitter = (event.nativeEvent as SubmitEvent).submitter;
+    const channel =
+      submitter instanceof HTMLButtonElement && submitter.value === "whatsapp"
+        ? "whatsapp"
+        : "telegram";
+
     const data = new FormData(event.currentTarget);
     const payload: Record<string, unknown> = {};
     for (const key of new Set(data.keys())) {
@@ -128,28 +140,28 @@ export function SubscribeForm({
       const response = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, channel }),
       });
-      const body = (await response.json()) as {
-        url?: string;
-        whatsapp?: string | null;
-        error?: string;
-      };
+      const body = (await response.json()) as { url?: string; error?: string };
       if (!response.ok || !body.url) {
         setError(body.error ?? "Something went wrong. Please try again.");
         setBusy(false);
         return;
       }
-      setLink(body.url);
-      setWhatsapp(body.whatsapp ?? null);
-      setBusy(false);
+
+      // Navigating the current tab rather than opening a window: a popup
+      // blocked after an await is the usual way this breaks, and a same-tab
+      // navigation is never blocked. The panel below is what shows if the
+      // handover does not happen — a desktop browser with no app installed.
+      setLeaving({ channel, url: body.url });
+      window.location.href = body.url;
     } catch {
       setError("Could not reach the server. Please try again.");
       setBusy(false);
     }
   }
 
-  if (link) return <AllDone url={link} whatsapp={whatsapp} token={tokenOf(link)} />;
+  if (leaving) return <Handover channel={leaving.channel} url={leaving.url} />;
 
   const placeholder =
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
@@ -322,10 +334,37 @@ export function SubscribeForm({
 
       {error && <p className="error">{error}</p>}
 
-      <button type="submit" disabled={busy || chosen.length === 0}>
-        {busy ? "One moment…" : "All done — let's go"}
-      </button>
-      {chosen.length === 0 && <p className="hint">Add at least one area first.</p>}
+      <div className="connect">
+        <button
+          type="submit"
+          name="channel"
+          value="telegram"
+          className="cta cta-telegram"
+          disabled={busy || chosen.length === 0}
+        >
+          <TelegramMark /> {busy ? "One moment…" : "Connect to Telegram"}
+        </button>
+
+        {whatsappReady && (
+          <button
+            type="submit"
+            name="channel"
+            value="whatsapp"
+            className="cta cta-whatsapp"
+            disabled={busy || chosen.length === 0}
+          >
+            <WhatsAppMark /> {busy ? "One moment…" : "Connect to WhatsApp"}
+          </button>
+        )}
+      </div>
+
+      <p className="hint">
+        {chosen.length === 0
+          ? "Add at least one area first."
+          : whatsappReady
+            ? "One search goes to one app, so a listing never arrives twice. Want both? Fill this in again afterwards."
+            : "Only listings posted from the moment you connect — never a backlog."}
+      </p>
     </form>
   );
 }
@@ -424,100 +463,29 @@ function Stepper({
   );
 }
 
-function tokenOf(url: string): string {
-  const match = /[?&]start=([^&]+)/.exec(url);
-  return match?.[1] ? decodeURIComponent(match[1]) : "";
-}
-function AllDone({
-  url,
-  whatsapp,
-  token,
-}: {
-  url: string;
-  whatsapp: string | null;
-  token: string;
-}) {
-  const [wanted, setWanted] = useState<Record<string, boolean>>({});
-  const [failed, setFailed] = useState(false);
-
-  async function vote(choice: string) {
-
-    const next = !wanted[choice];
-    setWanted((current) => ({ ...current, [choice]: next }));
-    setFailed(false);
-    try {
-      const response = await fetch("/api/interest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, channel: choice }),
-      });
-      if (!response.ok) throw new Error("rejected");
-      const body = (await response.json()) as { wanted?: boolean };
-      if (typeof body.wanted === "boolean") {
-        setWanted((current) => ({ ...current, [choice]: body.wanted as boolean }));
-      }
-    } catch {
-      setWanted((current) => ({ ...current, [choice]: !next }));
-      setFailed(true);
-    }
-  }
+function Handover({ channel, url }: { channel: Channel; url: string }) {
+  const app = channel === "whatsapp" ? "WhatsApp" : "Telegram";
 
   return (
     <div className="panel">
       <div className="done-tick">✓</div>
-      <h1>All done</h1>
+      <h1>Your search is saved</h1>
       <p className="lede">
-        Your search is saved.{" "}
-        {whatsapp ? "Choose where the alerts should arrive" : "Connect Telegram"} and
-        they start — only listings posted from that moment on, never a backlog.
+        Opening {app} now. Press Start there and the alerts begin — only listings
+        posted from that moment on, never a backlog.
       </p>
 
-      <a href={url} className="cta cta-telegram">
-        <span aria-hidden="true">✈️</span> Connect to Telegram
+      <a
+        href={url}
+        className={channel === "whatsapp" ? "cta cta-whatsapp" : "cta cta-telegram"}
+      >
+        {channel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />} Open {app}
       </a>
 
-      {whatsapp && (
-        <>
-          <a href={whatsapp} className="cta cta-whatsapp">
-            <span aria-hidden="true">💬</span> Connect to WhatsApp
-          </a>
-          <p className="hint">
-            One of the two — a search goes to one app, so a listing never arrives
-            twice. Want both? Fill the form in again afterwards; the two are
-            separate searches with separate plans.
-          </p>
-        </>
-      )}
-
-      <div className="vote">
-        <h2>Would you rather get these somewhere else?</h2>
-        <p className="hint">
-          Tell us what to build next — tap to vote, tap again to take it back.
-        </p>
-        <div className="vote-row">
-          <button
-            type="button"
-            className={wanted.email ? "vote-button voted" : "vote-button"}
-            onClick={() => vote("email")}
-            aria-pressed={Boolean(wanted.email)}
-          >
-            <span className="heart">{wanted.email ? "❤️" : "🤍"}</span>
-            {wanted.email ? "Email — counted!" : "Email, please"}
-          </button>
-          <button
-            type="button"
-            className={wanted.sms ? "vote-button voted" : "vote-button"}
-            onClick={() => vote("sms")}
-            aria-pressed={Boolean(wanted.sms)}
-          >
-            <span className="heart">{wanted.sms ? "❤️" : "🤍"}</span>
-            {wanted.sms ? "SMS — counted!" : "Text message"}
-          </button>
-        </div>
-        {failed && (
-          <p className="error">That did not save. Your search is safe either way.</p>
-        )}
-      </div>
+      <p className="hint">
+        If nothing happened, use the button — some desktop browsers will not hand
+        over on their own.
+      </p>
     </div>
   );
 }

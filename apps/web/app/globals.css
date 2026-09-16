@@ -990,11 +990,34 @@ form p.error {
 
 .plan .cta { margin-top: 0; }
 
-/* WhatsApp and Telegram, in their own colours */
+/* The two ways out of the form, side by side where there is room and stacked
+   where there is not. Each keeps .cta's full width inside its own column. */
+.connect {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1.75rem;
+}
+
+.connect > .cta {
+  flex: 1 1 14rem;
+  width: auto;
+  margin-top: 0;
+}
+
 .cta-telegram,
 .cta-whatsapp {
   display: block;
   text-align: center;
+}
+
+/* Disabled wins over the brand colour: submit buttons are disabled until an
+   area is chosen, and a bright green button that does nothing reads as broken. */
+.connect > .cta:disabled {
+  background: #c2c2ce;
+  border-color: #c2c2ce;
+  color: #fff;
+  cursor: not-allowed;
 }
 
 .cta-telegram {
@@ -1021,3 +1044,102 @@ form p.error {
   background: #1b87ba;
   color: #fff;
 }
+
+/* The mark sits on the text baseline rather than above it, and the gap is the
+   button's own so the label does not need a space character to make one. */
+.cta svg {
+  vertical-align: -0.25em;
+  margin-right: 0.15rem;
+}
+
+/* ── admin tabs ─────────────────────────────────────────────────────────── */
+
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  margin-top: 0.75rem;
+}
+
+.tab {
+  padding: 0.35rem 0.8rem;
+  border-radius: var(--radius);
+  color: var(--ink-soft);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.tab:hover { background: var(--accent-wash); text-decoration: none; }
+
+.tab-here {
+  background: var(--accent-wash);
+  color: var(--ink);
+}
+
+.tab-count {
+  display: inline-block;
+  min-width: 1.35em;
+  margin-left: 0.4rem;
+  padding: 0 0.3em;
+  border-radius: 999px;
+  background: var(--bad);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* ── support tickets ────────────────────────────────────────────────────── */
+
+.ticket {
+  margin-top: 1rem;
+  padding: 1rem 1.15rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+/* Past the 24 hours the bot promised. */
+.ticket-late { border-left-color: var(--bad); }
+
+.ticket > header,
+.ticket > footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.ticket > footer {
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.ticket > footer form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.ticket > footer input[type="text"] { min-width: 12rem; }
+
+.ticket-id { font-weight: 700; }
+.ticket-who { margin-left: auto; }
+
+/* The complaint in the person's own words, wrapped as they wrote it. */
+.ticket-body {
+  margin: 0.75rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ticket-short {
+  max-width: 28rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-email { color: var(--ink-soft); }

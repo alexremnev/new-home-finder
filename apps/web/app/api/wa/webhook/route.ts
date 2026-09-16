@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 
 import type { Criteria } from "@/lib/criteria";
+import { beginSubscription } from "@/lib/activate";
 import { query, transaction } from "@/lib/db";
 import { alreadyOnAnotherChannel, criteriaSet } from "@/lib/messages";
 import { sendWhatsApp } from "@/lib/whatsapp";
@@ -173,6 +174,8 @@ async function handle(number: string, text: string): Promise<string | null> {
                        last_inbound_at = now()`,
       [userId, number],
     );
+
+    await beginSubscription(run, userId);
 
     const found = await run(
       `SELECT criteria FROM subscriptions

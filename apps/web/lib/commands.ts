@@ -5,6 +5,8 @@ export type Command =
   | { kind: "update" }
   | { kind: "upgrade" }
   | { kind: "resume" }
+  | { kind: "support" }
+  | { kind: "cancel" }
   | { kind: "grant"; ref: string; plan: string; days: number }
   | { kind: "menu" }
   | { kind: "help"; reason?: string };
@@ -14,6 +16,7 @@ export const BOT_MENU: { command: string; description: string }[] = [
   { command: "update", description: "Update my search" },
   { command: "current", description: "Show my current criteria" },
   { command: "pay", description: "Full access" },
+  { command: "support", description: "Report a problem" },
   { command: "stop", description: "Delete my filter and stop" },
 ];
 
@@ -46,6 +49,10 @@ export function parseCommand(text: string | undefined): Command {
 
   if (word === "/pay" || word === "/upgrade" || word === "/plan") return { kind: "upgrade" };
   if (word === "/resume" || word === "/unpause") return { kind: "resume" };
+  if (word === "/support" || word === "/help_me" || word === "/complain") {
+    return { kind: "support" };
+  }
+  if (word === "/cancel") return { kind: "cancel" };
   if (word === "/menu") return { kind: "menu" };
   if (word === "/help") return { kind: "help" };
 
@@ -66,5 +73,6 @@ export const COMMAND_HELP = [
   "/current — the filter I'm using for you",
   "",
   "/pay — full access",
+  "/support — report a problem",
   "/stop — delete my filter and stop the messages",
 ].join("\n");

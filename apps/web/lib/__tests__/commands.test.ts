@@ -110,8 +110,17 @@ describe("the five menu commands", () => {
     }
   });
 
-  it("is five entries, because a menu is read before anything is understood", () => {
-    expect(BOT_MENU).toHaveLength(5);
+  it("stays short, because a menu is read before anything is understood", () => {
+
+    // Six is the ceiling, not a target. /support earned a place because a
+    // command nobody can find is a support channel nobody uses.
+    expect(BOT_MENU.length).toBeLessThanOrEqual(6);
+    expect(BOT_MENU.map((entry) => entry.command)).toContain("support");
+  });
+
+  it("offers a way to report a problem", () => {
+    expect(parseCommand("/support")).toEqual({ kind: "support" });
+    expect(parseCommand("/cancel")).toEqual({ kind: "cancel" });
   });
 });
 

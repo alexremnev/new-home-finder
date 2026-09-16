@@ -2,7 +2,23 @@ import { NextResponse } from "next/server";
 
 import { BOT_MENU, COMMAND_HELP, parseCommand } from "@/lib/commands";
 import { enforceLimits, InvalidForm, type Criteria } from "@/lib/criteria";
+import { beginSubscription } from "@/lib/activate";
 import { query, transaction } from "@/lib/db";
+import {
+  BODY_LIMIT,
+  SUPPORT_ASK_EMAIL,
+  SUPPORT_BAD_EMAIL,
+  SUPPORT_CANCELLED,
+  SUPPORT_DONE,
+  SUPPORT_PROMPT,
+  SUPPORT_TOO_LONG,
+  abandonDraft,
+  openDraft,
+  readEmail,
+  recordBody,
+  startDraft,
+  submit,
+} from "@/lib/support";
 import {
   CHANGE_FILTER,
   FILTERS_BUTTON,
@@ -83,7 +99,25 @@ export async function POST(request: Request): Promise<NextResponse> {
 }
 
 async function handle(chatId: string, text: string | undefined): Promise<void> {
+  const said = (text ?? "").trim();
+
+  // A command always wins. An unfinished ticket swallows plain messages, and
+  // somebody who changes their mind must not be stuck answering a question
+  // nobody will ask again — which is how the old wizard trapped people.
+  if (!said.startsWith("/")) {
+    const draft = await openDraft("telegram", chatId);
+    if (draft) return continueTicket(chatId, draft, said);
+  }
+
   const command = parseCommand(text);
+
+  if (command.kind === "support") return startTicket(chatId);
+  if (command.kind === "cancel") {
+    const had = await abandonDraft("telegram", chatId);
+    await sendMessage(chatId, had ? SUPPORT_CANCELLED : COMMAND_HELP);
+    return;
+  }
+  if (said.startsWith("/")) await abandonDraft("telegram", chatId);
 
   if (command.kind === "stop") return stop(chatId);
   if (command.kind === "start") return start(chatId, command.token);
@@ -216,6 +250,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
       [userId, chatId],
     );
 
+    await beginSubscription(run, Number(userId));
     return { userId: Number(userId) };
   });
 
@@ -240,6 +275,37 @@ async function offerUpgrade(chatId: string, account: Account): Promise<void> {
     [{ text: "💎 Choose a plan", url: `${siteUrl()}/upgrade?t=${token}` }],
   ];
   await sendMessage(chatId, await upgradeInvitation(account, token), keyboard);
+}
+
+async function startTicket(chatId: string): Promise<void> {
+  const account = await accountForChat(chatId);
+  await startDraft("telegram", chatId, account?.user_id ?? null);
+  await sendMessage(chatId, SUPPORT_PROMPT);
+}
+
+async function continueTicket(
+  chatId: string,
+  draft: { id: number; status: "awaiting_body" | "awaiting_email" },
+  said: string,
+): Promise<void> {
+  if (draft.status === "awaiting_body") {
+    if (!said) return;
+    if (said.length > BODY_LIMIT) {
+      await sendMessage(chatId, SUPPORT_TOO_LONG);
+      return;
+    }
+    await recordBody(draft.id, said);
+    await sendMessage(chatId, SUPPORT_ASK_EMAIL);
+    return;
+  }
+
+  const email = readEmail(said);
+  if (email === "invalid") {
+    await sendMessage(chatId, SUPPORT_BAD_EMAIL);
+    return;
+  }
+  await submit(draft.id, email);
+  await sendMessage(chatId, SUPPORT_DONE);
 }
 
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {

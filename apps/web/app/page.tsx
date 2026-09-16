@@ -36,6 +36,9 @@ export default async function Page() {
           districts={codes}
           maxDistricts={plan?.max_districts ?? 1}
           furnished={[...FURNISHED]}
+          whatsappReady={Boolean(
+            process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
+          )}
           names={names}
         />
       )}

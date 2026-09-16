@@ -6,6 +6,7 @@ import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 import {
   byDistrict, byPrice, delivery, eventCounts, events, jobHealth, knownJobs, overview,
   fromRollup, planMix, problems, recentComps, recentPayments, recentRuns, subscribers,
+  ticketCounts,
   unparseableShare,
   type Filters, type Range,
 } from "@/lib/admin-queries";
@@ -14,6 +15,7 @@ import { describeCriteria, type Criteria } from "@/lib/criteria";
 import { Bars, Columns, PlanMix, Stat, TimeSeries } from "./charts";
 import { FilterBar } from "./filters";
 import { Live } from "./live";
+import { Tabs } from "./tabs";
 
 export const dynamic = "force-dynamic";
 
@@ -68,13 +70,13 @@ export default async function AdminPage({
 
   const [
     stats, plans, sent, visits, districts, prices, people, faults, payments, comps,
-    runs, health, log, levels, jobs, feedHealth, sending,
+    runs, health, log, levels, jobs, feedHealth, sending, waiting,
   ] = await Promise.all([
     overview(), planMix(), fromRollup(days), fromRollup(days),
     byDistrict(days), byPrice(days), subscribers(), problems(),
     recentPayments(), recentComps(), recentRuns(), jobHealth(),
     events(filters), eventCounts(filters), knownJobs(), unparseableShare(days),
-    delivery(),
+    delivery(), ticketCounts(),
   ]);
 
   const sentSeries = sent.map((d) => ({ label: d.day, value: d.alerts_sent }));
@@ -91,6 +93,7 @@ export default async function AdminPage({
             {comma(stats.subscribers)} subscribers · {comma(stats.sent_total)} alerts
             delivered all time
           </p>
+          <Tabs here="overview" waiting={waiting.open} />
         </div>
         <div className="admin-head-right">
           <Live />
