@@ -31,6 +31,26 @@ const JOB_WHY: Record<string, string> = {
     "Если молчит — вы просто не узнаете о поломке так быстро.",
 };
 
+// job_runs.status has five values and the page had two. A run in flight was
+// therefore drawn as a failure, and the banner said Degraded while a job was
+// doing its job.
+const JOB_TONE: Record<string, "ok" | "run" | "warn" | "bad"> = {
+  ok: "ok",
+  running: "run",
+  // A skipped run means the previous one was still going: normal, not a fault.
+  skipped_locked: "ok",
+  degraded: "warn",
+  failed: "bad",
+};
+
+const JOB_WORD: Record<string, string> = {
+  ok: "ok",
+  run: "running",
+  warn: "degraded",
+  bad: "failed",
+  idle: "silent",
+};
+
 const LEVEL_TONE: Record<string, string> = {
   error: "bad",
   warn: "warn",
@@ -76,8 +96,10 @@ export default async function SystemPage({
   // A job counts as broken when its most recent run was not clean, and as
   // silent when it has not run at all in the window. Both are degraded; the
   // wording tells them apart, because the fixes differ.
-  const broken = jobs.filter((job) => job.last_status && job.last_status !== "ok"
-    && job.last_status !== "skipped_locked");
+  // Running is neither broken nor silent; it is the healthy middle of a run.
+  const broken = jobs.filter(
+    (job) => job.last_status === "failed" || job.last_status === "degraded",
+  );
   const silent = jobs.filter((job) => job.runs === 0);
   const errors = logs.rows.filter((row) => row.level === "error").length;
   const healthy = broken.length === 0 && silent.length === 0;
@@ -134,17 +156,21 @@ export default async function SystemPage({
       <div className="dash-row">
         {jobs.map((job) => {
           const state =
-            job.runs === 0 ? "idle" : job.last_status === "ok" ? "ok" : "bad";
+            job.runs === 0 ? "idle" : JOB_TONE[job.last_status ?? ""] ?? "bad";
           return (
             <div key={job.job} className={`card job job-${state}`}>
               <div className="job-name">
                 {job.job}
                 <span className={`pill pill-${state}`}>
-                  {state === "ok" ? "ok" : state === "bad" ? (job.last_status ?? "bad") : "silent"}
+                  {JOB_WORD[state] ?? (job.last_status ?? "unknown")}
                 </span>
                 {job.job in JOB_WHY && <Why text={JOB_WHY[job.job] as string} />}
               </div>
-              <div className="metric-note">last run {ago(job.last_at)}</div>
+              <div className="metric-note">
+                {state === "run"
+                  ? `started ${ago(job.last_at)}`
+                  : `last run ${ago(job.last_at)}`}
+              </div>
 
               <div className="job-numbers">
                 <span>
@@ -165,7 +191,7 @@ export default async function SystemPage({
                 </span>
               </div>
 
-              {job.last_status !== "ok" && job.last_error && (
+              {state !== "ok" && state !== "run" && job.last_error && (
                 <div className="job-error">{job.last_error.slice(0, 300)}</div>
               )}
             </div>
@@ -250,13 +276,18 @@ export default async function SystemPage({
             </thead>
             <tbody>
               {runs.map((run) => {
-                const bad = run.status === "failed" || run.status === "degraded";
+                const tone = JOB_TONE[run.status] ?? "bad";
                 return (
                   <tr key={run.id}>
                     <td className="mono">{at(run.started_at)}</td>
                     <td>{run.job}</td>
                     <td>{run.trigger}</td>
-                    <td className={bad ? "bad" : run.status === "ok" ? "good" : undefined}>
+                    <td
+                      className={
+                        tone === "bad" ? "bad" : tone === "warn" ? "warn"
+                        : tone === "ok" ? "good" : undefined
+                      }
+                    >
                       {run.status}
                     </td>
                     <td className="num">{run.seconds ?? "—"}</td>

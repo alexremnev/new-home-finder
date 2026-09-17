@@ -1200,18 +1200,37 @@ form p.error {
   margin-left: auto;
 }
 
-.sign-out {
-  padding: 0.12rem 0.45rem;
-  border: 1px solid var(--d-line);
-  border-radius: 4px;
-  background: transparent;
+/* Two classes, so it beats `.dash button` — one class plus a type selector —
+   which was overriding the padding, the background and the size.
+   And no border at all: a frame around two words invites the question of why
+   it has one. It is a link that happens to need a form. */
+.dash .sign-out {
+  appearance: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
   color: var(--d-faint);
   font: inherit;
-  font-size: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
   cursor: pointer;
 }
 
-.sign-out:hover { border-color: var(--d-faint); color: var(--d-ink); }
+.dash .sign-out:hover {
+  background: none;
+  color: var(--d-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.dash .sign-out:focus-visible {
+  outline: 2px solid var(--d-accent);
+  outline-offset: 2px;
+}
 
 .dash-name {
   color: var(--d-ink);
@@ -1386,9 +1405,30 @@ form p.error {
   border-left: 3px solid var(--d-line);
 }
 
-.job-ok  { border-left-color: var(--d-ok); }
-.job-bad { border-left-color: var(--d-bad); }
+.job-ok   { border-left-color: var(--d-ok); }
+.job-warn { border-left-color: var(--d-warn); }
+.job-bad  { border-left-color: var(--d-bad); }
 .job-idle { border-left-color: var(--d-faint); }
+
+/* In flight: the same green, lightened, so "working" is visibly kin to
+   "worked" rather than a third unrelated colour. */
+.job-run { border-left-color: #8fd3ab; }
+
+/* And it breathes, because the number beside it is about to change. */
+.pill-run {
+  background: #eaf7f0;
+  color: #2d7a52;
+  animation: job-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes job-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill-run { animation: none; }
+}
 
 .job-name {
   display: flex;
@@ -1407,8 +1447,9 @@ form p.error {
   text-transform: uppercase;
 }
 
-.pill-ok  { background: var(--d-ok-wash);  color: #14683a; }
-.pill-bad { background: var(--d-bad-wash); color: #a12126; }
+.pill-ok   { background: var(--d-ok-wash);   color: #14683a; }
+.pill-warn { background: var(--d-warn-wash); color: #8a5a00; }
+.pill-bad  { background: var(--d-bad-wash);  color: #a12126; }
 .pill-idle { background: #eef0f3; color: var(--d-soft); }
 
 .job-numbers {
@@ -1514,6 +1555,7 @@ form p.error {
 .why {
   position: relative;
   display: inline-block;
+  vertical-align: middle;
   width: 14px;
   height: 14px;
   margin-left: 0.3rem;
@@ -1587,7 +1629,7 @@ form p.error {
 /* ── dashboard buttons ─────────────────────────────────────────────────────
    Their own style, now that the site's is scoped to .site. Small, quiet, and
    the width of their label — a dashboard action is not a call to action. */
-.dash button,
+.dash button:not(.why):not(.sign-out),
 .dash input[type="text"],
 .dash input[type="number"],
 .dash select {
@@ -1600,9 +1642,15 @@ form p.error {
   font-size: 12px;
 }
 
-.dash button { cursor: pointer; font-weight: 600; }
-.dash button:hover:not(:disabled) { border-color: var(--d-faint); background: var(--d-bg); }
-.dash button:disabled { color: var(--d-faint); cursor: not-allowed; }
+.dash button:not(.why):not(.sign-out) { cursor: pointer; font-weight: 600; }
+.dash button:not(.why):not(.sign-out):hover:not(:disabled) {
+  border-color: var(--d-faint);
+  background: var(--d-bg);
+}
+.dash button:not(.why):not(.sign-out):disabled {
+  color: var(--d-faint);
+  cursor: not-allowed;
+}
 
 .dash button.ghost { border-color: transparent; color: var(--d-soft); }
 .dash button.ghost:hover { border-color: var(--d-line); }
