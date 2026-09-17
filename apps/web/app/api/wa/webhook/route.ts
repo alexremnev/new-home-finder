@@ -3,15 +3,42 @@ import { NextResponse } from "next/server";
 import type { Criteria } from "@/lib/criteria";
 import { beginSubscription } from "@/lib/activate";
 import { query, transaction } from "@/lib/db";
+import { COMMAND_HELP, parseCommand } from "@/lib/commands";
 import {
   FOUND_A_PLACE,
   NOTHING_TO_PAUSE,
+  NOTHING_TO_RESUME,
+  NOTHING_TO_STOP,
   PAUSED,
+  RESUMED,
+  STOPPED,
   alreadyOnAnotherChannel,
+  criteriaCard,
   criteriaSet,
+  noFilterYet,
+  planLine,
+  upgradeInvitation,
 } from "@/lib/messages";
-import { siteUrl } from "@/lib/plans";
-import { stopFilter } from "@/lib/stopping";
+import {
+  accountForChat, issueToken, planIsLive, siteUrl, UPGRADE_TTL_MINUTES,
+} from "@/lib/plans";
+import { dismiss } from "@/lib/dismiss";
+import { deleteFilter, resumeFilter, stopFilter } from "@/lib/stopping";
+import {
+  BODY_LIMIT,
+  SUPPORT_ASK_EMAIL,
+  SUPPORT_BAD_EMAIL,
+  SUPPORT_CANCELLED,
+  SUPPORT_DONE,
+  SUPPORT_PROMPT,
+  SUPPORT_TOO_LONG,
+  abandonDraft,
+  openDraft,
+  readEmail,
+  recordBody,
+  startDraft,
+  submit,
+} from "@/lib/support";
 import { sendWhatsApp } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
@@ -138,6 +165,96 @@ async function signed(request: Request, raw: string): Promise<boolean> {
   return same;
 }
 
+// Everything a subscriber can say. This did not exist: whatever they typed was
+// met with silence, which meant /stop from WhatsApp did nothing at all — an
+// opt-out that works on one channel only is not an opt-out.
+async function commanded(
+  number: string,
+  userId: number,
+  text: string,
+): Promise<string | null> {
+  const command = parseCommand(text);
+  console.log("wa command", { from: number.slice(-4), kind: command.kind });
+
+  // An unfinished support ticket swallows plain messages, and a command must
+  // always win — the same rule as Telegram.
+  if (!text.trim().startsWith("/")) {
+    const draft = await openDraft("whatsapp", number);
+    if (draft) return continueTicket(draft, text.trim());
+  }
+  if (text.trim().startsWith("/")) await abandonDraft("whatsapp", number);
+
+  switch (command.kind) {
+    case "stop": {
+      const gone = await deleteFilter("whatsapp", number);
+      return gone ? STOPPED : NOTHING_TO_STOP;
+    }
+
+    case "support":
+      await startDraft("whatsapp", number, userId);
+      return SUPPORT_PROMPT;
+
+    case "cancel": {
+      const had = await abandonDraft("whatsapp", number);
+      return had ? SUPPORT_CANCELLED : COMMAND_HELP;
+    }
+
+    case "resume": {
+      const woken = await resumeFilter("whatsapp", number);
+      return woken ? RESUMED : NOTHING_TO_RESUME;
+    }
+
+    case "show": {
+      const account = await accountForChat(number, "whatsapp");
+      if (!account || account.subscription_id === null) return noFilterYet(siteUrl());
+      return [
+        criteriaCard((account.criteria ?? {}) as Criteria),
+        "",
+        planLine(account.plan_name, account.plan_until, planIsLive(account)),
+        "",
+        COMMAND_HELP,
+      ].join("\n");
+    }
+
+    case "upgrade": {
+      const account = await accountForChat(number, "whatsapp");
+      if (!account) return noFilterYet(siteUrl());
+      const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
+      return await upgradeInvitation(account, token);
+    }
+
+    case "start":
+    case "update":
+      return [
+        "Change your search here — it takes a minute:",
+        "",
+        `${siteUrl()}/`,
+        "",
+        "Saving replaces this filter. Until you do, it carries on as it is.",
+      ].join("\n");
+
+    default:
+      return COMMAND_HELP;
+  }
+}
+
+async function continueTicket(
+  draft: { id: number; status: "awaiting_body" | "awaiting_email" },
+  said: string,
+): Promise<string | null> {
+  if (draft.status === "awaiting_body") {
+    if (!said) return null;
+    if (said.length > BODY_LIMIT) return SUPPORT_TOO_LONG;
+    await recordBody(draft.id, said);
+    return SUPPORT_ASK_EMAIL;
+  }
+
+  const email = readEmail(said);
+  if (email === "invalid") return SUPPORT_BAD_EMAIL;
+  await submit(draft.id, email);
+  return SUPPORT_DONE;
+}
+
 async function pressed(number: string, id: string): Promise<string | null> {
   console.log("wa tap", { from: number.slice(-4), id });
 
@@ -149,6 +266,16 @@ async function pressed(number: string, id: string): Promise<string | null> {
     );
     if (!stopped) return NOTHING_TO_PAUSE;
     return id === "found" ? FOUND_A_PLACE : PAUSED;
+  }
+
+  if (id.startsWith("ignore:")) {
+    const noted = await dismiss("whatsapp", number, Number(id.slice("ignore:".length)));
+    // WhatsApp has no way to delete a message it has already delivered — the
+    // Cloud API simply does not offer it — so the listing stays on screen and
+    // the reply says what actually happened instead of pretending.
+    return noted
+      ? "Noted — that one will not come up again."
+      : "That listing is no longer one of yours.";
   }
 
   if (id === "change") {
@@ -179,12 +306,13 @@ async function handle(number: string, text: string): Promise<string | null> {
         WHERE channel = 'whatsapp' AND address = $1 AND verified_at IS NOT NULL`,
       [number],
     );
-    if (known.length) return null;
-
-    return (
-      "I do not have a search for this number yet. Set one up at " +
-      "londonhomefinder.co.uk and press Connect to WhatsApp."
-    );
+    if (known.length === 0) {
+      return (
+        "I do not have a search for this number yet. Set one up at " +
+        "londonhomefinder.co.uk and press Connect to WhatsApp."
+      );
+    }
+    return commanded(number, Number(known[0]?.id), text);
   }
 
   type Claim = null | { taken: string } | { criteria: Criteria };

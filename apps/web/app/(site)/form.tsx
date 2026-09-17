@@ -284,7 +284,7 @@ export function SubscribeForm({
           max={ROOMS_MAX}
           label={(n) => (n === 0 ? "Any" : `${n}+`)}
         />
-        <p className="hint">Any includes studios.</p>
+        <small className="note">Any includes studios.</small>
       </div>
 
       <div>
@@ -295,18 +295,18 @@ export function SubscribeForm({
           max={ROOMS_MAX}
           label={(n) => (n === 0 ? "Any" : `${n}+`)}
         />
-        <p className="hint">
+        <small className="note">
           Listings that do not state it are still sent — most do not state it.
-        </p>
+        </small>
       </div>
 
       <label>
         <span>Desired let available date</span>
         <input type="date" name="available_on" />
-        <p className="hint">
+        <small className="note">
           Listings available within about ten days of it. Leave blank for any date —
-          and a listing that gives no date is sent either way.
-        </p>
+          a listing that gives no date is sent either way.
+        </small>
       </label>
 
       <fieldset>
@@ -318,7 +318,7 @@ export function SubscribeForm({
             </label>
           ))}
         </div>
-        <p className="hint">Nothing ticked means any.</p>
+        <small className="note">Nothing ticked means any.</small>
       </fieldset>
 
       <label>
@@ -407,6 +407,7 @@ function RangeSlider({
         <input
           type="range"
           className="range2-input"
+          style={{ zIndex: low >= (min + max) / 2 ? 3 : 2 }}
           min={min}
           max={max}
           step={step}
@@ -417,6 +418,7 @@ function RangeSlider({
         <input
           type="range"
           className="range2-input"
+          style={{ zIndex: low >= (min + max) / 2 ? 2 : 3 }}
           min={min}
           max={max}
           step={step}

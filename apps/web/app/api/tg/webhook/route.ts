@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { BOT_MENU, COMMAND_HELP, parseCommand } from "@/lib/commands";
 import { enforceLimits, InvalidForm, type Criteria } from "@/lib/criteria";
 import { beginSubscription } from "@/lib/activate";
-import { stopFilter, type Reason } from "@/lib/stopping";
+import { dismiss } from "@/lib/dismiss";
+import {
+  deleteFilter, resumeFilter, stopFilter, type Reason,
+} from "@/lib/stopping";
 import { query, transaction } from "@/lib/db";
 import {
   BODY_LIMIT,
@@ -367,26 +370,8 @@ async function ignoreListing(
     ).catch(() => undefined);
   }
 
-  // Scoped to this chat's own account, and allowed to fail: a record of the
-  // dismissal is worth having and worth nothing next to the message going away.
-  try {
-    await query(
-      `UPDATE notifications n SET ignored_at = now()
-         WHERE n.id = $1
-           AND EXISTS (
-             SELECT 1 FROM user_channels uc
-              WHERE uc.user_id = n.user_id
-                AND uc.channel = 'telegram'
-                AND uc.address = $2
-           )`,
-      [notificationId, chatId],
-    );
-  } catch (error) {
-    console.error("could not record a dismissal", {
-      notificationId,
-      error: String(error),
-    });
-  }
+  // Worth having, not worth failing over: the message is already gone.
+  await dismiss("telegram", chatId, notificationId);
 }
 
 async function pauseAlerts(chatId: string, reason: Reason): Promise<void> {
@@ -399,34 +384,7 @@ async function pauseAlerts(chatId: string, reason: Reason): Promise<void> {
 }
 
 async function resume(chatId: string): Promise<void> {
-  const woken = await transaction(async (run) => {
-    const users = await run(
-      `SELECT u.id FROM users u
-         JOIN user_channels uc ON uc.user_id = u.id
-        WHERE uc.channel = 'telegram' AND uc.address = $1
-        FOR UPDATE OF u`,
-      [chatId],
-    );
-    const userId = users[0]?.id;
-    if (userId === undefined) return false;
-
-    // Only the newest, and its backfill moves to now: resuming should not
-    // replay everything that appeared while the alerts were off.
-    const rows = await run(
-      `UPDATE subscriptions SET active = true, backfill_from = now()
-        WHERE id = (
-          SELECT id FROM subscriptions
-           WHERE user_id = $1 AND NOT active
-           ORDER BY created_at DESC LIMIT 1
-        )
-        RETURNING id`,
-      [userId],
-    );
-    if (rows.length === 0) return false;
-    await run(`UPDATE users SET status = 'active' WHERE id = $1 AND status = 'stopped'`, [userId]);
-    return true;
-  });
-
+  const woken = await resumeFilter("telegram", chatId);
   await sendMessage(chatId, woken ? RESUMED : NOTHING_TO_RESUME);
 }
 
@@ -446,26 +404,7 @@ async function pushMenu(chatId: string): Promise<void> {
 }
 
 async function stop(chatId: string): Promise<void> {
-  const stopped = await transaction(async (run) => {
-    const users = await run(
-      `SELECT u.id FROM users u
-         JOIN user_channels uc ON uc.user_id = u.id
-        WHERE uc.channel = 'telegram' AND uc.address = $1
-        FOR UPDATE OF u`,
-      [chatId],
-    );
-    const userId = users[0]?.id;
-    if (userId === undefined) return false;
-
-    await run(`DELETE FROM subscriptions WHERE user_id = $1`, [userId]);
-
-    await run(`DELETE FROM notifications WHERE user_id = $1 AND status = 'queued'`, [userId]);
-    await run(`DELETE FROM user_tokens WHERE user_id = $1`, [userId]);
-
-    await run(`UPDATE users SET status = 'stopped', stopped_at = now() WHERE id = $1`, [userId]);
-    return true;
-  });
-
+  const stopped = await deleteFilter("telegram", chatId);
   await sendMessage(chatId, stopped ? STOPPED : NOTHING_TO_STOP);
 }
 

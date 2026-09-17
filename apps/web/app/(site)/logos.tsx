@@ -46,3 +46,25 @@ export function WhatsAppMark() {
     </svg>
   );
 }
+
+// The badge from the favicon, at a size a header can use. Same three shapes:
+// the teal disc, the orange roof, the monogram as rectangles.
+export function BrandMark({ size = 28 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+      <circle cx="32" cy="32" r="32" fill="#4f9aa4" />
+      <path d="M9 31 L32 11 L55 31" fill="none" stroke="#e08a3c" strokeWidth="6"
+            strokeLinejoin="miter" />
+      <g fill="#16304e">
+        <rect x="12" y="34" width="4" height="18" />
+        <rect x="12" y="48" width="10" height="4" />
+        <rect x="26" y="34" width="4" height="18" />
+        <rect x="34" y="34" width="4" height="18" />
+        <rect x="26" y="42" width="12" height="4" />
+        <rect x="42" y="34" width="4" height="18" />
+        <rect x="42" y="34" width="10" height="4" />
+        <rect x="42" y="42" width="8" height="4" />
+      </g>
+    </svg>
+  );
+}

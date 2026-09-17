@@ -143,3 +143,29 @@ describe("/menu", () => {
     expect(parseCommand("/menu")).toEqual({ kind: "menu" });
   });
 });
+
+describe("stopping works from either app", () => {
+
+  // A WhatsApp subscriber had no way to opt out at all: the webhook parsed no
+  // commands, so /stop was met with silence. The parser is channel-agnostic;
+  // what mattered was that both webhooks use it.
+  it("recognises stop however it is typed", () => {
+    for (const said of ["/stop", "stop", "STOP", "unsubscribe", "стоп", "отписаться"]) {
+      expect(parseCommand(said).kind).toBe("stop");
+    }
+  });
+
+  it("recognises the rest of what a subscriber can say", () => {
+    expect(parseCommand("/current").kind).toBe("show");
+    expect(parseCommand("/pay").kind).toBe("upgrade");
+    expect(parseCommand("/resume").kind).toBe("resume");
+    expect(parseCommand("/support").kind).toBe("support");
+    expect(parseCommand("/cancel").kind).toBe("cancel");
+    expect(parseCommand("/update").kind).toBe("update");
+  });
+
+  it("falls back to help rather than silence", () => {
+    expect(parseCommand("hello?").kind).toBe("help");
+    expect(parseCommand("").kind).toBe("help");
+  });
+});

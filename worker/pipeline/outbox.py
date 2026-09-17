@@ -223,7 +223,15 @@ def listing_actions(view: ListingView, notification_id: int) -> list[Action]:
     if view.share is not None and view.share < 100:
         link = upgrade_link()
         return [Action(label="Get full access", url=link)] if link else []
-    return [Action(label="Ignore", callback=f"ignore:{notification_id}")]
+    # "Ignore" on Telegram deletes the message. WhatsApp cannot delete a
+    # delivered message at all, so there the button says what it really does.
+    return [
+        Action(
+            label="Ignore",
+            short="Not interested",
+            callback=f"ignore:{notification_id}",
+        )
+    ]
 
 def alert_for(row: Row) -> Alert | None:
 

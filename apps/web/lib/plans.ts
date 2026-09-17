@@ -60,7 +60,10 @@ export async function lapsedShare(): Promise<number | null> {
   return share === undefined || share === null ? null : Number(share);
 }
 
-export async function accountForChat(chatId: string): Promise<Account | null> {
+export async function accountForChat(
+  address: string,
+  channel: "telegram" | "whatsapp" = "telegram",
+): Promise<Account | null> {
   const rows = await query<Account>(
     `SELECT u.id AS user_id, u.status, u.plan, u.plan_until, u.payment_ref,
             s.id AS subscription_id, s.criteria,
@@ -69,10 +72,10 @@ export async function accountForChat(chatId: string): Promise<Account | null> {
        JOIN user_channels uc ON uc.user_id = u.id
        JOIN plans p          ON p.key = u.plan
        LEFT JOIN subscriptions s ON s.user_id = u.id AND s.active
-      WHERE uc.channel = 'telegram' AND uc.address = $1
+      WHERE uc.channel = $2 AND uc.address = $1
       ORDER BY s.id DESC
       LIMIT 1`,
-    [chatId],
+    [address, channel],
   );
   return rows[0] ?? null;
 }

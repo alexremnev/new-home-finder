@@ -110,6 +110,18 @@ form > *:first-child { padding-top: 0; }
 form > div:last-of-type,
 form > label:last-of-type { border-bottom: none; }
 
+form > fieldset > legend {
+  float: left;
+  width: 100%;
+  padding: 0;
+}
+
+form > fieldset::after {
+  content: "";
+  display: table;
+  clear: both;
+}
+
 label > span:first-child,
 label[for],
 legend,
@@ -199,7 +211,7 @@ fieldset label {
   font-size: 0.75rem;
 }
 
-input[type="range"] {
+.stepper input[type="range"] {
   appearance: none;
   flex: 1;
   height: 1.5rem;
@@ -208,19 +220,19 @@ input[type="range"] {
   cursor: pointer;
 }
 
-input[type="range"]::-webkit-slider-runnable-track {
+.stepper input[type="range"]::-webkit-slider-runnable-track {
   height: 4px;
   border-radius: 2px;
   background: var(--line-strong);
 }
 
-input[type="range"]::-moz-range-track {
+.stepper input[type="range"]::-moz-range-track {
   height: 4px;
   border-radius: 2px;
   background: var(--line-strong);
 }
 
-input[type="range"]::-webkit-slider-thumb {
+.stepper input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   width: 1.4rem;
   height: 1.4rem;
@@ -231,7 +243,7 @@ input[type="range"]::-webkit-slider-thumb {
   box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
 }
 
-input[type="range"]::-moz-range-thumb {
+.stepper input[type="range"]::-moz-range-thumb {
   width: 1.4rem;
   height: 1.4rem;
   border: 2px solid #fff;
@@ -240,7 +252,7 @@ input[type="range"]::-moz-range-thumb {
   box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
 }
 
-input[type="range"]:focus-visible::-webkit-slider-thumb {
+.stepper input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px var(--accent-wash);
 }
 
@@ -1674,3 +1686,86 @@ form p.error {
   color: inherit;
   opacity: 0.72;
 }
+
+/* ── small print ───────────────────────────────────────────────────────────
+   Notes about how matching behaves are true and worth saying, but they are not
+   instructions — so they read as footnotes rather than competing with the
+   question above them. */
+.note {
+  display: block;
+  margin: 0.4rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.45;
+  text-indent: -0.75em;
+  padding-left: 0.75em;
+}
+
+.note::before {
+  content: "* ";
+  opacity: 0.7;
+}
+
+/* ── the site header ──────────────────────────────────────────────────────── */
+
+.site-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  max-width: 40rem;
+  margin: 0 auto 2rem;
+}
+
+.site-head svg { flex: none; }
+
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand span { color: var(--ink-soft); font-weight: 500; }
+
+.brand:hover { text-decoration: none; }
+
+@media (max-width: 30rem) {
+  .brand span { display: none; }
+}
+
+/* ── the site footer ──────────────────────────────────────────────────────── */
+
+.site-foot {
+  width: 100%;
+  max-width: 40rem;
+  margin: 3rem auto 0;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  text-align: left;
+}
+
+.site-foot-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.25rem;
+  margin-bottom: 0.6rem;
+}
+
+.site-foot a {
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.site-foot a:hover { color: var(--ink); }
+
+.site-foot-fine { opacity: 0.8; }
