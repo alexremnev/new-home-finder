@@ -8,7 +8,18 @@ export async function sendWhatsApp(to: string, body: string): Promise<boolean> {
   const phoneId = process.env.WA_PHONE_NUMBER_ID;
   const token = process.env.WA_ACCESS_TOKEN;
   if (!phoneId || !token) {
-    console.error("whatsapp reply not sent: WA_PHONE_NUMBER_ID or WA_ACCESS_TOKEN unset");
+    // Named individually. "one of these two is unset" costs whoever reads it a
+    // round of guessing, and these are set in two different places — the worker
+    // on the server and this deployment — so it is easy to have one without the
+    // other.
+    const missing = [
+      !phoneId ? "WA_PHONE_NUMBER_ID" : null,
+      !token ? "WA_ACCESS_TOKEN" : null,
+    ].filter(Boolean);
+    console.error(
+      `whatsapp reply not sent: ${missing.join(" and ")} ` +
+        `${missing.length > 1 ? "are" : "is"} not set in this deployment`,
+    );
     return false;
   }
 
