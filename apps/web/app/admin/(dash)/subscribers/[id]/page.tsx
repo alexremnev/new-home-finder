@@ -11,20 +11,13 @@ import { DEFAULT_WINDOW, WindowPicker, windowFrom } from "../../window";
 
 import { AsyncForm } from "../../async-form";
 
+import { ago, at, dayOf } from "@/lib/when";
+
 export const dynamic = "force-dynamic";
 
 const pounds = (pence: number) =>
   "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 2 });
 const comma = (n: number) => n.toLocaleString("en-GB");
-const when = (value: string | null) => (value ? value.slice(0, 16).replace("T", " ") : "—");
-
-function ago(value: string | null): string {
-  if (!value) return "never";
-  const minutes = Math.round((Date.now() - new Date(value).getTime()) / 60000);
-  if (minutes < 60) return `${minutes} min ago`;
-  if (minutes < 60 * 48) return `${Math.round(minutes / 60)} h ago`;
-  return `${Math.round(minutes / 1440)} days ago`;
-}
 
 export default async function UserPage({
   params, searchParams,
@@ -61,8 +54,8 @@ export default async function UserPage({
             {expired && <span className="badge warning"> expired</span>}
           </h1>
           <p className="hint">
-            Joined {when(who.joined)} · consent {who.consent_source ?? "—"}{" "}
-            {when(who.consent_at)}
+            Joined {at(who.joined)} · consent {who.consent_source ?? "—"}{" "}
+            {at(who.consent_at)}
           </p>
         </div>
       </header>
@@ -90,7 +83,7 @@ export default async function UserPage({
           <Metric label="Paid in total" value={pounds(who.paid_total_pence)}
                 note={`${who.paid_count} payment${who.paid_count === 1 ? "" : "s"}, last ${ago(who.last_paid_at)}`} />
           <Metric label="Plan runs to"
-                value={who.plan_until ? who.plan_until.slice(0, 10) : "no end"}
+                value={who.plan_until ? dayOf(who.plan_until) : "no end"}
                 note={who.comped_days > 0 ? `${who.comped_days} days comped` : undefined} />
         </div>
       </section>
@@ -105,11 +98,11 @@ export default async function UserPage({
               <td>
                 {who.channel ?? "none"}
                 {who.address ? ` · ${who.address}` : ""}
-                {who.verified_at ? ` · verified ${when(who.verified_at)}` : " · unverified"}
+                {who.verified_at ? ` · verified ${at(who.verified_at)}` : " · unverified"}
               </td>
             </tr>
             <tr><th>Payment ref</th><td>{who.payment_ref ?? "—"}</td></tr>
-            <tr><th>Stopped at</th><td>{when(who.stopped_at)}</td></tr>
+            <tr><th>Stopped at</th><td>{at(who.stopped_at)}</td></tr>
             <tr>
               <th>Queue</th>
               <td>
@@ -133,8 +126,8 @@ export default async function UserPage({
             </pre>
             <p className="hint">
               Subscription {who.subscription_id} · only listings after{" "}
-              {when(who.backfill_from)} ·{" "}
-              {who.seeded_at ? `starter batch sent ${when(who.seeded_at)}` : "starter batch owed"}
+              {at(who.backfill_from)} ·{" "}
+              {who.seeded_at ? `starter batch sent ${at(who.seeded_at)}` : "starter batch owed"}
             </p>
             <details>
               <summary className="disclosure-inline">The stored criteria</summary>
@@ -238,7 +231,7 @@ export default async function UserPage({
             <tbody>
               {paid.map((one) => (
                 <tr key={one.id}>
-                  <td className="muted">{when(one.created_at)}</td>
+                  <td className="muted">{at(one.created_at)}</td>
                   <td>{one.plan}</td>
                   <td className="num">{pounds(one.amount_pence)}</td>
                   <td className="num muted">{one.granted_days ?? "—"}</td>
@@ -272,8 +265,8 @@ export default async function UserPage({
             <tbody>
               {feed.map((one) => (
                 <tr key={one.id}>
-                  <td className="muted">{when(one.created_at)}</td>
-                  <td className="muted">{when(one.sent_at)}</td>
+                  <td className="muted">{at(one.created_at)}</td>
+                  <td className="muted">{at(one.sent_at)}</td>
                   <td>
                     <span
                       className={`badge ${
@@ -321,7 +314,7 @@ export default async function UserPage({
             <tbody>
               {history.map((one) => (
                 <tr key={one.id}>
-                  <td className="muted">{when(one.created_at)}</td>
+                  <td className="muted">{at(one.created_at)}</td>
                   <td><strong>{one.action}</strong></td>
                   <td className="wrap muted counters">{JSON.stringify(one.detail)}</td>
                 </tr>

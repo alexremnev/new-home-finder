@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BODY_LIMIT, SUPPORT_DONE, readEmail } from "../support";
+import { BODY_LIMIT, SUPPORT_DONE, SUPPORT_EMAIL, readEmail } from "../support";
 
 describe("the email step", () => {
   it("accepts an ordinary address", () => {
@@ -42,5 +42,12 @@ describe("the body limit", () => {
   it("is large enough for a real complaint and small enough to store", () => {
     expect(BODY_LIMIT).toBeGreaterThanOrEqual(1000);
     expect(BODY_LIMIT).toBeLessThanOrEqual(4000);
+  });
+});
+
+describe("the support address", () => {
+  it("is on the project's own domain, not a personal one", () => {
+    expect(SUPPORT_EMAIL).toBe("support@londonhomefinder.co.uk");
+    expect(SUPPORT_EMAIL).not.toMatch(/gmail|outlook|yahoo/i);
   });
 });

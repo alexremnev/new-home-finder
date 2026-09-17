@@ -7,21 +7,13 @@ import {
 import { Metric, Rank, Series, Why } from "../charts";
 import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "../window";
 
+import { dayOf, since } from "@/lib/when";
+
 export const dynamic = "force-dynamic";
 
 const PER_PAGE = 20;
 
-const since = (stamp: string | null): string => {
-  if (!stamp) return "never";
-  const then = new Date(stamp.replace(" ", "T"));
-  if (Number.isNaN(then.getTime())) return stamp;
-  const mins = (Date.now() - then.getTime()) / 60_000;
-  if (mins < 90) return `${Math.max(1, Math.round(mins))}m`;
-  if (mins < 60 * 36) return `${Math.round(mins / 60)}h`;
-  return `${Math.round(mins / 1440)}d`;
-};
 
-const day = (stamp: string | null) => (stamp ? stamp.slice(0, 10) : "—");
 
 // Green means alerts are reaching them. Anything else is a reason, not a
 // colour: a paused filter and a dead channel look the same in a list of dots.
@@ -162,7 +154,7 @@ export default async function SubscribersPage({
                     <td>
                       {row.plan}
                       {row.plan_until && (
-                        <div className="metric-note">until {day(row.plan_until)}</div>
+                        <div className="metric-note">until {dayOf(row.plan_until)}</div>
                       )}
                     </td>
                     <td>{row.channel ?? "—"}</td>
@@ -170,7 +162,7 @@ export default async function SubscribersPage({
                     <td className="num">{row.sent_window}</td>
                     <td className="num">{row.sent_total}</td>
                     <td className="num">{since(row.last_sent)}</td>
-                    <td>{day(row.created_at)}</td>
+                    <td>{dayOf(row.created_at)}</td>
                   </tr>
                 );
               })}

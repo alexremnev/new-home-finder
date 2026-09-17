@@ -1,5 +1,9 @@
 import { query } from "./db";
 
+// The way to reach a person from the site. The bot has /support; somebody who
+// has not started the bot — or would rather write — has this.
+export const SUPPORT_EMAIL = "support@londonhomefinder.co.uk";
+
 export const SUPPORT_PROMPT = [
   "Sorry to hear it. Tell me what went wrong in one message and I will pass it on.",
   "",

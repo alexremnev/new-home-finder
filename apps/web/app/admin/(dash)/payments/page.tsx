@@ -6,6 +6,8 @@ import {
 
 import { Metric, Rank, Series, Why } from "../charts";
 
+import { at } from "@/lib/when";
+
 export const dynamic = "force-dynamic";
 
 const RANGES = [1, 7, 30] as const;
@@ -116,7 +118,7 @@ export default async function PaymentsPage({
               <tbody>
                 {comps.map((row) => (
                   <tr key={row.id}>
-                    <td className="mono">{row.created_at.slice(0, 16)}</td>
+                    <td className="mono">{at(row.created_at)}</td>
                     <td>
                       {row.user_id === null ? (
                         "erased"
@@ -154,7 +156,7 @@ export default async function PaymentsPage({
             <tbody>
               {recent.map((row) => (
                 <tr key={`${row.created_at}-${row.user_id}`}>
-                  <td className="mono">{row.created_at.slice(0, 16)}</td>
+                  <td className="mono">{at(row.created_at)}</td>
                   <td>
                     <Link href={`/admin/subscribers/${row.user_id}`}>{row.user_id}</Link>
                   </td>

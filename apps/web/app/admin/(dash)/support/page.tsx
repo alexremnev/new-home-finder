@@ -4,26 +4,11 @@ import { ticketCounts, tickets } from "@/lib/admin-queries";
 
 import { AsyncForm } from "../async-form";
 
+import { ago, olderThan } from "@/lib/when";
+
 export const dynamic = "force-dynamic";
 
-function ago(stamp: string | null): string {
-  if (!stamp) return "—";
-  const then = new Date(stamp.replace(" ", "T"));
-  if (Number.isNaN(then.getTime())) return stamp;
-  const hours = (Date.now() - then.getTime()) / 3_600_000;
-  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))} min ago`;
-  if (hours < 48) return `${Math.round(hours)}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
-// The bot promises a reply within 24 hours. Anything older than that is not
-// merely waiting, it is late, and the list says so rather than leaving the
-// arithmetic to whoever is reading.
-function late(stamp: string | null): boolean {
-  if (!stamp) return false;
-  const then = new Date(stamp.replace(" ", "T"));
-  return !Number.isNaN(then.getTime()) && Date.now() - then.getTime() > 86_400_000;
-}
+const late = (stamp: string | null) => olderThan(stamp, 24);
 
 export default async function SupportPage() {
   const [rows, counts] = await Promise.all([tickets(), ticketCounts()]);

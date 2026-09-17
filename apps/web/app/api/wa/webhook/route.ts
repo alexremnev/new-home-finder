@@ -60,7 +60,13 @@ export async function POST(request: Request): Promise<NextResponse> {
     return ok();
   }
 
-  console.log("wa webhook", { messages: messages.length });
+  // A delivery receipt carries `statuses`, not `messages`, and produces a 200
+  // with nothing done — indistinguishable in the log from a message that was
+  // handled, which is an unpleasant hour to spend.
+  console.log("wa webhook", { messages: messages.length, bytes: raw.length });
+  if (messages.length === 0) {
+    console.log("wa webhook: nothing to act on (a status callback, most likely)");
+  }
 
   for (const message of messages) {
     const number = (message.from ?? "").replace(/\D/g, "");
@@ -107,6 +113,11 @@ async function signed(request: Request, raw: string): Promise<boolean> {
 
 async function handle(number: string, text: string): Promise<string | null> {
   const token = tokenIn(text);
+  // The token itself is a live credential and is never logged; its length is
+  // enough to tell "they typed something else" from "the link was mangled".
+  console.log("wa inbound", { from: number.slice(-4), chars: text.length,
+                              token: token ? token.length : 0 });
+
   if (!token) {
     const known = await query<{ id: string }>(
       `SELECT user_id AS id FROM user_channels
@@ -210,12 +221,18 @@ async function handle(number: string, text: string): Promise<string | null> {
   });
 
   if (claimed === null) {
+    console.log("wa inbound: token not claimable — used, expired, or not ours");
     return (
       "That link has expired. Please fill the form in again at " +
       "londonhomefinder.co.uk and use the new link — it takes a moment."
     );
   }
-  if ("taken" in claimed) return alreadyOnAnotherChannel(claimed.taken);
+  if ("taken" in claimed) {
+    console.log("wa inbound: that search already goes to", claimed.taken);
+    return alreadyOnAnotherChannel(claimed.taken);
+  }
+
+  console.log("wa inbound: linked");
 
   return criteriaSet(claimed.criteria);
 }

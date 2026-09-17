@@ -558,7 +558,7 @@ export async function runPoints(hours: number, minutes: number): Promise<RunPoin
                 make_interval(mins => $2::int)
               ) AS bucket
      )
-     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+     SELECT to_char(span.bucket AT TIME ZONE 'Europe/London', 'YYYY-MM-DD HH24:MI') AS label,
             count(r.*) FILTER (WHERE r.status = 'ok')::int AS ok,
             count(r.*) FILTER (WHERE r.status IN ('failed', 'degraded'))::int AS bad
        FROM span
@@ -675,7 +675,7 @@ export async function alertBuckets(
                 make_interval(mins => $3::int)
               ) AS bucket
      )
-     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+     SELECT to_char(span.bucket AT TIME ZONE 'Europe/London', 'YYYY-MM-DD HH24:MI') AS label,
             count(n.*)::int AS value
        FROM span
        LEFT JOIN notifications n
@@ -713,13 +713,17 @@ export async function paymentSummary(days: number): Promise<PaymentSummary> {
 export async function paymentSeries(days: number): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
-       SELECT generate_series(current_date - ($1::int - 1), current_date,
-                              interval '1 day')::date AS day
+       SELECT generate_series(
+              (now() AT TIME ZONE 'Europe/London')::date - ($1::int - 1),
+              (now() AT TIME ZONE 'Europe/London')::date,
+              interval '1 day'
+            )::date AS day
      )
      SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
             coalesce(sum(p.amount_pence), 0)::int AS value
        FROM span
-       LEFT JOIN payments p ON p.created_at::date = span.day
+       LEFT JOIN payments p
+              ON (p.created_at AT TIME ZONE 'Europe/London')::date = span.day
       GROUP BY span.day
       ORDER BY span.day`,
     [Math.round(days)],
@@ -797,7 +801,7 @@ async function bucketed(
                 make_interval(mins => $2::int)
               ) AS bucket
      )
-     SELECT to_char(span.bucket, 'YYYY-MM-DD HH24:MI') AS label,
+     SELECT to_char(span.bucket AT TIME ZONE 'Europe/London', 'YYYY-MM-DD HH24:MI') AS label,
             count(t.*)::int AS value
        FROM span
        LEFT JOIN ${table} t

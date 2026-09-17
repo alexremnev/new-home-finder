@@ -180,7 +180,13 @@ for (const file of readdirSync(MIGRATIONS).filter((f) => f.endsWith(".sql")).sor
   // UPDATE's assignments — because those are the two that can be verified without
   // parsing SQL. A bare `INSERT … VALUES` with no column list is not checked; it is
   // also not written anywhere here.
-  const bare = sql.replace(/--[^\n]*/g, " ").replace(/'[^']*'/g, "''");
+  // `AT TIME ZONE 'Europe/London'` is an operator, not three columns. Left in
+  // place it reported `time` and `zone` as unknown columns of whatever table the
+  // statement touched — and a check that cries wolf is a check nobody reads.
+  const bare = sql
+    .replace(/--[^\n]*/g, " ")
+    .replace(/\bAT\s+TIME\s+ZONE\b/gi, " ")
+    .replace(/'[^']*'/g, "''");
 
   for (const insert of bare.matchAll(/INSERT\s+INTO\s+(\w+)\s*\(([^)]*)\)/gi)) {
     const [, table, list] = insert;
@@ -309,6 +315,7 @@ for (const dir of SOURCES) {
       // Strip comments and string literals: a word inside 'quotes' is a value.
       const whole = sql
         .replace(/--[^\n]*/g, " ")
+        .replace(/\bAT\s+TIME\s+ZONE\b/gi, " ")
         .replace(/'[^']*'/g, " ' ' ")
         .replace(/\$\d+/g, " ")
         .replace(/%\((\w+)\)s|%s/g, " ")

@@ -387,6 +387,27 @@ form p.error {
   font-size: 0.8125rem;
 }
 
+/* Reachable from every public page without any of them mentioning it. Inside
+   the same column as the content, so it lines up with the text above rather
+   than floating in the middle of a wide screen. */
+.site-foot {
+  width: 100%;
+  max-width: 40rem;
+  margin: 2.5rem auto 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+.site-foot a {
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.site-foot a:hover { color: var(--ink); }
+
 .footnote {
   margin-top: 2.5rem;
   color: var(--ink-soft);

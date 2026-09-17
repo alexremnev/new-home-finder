@@ -7,6 +7,8 @@ import {
 import { Metric, RunBars, Series, Why } from "./charts";
 import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "./window";
 
+import { ago, at } from "@/lib/when";
+
 export const dynamic = "force-dynamic";
 
 // Russian, as asked: the names being explained are English and whoever reads
@@ -36,16 +38,7 @@ const LEVEL_TONE: Record<string, string> = {
   debug: "",
 };
 
-const since = (stamp: string | null): string => {
-  if (!stamp) return "never";
-  const then = new Date(stamp.replace(" ", "T"));
-  if (Number.isNaN(then.getTime())) return stamp;
-  const mins = (Date.now() - then.getTime()) / 60_000;
-  if (mins < 1) return "just now";
-  if (mins < 90) return `${Math.round(mins)} min ago`;
-  if (mins < 60 * 36) return `${Math.round(mins / 60)}h ago`;
-  return `${Math.round(mins / 1440)}d ago`;
-};
+
 
 export default async function SystemPage({
   searchParams,
@@ -151,7 +144,7 @@ export default async function SystemPage({
                 </span>
                 {job.job in JOB_WHY && <Why text={JOB_WHY[job.job] as string} />}
               </div>
-              <div className="metric-note">last run {since(job.last_at)}</div>
+              <div className="metric-note">last run {ago(job.last_at)}</div>
 
               <div className="job-numbers">
                 <span>
@@ -260,7 +253,7 @@ export default async function SystemPage({
                 const bad = run.status === "failed" || run.status === "degraded";
                 return (
                   <tr key={run.id}>
-                    <td className="mono">{run.started_at.slice(5, 16)}</td>
+                    <td className="mono">{at(run.started_at)}</td>
                     <td>{run.job}</td>
                     <td>{run.trigger}</td>
                     <td className={bad ? "bad" : run.status === "ok" ? "good" : undefined}>
@@ -320,7 +313,7 @@ export default async function SystemPage({
         ) : (
           logs.rows.map((row) => (
             <div key={row.id} className="log-line mono">
-              <span className="log-when">{row.ts.slice(5, 16)}</span>
+              <span className="log-when">{at(row.ts)}</span>
               <span className={`log-level ${LEVEL_TONE[row.level] ?? ""}`}>
                 {row.job}
               </span>
