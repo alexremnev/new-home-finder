@@ -18,7 +18,7 @@ from worker.contracts.notify import (
     SendResult,
 )
 from worker.notify import build_notifier
-from worker.notify.plans import digest_notice, notice_for, upgrade_link
+from worker.notify.plans import checkout_link, digest_notice, notice_for, upgrade_link
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -178,10 +178,16 @@ def outcome_for(result: SendResult, *, attempts: int, max_attempts: int = MAX_AT
         return Outcome("failed", f"{error} (gave up after {attempts} attempts)")
     return Outcome("queued", error)
 
+def withheld_share(row: Row) -> int | None:
+
+    # The one place that decides whether anything is being held back. A full
+    # share is not a restriction, so it is reported as no share at all.
+    raw = row.get("delivery_share")
+    return int(raw) if raw is not None and int(raw) < 100 else None
+
 def listing_view(row: Row) -> ListingView:
 
-    raw_share = row.get("delivery_share")
-    share = int(raw_share) if raw_share is not None and int(raw_share) < 100 else None
+    share = withheld_share(row)
 
     return ListingView(
         listing_id=(None if row.get("listing_id") is None else int(row["listing_id"])),
@@ -218,10 +224,21 @@ def listing_view(row: Row) -> ListingView:
         ),
     )
 
-def listing_actions(view: ListingView, notification_id: int) -> list[Action]:
+def checkout_for(conn: Conn, user_id: int, channel: str) -> str | None:
+
+    # The link has to suit the channel it is read in. Telegram gets the deep
+    # link, which asks the bot for a fresh token; anywhere else gets the
+    # checkout page and a token issued here, because a t.me link in WhatsApp
+    # walks the person into a Telegram bot instead of to the payment.
+    if channel == "telegram":
+        return upgrade_link()
+    return checkout_link(store.upgrade_token(conn, user_id))
+
+def listing_actions(
+    view: ListingView, notification_id: int, link: str | None = None
+) -> list[Action]:
 
     if view.share is not None and view.share < 100:
-        link = upgrade_link()
         return [Action(label="Get full access", url=link)] if link else []
     # Telegram deletes the message, so "Ignore" is honest there. WhatsApp does
     # not render this at all — see UNOFFERABLE in the whatsapp notifier — and
@@ -234,13 +251,15 @@ def listing_actions(view: ListingView, notification_id: int) -> list[Action]:
         )
     ]
 
-def alert_for(row: Row) -> Alert | None:
+def alert_for(row: Row, link: str | None = None) -> Alert | None:
 
     kind = ALERT_KINDS.get(str(row["kind"]))
     if kind != "listing":
         return None
     view = listing_view(row)
-    return Alert(kind=kind, listing=view, actions=listing_actions(view, int(row["id"])))
+    return Alert(
+        kind=kind, listing=view, actions=listing_actions(view, int(row["id"]), link)
+    )
 
 def digest_due(now: datetime | None = None) -> bool:
 
@@ -289,6 +308,9 @@ def drain(
             return "ok"
 
         notifiers: dict[str, Any] = {}
+        # One checkout link per person per run: issuing one per listing would
+        # replace the token in the message sent a moment ago.
+        links: dict[tuple[int, str], str | None] = {}
 
         gone: set[int] = set()
         status = "ok"
@@ -316,7 +338,9 @@ def drain(
                 status = "degraded"
                 continue
 
-            alert = alert_for(row)
+            if withheld_share(row) is not None and (user_id, channel) not in links:
+                links[(user_id, channel)] = checkout_for(conn, user_id, channel)
+            alert = alert_for(row, links.get((user_id, channel)))
             if alert is None:
                 store.mark_failed(
                     conn, int(row["id"]), f"nothing to render for kind {row['kind']}"
@@ -386,7 +410,6 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             stage.set("suppressed", True)
             return
         if digest_due():
-            link = upgrade_link()
             for row in store.daily_digests(conn):
                 notifier = build_notifier(str(row["channel"]))
                 if notifier is None or not row["address"]:
@@ -394,6 +417,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     continue
 
                 paid = bool(row["paid"])
+                share = int(row["delivery_share"] or 0)
 
                 # Three taps, each useful to the person and each an inbound
                 # message — the only thing that reopens WhatsApp's free window.
@@ -407,10 +431,17 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     Action(label="⏸️ Pause alerts", short="Pause alerts",
                            callback="pause"),
                 ]
-                # Only to somebody who is not paying: an upgrade button shown to
-                # a paying customer reads as a bill.
-                if link and not paid:
-                    actions.insert(0, Action(label="Upgrade today for full access", url=link))
+                # Only when something is actually being withheld. `paid` was the
+                # wrong test: a live trial is not paid but is not restricted
+                # either, so the button turned up next to a report that said
+                # nothing was missing — an upgrade prompt for access somebody
+                # already has.
+                if share < 100:
+                    link = checkout_for(conn, int(row["user_id"]), str(row["channel"]))
+                    if link:
+                        actions.insert(
+                            0, Action(label="Upgrade today for full access", url=link)
+                        )
 
                 result = notifier.send(
                     Recipient(
@@ -422,7 +453,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         kind="expiring",
                         text=digest_notice(
                             int(row["matched"]),
-                            int(row["delivery_share"] or 0),
+                            share,
                             avg_price=(
                                 None if row["avg_price"] is None else int(row["avg_price"])
                             ),
@@ -453,6 +484,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         notice_stage,
                         None if row.get("lapsed_share") is None
                         else int(row["lapsed_share"]),
+                        checkout_for(conn, int(row["user_id"]), str(row["channel"])),
                     ),
                 ),
             )
@@ -468,7 +500,8 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 )
 
 __all__ = [
-    "alert_for", "drain", "in_share", "interleave_by_user", "listing_view",
+    "alert_for", "checkout_for", "drain", "in_share", "interleave_by_user",
+    "listing_view",
     "notify_plan_changes",
-    "outcome_for", "queue_matches",
+    "outcome_for", "queue_matches", "withheld_share",
 ]

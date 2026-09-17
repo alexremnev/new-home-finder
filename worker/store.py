@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from dataclasses import asdict
 from typing import Any
 
@@ -86,6 +87,45 @@ def active_subscriptions(conn: Conn) -> list[Row]:
             """
         ).fetchall()
     )
+
+# A checkout link the worker can push. The site issues these for somebody who
+# has just asked (/pay), and an hour's life is right for that. A link inside the
+# 20:00 digest is different: it may well be tapped the next morning, and an
+# expired button is worse than none.
+PUSHED_TOKEN_MINUTES = 36 * 60
+
+# Reused while it has this much life left, so that the link in a message sent
+# ten minutes ago still works. Issuing a fresh one every run would kill it.
+KEEP_ALIVE_MINUTES = 60
+
+def upgrade_token(conn: Conn, user_id: int) -> str:
+
+    live = conn.execute(
+        """
+        SELECT token FROM user_tokens
+         WHERE user_id = %s AND purpose = 'upgrade' AND used_at IS NULL
+           AND expires_at > now() + make_interval(mins => %s)
+         ORDER BY expires_at DESC
+         LIMIT 1
+        """,
+        (user_id, KEEP_ALIVE_MINUTES),
+    ).fetchone()
+    if live:
+        return str(live["token"])
+
+    # base64url of 24 bytes, the same shape the site issues.
+    token = secrets.token_urlsafe(24)
+    conn.execute(
+        "DELETE FROM user_tokens WHERE user_id = %s AND purpose = 'upgrade'", (user_id,)
+    )
+    conn.execute(
+        """
+        INSERT INTO user_tokens (token, user_id, purpose, expires_at)
+        VALUES (%s, %s, 'upgrade', now() + make_interval(mins => %s))
+        """,
+        (token, user_id, PUSHED_TOKEN_MINUTES),
+    )
+    return token
 
 def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
 

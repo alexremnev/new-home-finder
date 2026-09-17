@@ -14,6 +14,7 @@ from worker.pipeline.outbox import (
     alert_for,
     digest_due,
     interleave_by_user,
+    checkout_for,
     listing_actions,
     listing_view,
     outcome_for,
@@ -76,15 +77,67 @@ def test_full_access_gets_an_ignore_button_keyed_to_the_notification() -> None:
         ("Ignore", "ignore:77", None)
     ]
 
-def test_a_restricted_listing_offers_payment_instead_of_dismissal(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "londonhomefinderbot")
-    alert = alert_for(row(delivery_share=20, plan_key="trial"))
+def test_a_restricted_listing_offers_payment_instead_of_dismissal() -> None:
+    alert = alert_for(
+        row(delivery_share=20, plan_key="trial"), "https://example.test/upgrade?t=abc"
+    )
     assert alert is not None
     assert [a.label for a in alert.actions] == ["Get full access"]
-    assert alert.actions[0].url == "https://t.me/londonhomefinderbot?start=pay"
+    assert alert.actions[0].url == "https://example.test/upgrade?t=abc"
     assert alert.actions[0].callback is None
+
+class FakeConn:
+
+    # Enough of a connection for upgrade_token: no live token, so it issues one.
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, params: Any = None) -> Any:
+        self.statements.append(" ".join(sql.split()))
+        self.params = params
+        return self
+
+    def fetchone(self) -> None:
+        return None
+
+def test_telegram_gets_the_deep_link_and_whatsapp_gets_the_checkout_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    # A t.me link sent to WhatsApp walks the person into a Telegram bot rather
+    # than to the payment, which is where the money stopped.
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "londonhomefinderbot")
+    monkeypatch.setenv("SITE_URL", "https://londonhomefinder.co.uk")
+
+    assert checkout_for(FakeConn(), 5, "telegram") == (
+        "https://t.me/londonhomefinderbot?start=pay"
+    )
+
+    link = checkout_for(FakeConn(), 5, "whatsapp")
+    assert link is not None
+    assert link.startswith("https://londonhomefinder.co.uk/upgrade?t=")
+    assert "t.me" not in link
+
+def test_a_pushed_checkout_token_outlives_the_evening() -> None:
+
+    # The digest goes out at 20:00 and is read whenever it is read. An hour,
+    # which is right for a link somebody just asked for, would leave a dead
+    # button in the message.
+    from worker.store import PUSHED_TOKEN_MINUTES
+
+    assert PUSHED_TOKEN_MINUTES >= 24 * 60
+
+def test_a_reusable_token_is_preferred_to_a_fresh_one() -> None:
+    from worker import store
+
+    class Existing(FakeConn):
+        def fetchone(self) -> dict[str, str]:
+            return {"token": "still-good"}
+
+    conn = Existing()
+    assert store.upgrade_token(conn, 5) == "still-good"
+    # Nothing was replaced: the link in the message sent a moment ago still works.
+    assert not any("INSERT" in sql for sql in conn.statements)
 
 def test_without_a_bot_username_there_is_no_broken_button(
     monkeypatch: pytest.MonkeyPatch,
@@ -182,6 +235,17 @@ def test_no_notice_promises_a_period_no_plan_sells() -> None:
         for plan in ("trial", "week", "month"):
             assert "2 weeks" not in notice_for(plan, moment, stage, 20)
             assert "2 more weeks" not in notice_for(plan, moment, stage, 20)
+
+def test_an_ended_plan_carries_a_link_that_actually_opens_checkout() -> None:
+
+    # The notice used to print a bare /upgrade with no token, and that page can
+    # only answer "that link has expired".
+    text = notice_for("month", None, "expired", 20, "https://x.test/upgrade?t=abc")
+    assert "Full access: https://x.test/upgrade?t=abc" in text
+    assert "/upgrade\n" not in text
+
+def test_without_a_link_the_notice_falls_back_to_the_command() -> None:
+    assert "/pay — full access" in notice_for("month", None, "expired", 20)
 
 def test_a_price_drop_reuses_the_listing_shape() -> None:
 

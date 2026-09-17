@@ -135,7 +135,16 @@ export async function POST(request: Request): Promise<NextResponse> {
     const reply = tap
       ? await pressed(number, tap)
       : await handle(number, message.text?.body ?? "");
-    if (reply) await sendWhatsApp(number, reply).catch(() => undefined);
+    if (reply) {
+      // Never swallowed. A tap that was understood but whose answer could not
+      // be delivered is indistinguishable, from the outside, from a button
+      // that does nothing — and the webhook still returns 200 either way.
+      const sent = await sendWhatsApp(number, reply).catch((error) => {
+        console.error("wa reply threw", { from: number.slice(-4), error: String(error) });
+        return false;
+      });
+      if (!sent) console.error("wa reply not delivered", { from: number.slice(-4) });
+    }
   }
 
   return ok();
@@ -288,8 +297,10 @@ async function pressed(number: string, id: string): Promise<string | null> {
     ].join("\n");
   }
 
-  // Unknown, but the tap has already reopened the window, which was most of
-  // the value. Saying nothing is better than saying something wrong.
+  // Unknown. The tap has already reopened the window, which was most of the
+  // value, but an id nobody handles means a button that visibly does nothing —
+  // worth a log line rather than a silent 200.
+  console.error("wa tap not handled", { id });
   return null;
 }
 

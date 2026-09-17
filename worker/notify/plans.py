@@ -11,8 +11,17 @@ def bot_username() -> str:
 
 def upgrade_link() -> str | None:
 
+    # Telegram only. Tapping it sends /pay to the bot, which issues a fresh
+    # checkout link — one tap, and never a stale token.
     name = bot_username()
     return f"https://t.me/{name}?start=pay" if name else None
+
+def checkout_link(token: str) -> str:
+
+    # Everywhere else. A t.me link in WhatsApp sends the person to a Telegram
+    # bot they may not even use, so the button has to carry the checkout page
+    # itself, and that page needs a token to know whose plan is being bought.
+    return f"{SITE}/upgrade?t={token}"
 
 KEPT = "Your filter is kept exactly as it is — paying turns the alerts back on with nothing to set up again."
 
@@ -29,7 +38,8 @@ def _falls_back_to(share: int | None) -> str:
     return f"After that you receive {share}% of what matches, until you renew."
 
 def expiring_notice(
-    plan: str, plan_until: datetime | None, stage: str, share: int | None = None
+    plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
+    link: str | None = None,
 ) -> str:
 
     what = "free trial" if plan == "trial" else "subscription"
@@ -50,11 +60,11 @@ def expiring_notice(
             "",
             KEPT,
             "",
-            "/pay — full access",
+            f"Full access: {link}" if link else "/pay — full access",
         ]
     )
 
-def expiry_notice(plan: str, share: int | None = None) -> str:
+def expiry_notice(plan: str, share: int | None = None, link: str | None = None) -> str:
 
     what = "free trial" if plan == "trial" else "subscription"
     if share is None or share >= 100:
@@ -70,20 +80,20 @@ def expiry_notice(plan: str, share: int | None = None) -> str:
             "",
             KEPT,
             "",
-            "/pay — full access",
-            f"{SITE}/upgrade",
+            f"Full access: {link}" if link else "/pay — full access",
             "",
             "/stop — delete my filter for good",
         ]
     )
 
 def notice_for(
-    plan: str, plan_until: datetime | None, stage: str, share: int | None = None
+    plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
+    link: str | None = None,
 ) -> str:
 
     if stage == "expired":
-        return expiry_notice(plan, share)
-    return expiring_notice(plan, plan_until, stage, share)
+        return expiry_notice(plan, share, link)
+    return expiring_notice(plan, plan_until, stage, share, link)
 
 def digest_notice(
     matched: int, share: int, *, avg_price: int | None = None, paid: bool = False
