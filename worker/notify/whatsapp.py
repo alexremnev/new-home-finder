@@ -29,6 +29,9 @@ GRAPH = "https://graph.facebook.com/{version}/{phone_id}/messages"
 VERSION = "v21.0"
 LIMIT = 4096
 
+# An image message's caption is shorter than a text message's body.
+CAPTION_LIMIT = 1024
+
 # WhatsApp allows a business-initiated free-form message only within this long
 # after the person's own last message. Outside it, an approved template.
 WINDOW = timedelta(hours=24)
@@ -163,6 +166,7 @@ class WhatsAppNotifier:
         template: str | None = None,
         language: str = "en",
         link_prefix: str | None = None,
+        image_header: bool = False,
         sender: Sender | None = None,
         version: str = VERSION,
     ) -> None:
@@ -171,6 +175,7 @@ class WhatsAppNotifier:
         self.template = template
         self.language = language
         self.link_prefix = (link_prefix or "").rstrip("/")
+        self.image_header = image_header
         self.sender = sender or _post
         self.version = version
 
@@ -183,6 +188,8 @@ class WhatsAppNotifier:
             os.environ.get("WA_TEMPLATE_NAME") or None,
             os.environ.get("WA_TEMPLATE_LANGUAGE") or "en",
             os.environ.get("WA_LINK_PREFIX") or None,
+            (os.environ.get("WA_TEMPLATE_IMAGE") or "").strip().lower()
+            in ("1", "true", "yes"),
         )
 
     def supports(self, kind: AlertKind) -> bool:
@@ -198,6 +205,22 @@ class WhatsAppNotifier:
             )
 
         if window_open(to.last_inbound):
+            listing = alert.listing
+            # A real image rather than a link preview. WhatsApp's own thumbnail
+            # is small and heavily compressed, and there is no setting for it;
+            # an image message arrives at full resolution with the text as its
+            # caption. Captions hold 1024 characters and an alert uses ~300.
+            if alert.kind == "listing" and listing is not None and listing.image_url:
+                return {
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "image",
+                    "image": {
+                        "link": listing.image_url,
+                        "caption": render(alert)[:CAPTION_LIMIT],
+                    },
+                }
+
             return {
                 "messaging_product": "whatsapp",
                 "to": number,
@@ -220,7 +243,21 @@ class WhatsAppNotifier:
             )
 
         listing = alert.listing
-        components: list[dict[str, Any]] = [
+        components: list[dict[str, Any]] = []
+
+        # Only when the approved template actually declares a header. Sending a
+        # component the template does not have is error 132000, and every alert
+        # would fail — so this is a setting rather than an inference, flipped
+        # once the new template is approved.
+        if self.image_header and listing.image_url:
+            components.append({
+                "type": "header",
+                "parameters": [
+                    {"type": "image", "image": {"link": listing.image_url}}
+                ],
+            })
+
+        components.append(
             {
                 "type": "body",
                 "parameters": [
@@ -228,7 +265,7 @@ class WhatsAppNotifier:
                     for value in template_params(listing)
                 ],
             }
-        ]
+        )
         if self.link_prefix and listing.listing_id is not None:
             # The button is a fixed prefix plus one variable, so the three
             # portals cannot each be linked directly. Ours redirects, which is

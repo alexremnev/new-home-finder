@@ -44,7 +44,7 @@ _LISTING_VIEW_COLUMNS = (
     "available_from", "furnished", "pets_allowed", "bills_included",
     "min_tenancy_months", "is_landlord_direct", "url",
 
-    "bathrooms", "deposit_pcm", "raw",
+    "bathrooms", "deposit_pcm", "raw", "image_url",
 )
 
 def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
@@ -365,6 +365,30 @@ def unparsed_messages(conn: Conn, *, source_key: str, limit: int = 500) -> list[
             """,
             (source_key, limit),
         ).fetchall()
+    )
+
+def listings_missing_image(conn: Conn, *, limit: int = 40) -> list[Row]:
+
+    return list(
+        conn.execute(
+            """
+            SELECT id, url FROM listings
+             WHERE image_checked_at IS NULL AND status = 'active'
+             ORDER BY first_seen_at DESC
+             LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+    )
+
+def set_listing_image(conn: Conn, listing_id: int, image_url: str | None) -> None:
+
+    # checked_at is written either way: "looked and found nothing" has to be
+    # distinguishable from "not looked at", or every pictureless listing is
+    # fetched again on every run, forever.
+    conn.execute(
+        "UPDATE listings SET image_url = %s, image_checked_at = now() WHERE id = %s",
+        (image_url, listing_id),
     )
 
 def mark_parsed(conn: Conn, message_id: int, listing_id: int) -> None:

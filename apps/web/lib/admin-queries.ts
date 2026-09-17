@@ -615,6 +615,7 @@ export type SubscriberRow = {
   plan: string;
   plan_until: string | null;
   channel: string | null;
+  last_inbound_at: string | null;
   districts: string | null;
   sent_window: number;
   sent_total: number;
@@ -633,6 +634,7 @@ export async function subscriberPage(
       `SELECT u.id AS user_id, u.status, u.plan,
               u.plan_until::text AS plan_until,
               uc.channel,
+              uc.last_inbound_at::text AS last_inbound_at,
               s.label AS districts,
               (SELECT count(*)::int FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent'

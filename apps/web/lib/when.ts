@@ -93,3 +93,17 @@ export const olderThan = (stamp: string | null, hours: number): boolean => {
   const when = parse(stamp);
   return when !== null && Date.now() - when.getTime() > hours * 3_600_000;
 };
+
+/**
+ * How much of WhatsApp's 24-hour service window is left, or null when there is
+ * none. Only an inbound message opens it — no API call can — so this is read
+ * from the last one we received.
+ */
+export function windowLeft(lastInbound: string | null): string | null {
+  const when = parse(lastInbound);
+  if (!when) return null;
+  const mins = 24 * 60 - (Date.now() - when.getTime()) / 60_000;
+  if (mins <= 0) return null;
+  if (mins < 60) return `${Math.round(mins)}m left`;
+  return `${Math.floor(mins / 60)}h left`;
+}

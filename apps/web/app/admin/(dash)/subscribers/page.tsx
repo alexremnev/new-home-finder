@@ -7,7 +7,7 @@ import {
 import { Metric, Rank, Series, Why } from "../charts";
 import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "../window";
 
-import { dayOf, since } from "@/lib/when";
+import { dayOf, since, windowLeft } from "@/lib/when";
 
 export const dynamic = "force-dynamic";
 
@@ -119,7 +119,7 @@ export default async function SubscribersPage({
       <div className="card">
         <h2>
           Everyone
-          <Why text="По 20 на страницу, новые сверху. Нажмите на номер — вся аналитика по человеку, смена плана, его платежи и история фильтров." />
+          <Why text="По 20 на страницу, новые сверху. Нажмите на номер — вся аналитика по человеку, смена плана, его платежи и история фильтров. «Free window» — сколько осталось от 24 часов, в которые WhatsApp разрешает писать свободным текстом с фотографией и не берёт денег. Окно открывает только входящее сообщение от человека; нажатие кнопки-ссылки его не продлевает." />
         </h2>
 
         <div className="scroll-x">
@@ -130,6 +130,7 @@ export default async function SubscribersPage({
                 <th>Account</th>
                 <th>Plan</th>
                 <th>Channel</th>
+                <th>Free window</th>
                 <th>Areas</th>
                 <th className="num">Last {win.label}</th>
                 <th className="num">All time</th>
@@ -158,6 +159,15 @@ export default async function SubscribersPage({
                       )}
                     </td>
                     <td>{row.channel ?? "—"}</td>
+                    <td>
+                      {row.channel !== "whatsapp" ? (
+                        "—"
+                      ) : windowLeft(row.last_inbound_at) ? (
+                        <span className="good">{windowLeft(row.last_inbound_at)}</span>
+                      ) : (
+                        <span className="metric-note">closed</span>
+                      )}
+                    </td>
                     <td style={{ maxWidth: "12rem" }}>{row.districts ?? "—"}</td>
                     <td className="num">{row.sent_window}</td>
                     <td className="num">{row.sent_total}</td>

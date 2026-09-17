@@ -33,6 +33,31 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
         raw=parsed.raw,
     )
 
+# Bounded on purpose: the job must not be able to stall behind a slow portal,
+# and whatever is left over is picked up on the next run five minutes later.
+IMAGE_BATCH = 40
+
+def fill_images(conn: Conn, run: Run, *, limit: int = IMAGE_BATCH) -> int:
+
+    from worker.ingest.photo import fetch_image
+
+    with run.stage("images") as stage:
+        pending = store.listings_missing_image(conn, limit=limit)
+        stage.set("pending", len(pending))
+        if not pending:
+            return 0
+
+        found = 0
+        for listing in pending:
+            image = fetch_image(str(listing["url"]))
+            store.set_listing_image(conn, int(listing["id"]), image)
+            if image:
+                found += 1
+            else:
+                stage.count("no_image")
+        stage.set("found", found)
+        return found
+
 def run_parse(
     conn: Conn, run: Run, *, source_key: str = "tg_feed", limit: int = BATCH,
     dry_run: bool = False,

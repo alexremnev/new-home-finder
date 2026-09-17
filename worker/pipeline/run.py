@@ -43,12 +43,17 @@ def run_job(
 
     if job == "ingest":
 
-        from worker.ingest.parse import run_parse
+        from worker.ingest.parse import fill_images, run_parse
         from worker.ingest.reader import collect
 
         source = source_key or DEFAULT_SOURCE
         asyncio.run(collect(conn, run, source_key=source, dry_run=cfg.dry_run))
         listing_ids = run_parse(conn, run, source_key=source, dry_run=cfg.dry_run)
+
+        # Before queueing, so a listing about to be sent already has its picture.
+        if not cfg.dry_run:
+            fill_images(conn, run)
+
         if listing_ids:
             queue_matches(conn, run, source_key=source, listing_ids=listing_ids)
 

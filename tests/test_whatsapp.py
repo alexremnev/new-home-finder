@@ -210,6 +210,80 @@ def test_without_a_listing_id_the_button_is_left_off_rather_than_broken() -> Non
     parts = calls[0]["payload"]["template"]["components"]
     assert [p["type"] for p in parts] == ["body"]
 
+PICTURE = "https://media.rightmove.co.uk/dir/crop/10:9/93k/1_0.jpeg"
+
+def test_inside_the_window_a_picture_is_sent_as_a_picture() -> None:
+    calls, sender = sent_through(messages=[{"id": "wamid.3"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=PICTURE)),
+    )
+    assert result.ok
+    body = calls[0]["payload"]
+
+    # Not a link preview: WhatsApp's own thumbnail is small and compressed, and
+    # there is no setting for it.
+    assert body["type"] == "image"
+    assert body["image"]["link"] == PICTURE
+    assert "🏠 *New listing spotted!*" in body["image"]["caption"]
+    assert "text" not in body
+
+def test_a_caption_is_cut_to_the_shorter_limit() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=PICTURE, address="x" * 4000)),
+    )
+    assert len(calls[0]["payload"]["image"]["caption"]) <= 1024
+
+def test_without_a_picture_it_falls_back_to_the_preview() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=None)),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+    assert calls[0]["payload"]["text"]["preview_url"] is True
+
+def test_a_template_gets_no_header_until_the_template_has_one() -> None:
+
+    # Sending a component the approved template does not declare is error
+    # 132000, and every alert would fail. So it is a setting, not a guess.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(image_url=PICTURE, listing_id=7)),
+    )
+    parts = calls[0]["payload"]["template"]["components"]
+    assert [p["type"] for p in parts] == ["body", "button"]
+
+def test_a_template_that_declares_a_header_gets_the_picture() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender, image_header=True).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(image_url=PICTURE, listing_id=7)),
+    )
+    parts = calls[0]["payload"]["template"]["components"]
+    assert [p["type"] for p in parts] == ["header", "body", "button"]
+    assert parts[0]["parameters"][0]["image"]["link"] == PICTURE
+
+def test_a_header_is_left_off_when_there_is_no_picture_to_put_in_it() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender, image_header=True).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(image_url=None, listing_id=7)),
+    )
+    parts = calls[0]["payload"]["template"]["components"]
+    assert [p["type"] for p in parts] == ["body", "button"]
+
+def test_the_image_header_is_off_unless_the_setting_says_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("WA_TEMPLATE_IMAGE", raising=False)
+    assert WhatsAppNotifier.from_env().image_header is False
+    monkeypatch.setenv("WA_TEMPLATE_IMAGE", "true")
+    assert WhatsAppNotifier.from_env().image_header is True
+
 def test_a_plan_notice_outside_the_window_waits_rather_than_being_refused() -> None:
     result = notifier().send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),

@@ -26,6 +26,9 @@ class ListingView(BaseModel):
     # Needed by any channel that cannot link to three portals directly and has
     # to route through ours. Optional so a view can still be built by hand.
     listing_id: int | None = None
+    # The portal's own og:image. A channel that cannot make a good preview sends
+    # this as a real image instead; Telegram ignores it and previews the link.
+    image_url: str | None = None
     price_pcm: int
     bedrooms: int
     property_type: str | None = None

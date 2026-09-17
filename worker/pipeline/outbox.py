@@ -185,6 +185,7 @@ def listing_view(row: Row) -> ListingView:
 
     return ListingView(
         listing_id=(None if row.get("listing_id") is None else int(row["listing_id"])),
+        image_url=row.get("image_url"),
         price_pcm=int(row["price_pcm"]),
         bedrooms=int(row["bedrooms"]),
         property_type=row["property_type"],
