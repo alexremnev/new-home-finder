@@ -85,11 +85,39 @@ def notice_for(
         return expiry_notice(plan, share)
     return expiring_notice(plan, plan_until, stage, share)
 
-def withheld_notice(matched: int, share: int) -> str:
+def digest_notice(
+    matched: int, share: int, *, avg_price: int | None = None, paid: bool = False
+) -> str:
 
     listings = "listing" if matched == 1 else "listings"
-    missing = 100 - share
-    return (
-        f"🔒 {matched} new {listings} today — you're missing {missing}%! "
-        "Upgrade now to unlock instant notifications."
+    price = (
+        f"💷 Average rent in what matched: £{avg_price:,}/month"
+        if avg_price
+        else None
+    )
+
+    if matched == 0:
+        # A quiet day is worth saying out loud: silence is indistinguishable
+        # from a broken bot, and the usual cause is a filter that is too tight.
+        return "\n".join(
+            [
+                "🔔 Nothing matched your filter today.",
+                "",
+                "Quiet days happen. If it stays quiet, a wider rent range or one "
+                "more area usually helps — /update to change it.",
+            ]
+        )
+
+    if paid or share >= 100:
+        return "\n".join(
+            [f"🔔 {matched} new {listings} matched your filter today."]
+            + ([price] if price else [])
+        )
+
+    return "\n".join(
+        [
+            f"🔒 {matched} new {listings} today — you're missing {100 - share}%! "
+            "Upgrade now to unlock instant notifications.",
+        ]
+        + ([""] + [price] if price else [])
     )

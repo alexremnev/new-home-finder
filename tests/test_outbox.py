@@ -8,7 +8,7 @@ import pytest
 
 from worker.contracts.notify import NOTIFIERS, SendResult, build_notifier
 from worker.notify.telegram import render_listing
-from worker.notify.plans import notice_for, withheld_notice
+from worker.notify.plans import digest_notice, notice_for
 from worker.pipeline.outbox import (
     MAX_ATTEMPTS,
     alert_for,
@@ -117,14 +117,44 @@ def test_the_digest_hour_is_london_not_utc() -> None:
     assert digest_due(datetime(2026, 9, 15, 18, 30, tzinfo=timezone.utc)) is False
 
 def test_the_digest_counts_what_matched_and_names_what_is_missing() -> None:
-    assert withheld_notice(12, 20) == (
+    assert digest_notice(12, 20) == (
         "🔒 12 new listings today — you're missing 80%! "
         "Upgrade now to unlock instant notifications."
     )
 
 def test_the_digest_agrees_with_itself_about_one_listing() -> None:
-    assert "1 new listing today" in withheld_notice(1, 20)
-    assert "1 new listings" not in withheld_notice(1, 20)
+    assert "1 new listing today" in digest_notice(1, 20)
+    assert "1 new listings" not in digest_notice(1, 20)
+
+def test_the_digest_names_the_average_rent_when_there_is_one() -> None:
+    text = digest_notice(12, 20, avg_price=1840)
+    assert "💷 Average rent in what matched: £1,840/month" in text
+    assert "missing 80%" in text
+
+def test_a_paying_subscriber_is_not_told_what_they_are_missing() -> None:
+
+    # They are missing nothing, and an upgrade line to somebody who pays reads
+    # as a bill.
+    text = digest_notice(12, 100, avg_price=1840, paid=True)
+    assert text.startswith("🔔 12 new listings matched your filter today.")
+    assert "missing" not in text
+    assert "Upgrade" not in text
+
+def test_full_access_on_a_trial_is_told_the_same_thing() -> None:
+    assert "missing" not in digest_notice(5, 100)
+
+def test_a_quiet_day_says_so_rather_than_saying_nothing() -> None:
+
+    # Silence is indistinguishable from a broken bot, and the usual cause is a
+    # filter nobody can match.
+    text = digest_notice(0, 20)
+    assert "Nothing matched your filter today." in text
+    assert "/update" in text
+    assert "missing" not in text
+
+def test_a_quiet_day_names_no_average_it_cannot_have() -> None:
+    assert "Average" not in digest_notice(0, 20, avg_price=None)
+    assert "£" not in digest_notice(0, 20)
 
 def test_an_ended_plan_says_what_arrives_instead_of_claiming_silence() -> None:
     text = notice_for("month", datetime(2026, 9, 15, 12, tzinfo=timezone.utc), "expired", 20)

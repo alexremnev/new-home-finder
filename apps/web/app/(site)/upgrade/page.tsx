@@ -70,7 +70,6 @@ export default async function UpgradePage({
                     ? "Every matching listing, not a share"
                     : `Every matching listing, not ${share}%`}
                 </li>
-                <li>Up to {plan.max_districts} areas</li>
                 <li>
                   {plan.duration_days
                     ? `${plan.duration_days} days from today`

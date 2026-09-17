@@ -233,7 +233,7 @@ export function SubscribeForm({
         </datalist>
 
         <p className="hint">
-          Start typing and pick from the list. Up to {maxDistricts} areas.
+          Start typing and pick from the list.
         </p>
 
         {chosen.length > 0 && (

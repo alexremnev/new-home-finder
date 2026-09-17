@@ -154,34 +154,46 @@ def queue_notifications(conn: Conn, rows: list[dict[str, Any]]) -> set[tuple[int
     ).fetchall()
     return {(int(r["user_id"]), int(r["listing_id"])) for r in written}
 
-def withheld_digests(conn: Conn, *, limit: int = 200) -> list[Row]:
+def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
 
     return list(
         conn.execute(
             """
             WITH due AS (
-                SELECT n.user_id,
-                       count(*) FILTER (
+                SELECT s.user_id,
+                       count(n.id) FILTER (WHERE n.kind = 'new_listing') AS matched,
+                       count(n.id) FILTER (WHERE n.status = 'sent')      AS sent,
+                       count(n.id) FILTER (
                            WHERE n.status = 'skipped' AND n.error = 'share'
                        ) AS withheld,
-                       count(*) AS matched
-                  FROM notifications n
-                  JOIN users u ON u.id = n.user_id AND u.status = 'active'
-                 WHERE n.kind = 'new_listing'
-                   AND n.created_at > now() - interval '24 hours'
-                 GROUP BY n.user_id
-                HAVING count(*) FILTER (
-                           WHERE n.status = 'skipped' AND n.error = 'share'
-                       ) > 0
+                       round(avg(l.price_pcm))::int AS avg_price
+                  FROM subscriptions s
+                  JOIN users u ON u.id = s.user_id AND u.status = 'active'
+                  -- LEFT, because a day with no match is still a day worth
+                  -- reporting: silence is the signal that a filter is too tight.
+                  LEFT JOIN notifications n
+                         ON n.user_id = s.user_id
+                        AND n.kind = 'new_listing'
+                        AND n.created_at > now() - interval '24 hours'
+                  LEFT JOIN listings l ON l.id = n.listing_id
+                 WHERE s.active
+                 GROUP BY s.user_id
+                 ORDER BY s.user_id
                  LIMIT %s
             ),
             claimed AS (
                 INSERT INTO daily_digests (user_id, day, withheld)
                 SELECT user_id, current_date, withheld FROM due
                 ON CONFLICT (user_id, day) DO NOTHING
-                RETURNING user_id, withheld
+                RETURNING user_id
             )
-            SELECT c.user_id, c.withheld, d.matched, uc.channel, uc.address,
+            SELECT d.user_id, d.matched, d.sent, d.withheld, d.avg_price,
+                   uc.channel, uc.address, uc.last_inbound_at,
+                   -- Paid means a plan that costs money and has not run out.
+                   -- A live trial is not paid: it is the thing the button is
+                   -- there to convert.
+                   (p.price_pence > 0
+                    AND (u.plan_until IS NULL OR u.plan_until > now())) AS paid,
                    CASE
                        WHEN u.plan_until IS NULL OR u.plan_until > now()
                            THEN p.delivery_share
@@ -194,6 +206,7 @@ def withheld_digests(conn: Conn, *, limit: int = 200) -> list[Row]:
               LEFT JOIN plan_settings ps ON ps.id
               LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
               JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
+             ORDER BY d.user_id
             """,
             (limit,),
         ).fetchall()

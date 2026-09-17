@@ -164,7 +164,6 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   const share = await lapsedShare().catch(() => null);
   const lines = [
     planLine(account.plan_name, account.plan_until, true),
-    `Districts you can watch now: ${account.max_districts}`,
   ];
   if (share !== null && share < 100) {
     lines.push(
@@ -178,10 +177,7 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   }
   for (const plan of plans) {
     const span = plan.duration_days ? `${plan.duration_days} days` : "no time limit";
-    lines.push(
-      `${plan.display_name} — ${money(plan.price_pence)} for ${span}: ` +
-        `${plan.max_districts} districts`,
-    );
+    lines.push(`${plan.display_name} — ${money(plan.price_pence)} for ${span}`);
   }
   lines.push("", token ? `${siteUrl()}/upgrade?t=${token}` : `${siteUrl()}/upgrade`);
   if (account.payment_ref) {

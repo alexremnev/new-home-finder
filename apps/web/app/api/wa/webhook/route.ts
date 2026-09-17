@@ -28,7 +28,17 @@ export async function GET(request: Request): Promise<Response> {
 
 type Message = { from?: string; type?: string; text?: { body?: string } };
 
-const TOKEN = /\b([A-Za-z0-9_-]{16,})\b/;
+// No word boundaries. newToken() is base64url, whose alphabet includes "-",
+// which is not a word character — so \b chopped a leading or trailing hyphen off
+// roughly one token in thirty and claimed the wrong one. The token is 32
+// characters; the longest run of its alphabet in the message is it.
+const TOKEN_RUN = /[A-Za-z0-9_-]{20,}/g;
+
+function tokenIn(text: string): string | undefined {
+  const runs = text.match(TOKEN_RUN);
+  if (!runs) return undefined;
+  return runs.reduce((longest, one) => (one.length > longest.length ? one : longest));
+}
 
 export async function POST(request: Request): Promise<NextResponse> {
   // Meta signs the body with the app secret. Without checking it, anyone who
@@ -49,6 +59,8 @@ export async function POST(request: Request): Promise<NextResponse> {
   } catch {
     return ok();
   }
+
+  console.log("wa webhook", { messages: messages.length });
 
   for (const message of messages) {
     const number = (message.from ?? "").replace(/\D/g, "");
@@ -71,18 +83,30 @@ export async function POST(request: Request): Promise<NextResponse> {
 
 async function signed(request: Request, raw: string): Promise<boolean> {
   const secret = process.env.WA_APP_SECRET;
-  if (!secret) return false;
+  if (!secret) {
+    // Silently refusing every delivery is indistinguishable from Meta never
+    // calling, which is a bad hour to spend. Say which it is.
+    console.error("wa webhook refused: WA_APP_SECRET is not set in this deployment");
+    return false;
+  }
   const header = request.headers.get("x-hub-signature-256") ?? "";
-  if (!header.startsWith("sha256=")) return false;
+  if (!header.startsWith("sha256=")) {
+    console.error("wa webhook refused: no x-hub-signature-256 header", {
+      headers: [...request.headers.keys()].join(","),
+    });
+    return false;
+  }
 
   const { createHmac, timingSafeEqual } = await import("node:crypto");
   const expected = createHmac("sha256", secret).update(raw).digest();
   const given = Buffer.from(header.slice("sha256=".length), "hex");
-  return given.length === expected.length && timingSafeEqual(given, expected);
+  const same = given.length === expected.length && timingSafeEqual(given, expected);
+  if (!same) console.error("wa webhook refused: signature does not match WA_APP_SECRET");
+  return same;
 }
 
 async function handle(number: string, text: string): Promise<string | null> {
-  const token = TOKEN.exec(text)?.[1];
+  const token = tokenIn(text);
   if (!token) {
     const known = await query<{ id: string }>(
       `SELECT user_id AS id FROM user_channels

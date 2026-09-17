@@ -18,7 +18,7 @@ from worker.contracts.notify import (
     SendResult,
 )
 from worker.notify import build_notifier
-from worker.notify.plans import notice_for, upgrade_link, withheld_notice
+from worker.notify.plans import digest_notice, notice_for, upgrade_link
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -376,20 +376,34 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             return
         if digest_due():
             link = upgrade_link()
-            for row in store.withheld_digests(conn):
+            for row in store.daily_digests(conn):
                 notifier = build_notifier(str(row["channel"]))
                 if notifier is None or not row["address"]:
                     stage.count("digest_unreachable")
                     continue
+
+                paid = bool(row["paid"])
                 actions = [Action(label="Pause all notifications", callback="pause")]
-                if link:
+                # Only to somebody who is not paying: an upgrade button shown to
+                # a paying customer reads as a bill.
+                if link and not paid:
                     actions.insert(0, Action(label="Upgrade today for full access", url=link))
+
                 result = notifier.send(
-                    Recipient(channel=str(row["channel"]), address=str(row["address"])),
+                    Recipient(
+                        channel=str(row["channel"]),
+                        address=str(row["address"]),
+                        last_inbound=row.get("last_inbound_at"),
+                    ),
                     Alert(
                         kind="expiring",
-                        text=withheld_notice(
-                            int(row["matched"]), int(row["delivery_share"] or 0)
+                        text=digest_notice(
+                            int(row["matched"]),
+                            int(row["delivery_share"] or 0),
+                            avg_price=(
+                                None if row["avg_price"] is None else int(row["avg_price"])
+                            ),
+                            paid=paid,
                         ),
                         actions=actions,
                     ),
