@@ -11,10 +11,12 @@ from worker.contracts.notify import Action, Alert, ListingView, Recipient
 from worker.notify.telegram import render_listing as render_telegram
 from worker.notify.whatsapp import (
     WhatsAppNotifier,
+    configured,
     digits,
     render,
     render_listing,
     template_params,
+    upload_image,
     window_open,
 )
 
@@ -212,6 +214,60 @@ def test_without_a_listing_id_the_button_is_left_off_rather_than_broken() -> Non
 
 PICTURE = "https://media.rightmove.co.uk/dir/crop/10:9/93k/1_0.jpeg"
 
+MEDIA_ID = "1234567890123456"
+
+def test_the_uploaded_photograph_wins_over_the_portal_url() -> None:
+
+    # The feed's own photograph exists for every portal; og:image only for the
+    # ones that answer. So when both are present, the uploaded one is used.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=PICTURE, wa_media_id=MEDIA_ID)),
+    )
+    body = calls[0]["payload"]
+    assert body["type"] == "image"
+    assert body["image"] == {"id": MEDIA_ID, "caption": body["image"]["caption"]}
+    assert "link" not in body["image"]
+
+def test_the_portal_url_is_the_fallback_when_there_is_no_upload() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=PICTURE, wa_media_id=None)),
+    )
+    assert calls[0]["payload"]["image"]["link"] == PICTURE
+
+def test_a_template_header_takes_the_upload_too() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender, image_header=True).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="listing", listing=view(wa_media_id=MEDIA_ID, listing_id=7)),
+    )
+    header = calls[0]["payload"]["template"]["components"][0]
+    assert header["type"] == "header"
+    assert header["parameters"][0]["image"] == {"id": MEDIA_ID}
+
+def test_with_neither_a_photograph_nor_a_url_it_is_plain_text() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=None, wa_media_id=None)),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+
+def test_an_upload_needs_credentials_and_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("WA_PHONE_NUMBER_ID", raising=False)
+    monkeypatch.delenv("WA_ACCESS_TOKEN", raising=False)
+    assert upload_image(b"abc") is None
+    assert configured() is False
+
+    monkeypatch.setenv("WA_PHONE_NUMBER_ID", "1")
+    monkeypatch.setenv("WA_ACCESS_TOKEN", "t")
+    assert configured() is True
+    # Credentials but nothing to send is still nothing to do.
+    assert upload_image(b"") is None
+
 def test_inside_the_window_a_picture_is_sent_as_a_picture() -> None:
     calls, sender = sent_through(messages=[{"id": "wamid.3"}])
     result = notifier(sender).send(
@@ -228,13 +284,19 @@ def test_inside_the_window_a_picture_is_sent_as_a_picture() -> None:
     assert "🏠 *New listing spotted!*" in body["image"]["caption"]
     assert "text" not in body
 
-def test_a_caption_is_cut_to_the_shorter_limit() -> None:
+def test_a_message_too_long_for_a_caption_keeps_its_words_not_its_picture() -> None:
+
+    # Cutting the message to fit the picture would lose the price or the link.
+    # The picture is the part that can be spared.
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=PICTURE, address="x" * 4000)),
     )
-    assert len(calls[0]["payload"]["image"]["caption"]) <= 1024
+    body = calls[0]["payload"]
+    assert body["type"] == "text"
+    assert len(body["text"]["body"]) > 1024
+    assert "x" * 100 in body["text"]["body"]
 
 def test_without_a_picture_it_falls_back_to_the_preview() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
@@ -283,6 +345,65 @@ def test_the_image_header_is_off_unless_the_setting_says_otherwise(
     assert WhatsAppNotifier.from_env().image_header is False
     monkeypatch.setenv("WA_TEMPLATE_IMAGE", "true")
     assert WhatsAppNotifier.from_env().image_header is True
+
+def test_inside_the_window_taps_become_reply_buttons() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expiring", text="🔔 12 new listings matched your filter today.",
+              actions=[
+                  Action(label="Upgrade today for full access", url="https://t.me/b?start=pay"),
+                  Action(label="✏️ Change my search", short="Change search", callback="change"),
+                  Action(label="🏠 I found a place", short="Found a place", callback="found"),
+                  Action(label="⏸️ Pause alerts", short="Pause alerts", callback="pause"),
+              ]),
+    )
+    assert result.ok
+    body = calls[0]["payload"]
+    assert body["type"] == "interactive"
+    assert body["interactive"]["type"] == "button"
+
+    buttons = body["interactive"]["action"]["buttons"]
+    # Three is the ceiling WhatsApp imposes, and the url is not one of them.
+    assert len(buttons) == 3
+    assert [b["reply"]["id"] for b in buttons] == ["change", "found", "pause"]
+    assert [b["reply"]["title"] for b in buttons] == [
+        "Change search", "Found a place", "Pause alerts",
+    ]
+    assert all(len(b["reply"]["title"]) <= 20 for b in buttons)
+    # The link still reaches the person, in the text.
+    assert "https://t.me/b?start=pay" in body["interactive"]["body"]["text"]
+
+def test_a_long_label_is_cut_to_what_a_button_holds() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expiring", text="x", actions=[
+            Action(label="Pause absolutely everything right now", callback="pause"),
+        ]),
+    )
+    title = calls[0]["payload"]["interactive"]["action"]["buttons"][0]["reply"]["title"]
+    assert len(title) == 20, title
+
+def test_a_message_with_no_taps_stays_plain_text() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expiring", text="Your plan ends tomorrow."),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+
+def test_a_listing_with_a_picture_is_still_a_picture_not_a_button_message() -> None:
+
+    # The Ignore action is a callback, but a listing's picture matters more than
+    # a button: an image message cannot carry reply buttons.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=PICTURE),
+              actions=[Action(label="Ignore", callback="ignore:7")]),
+    )
+    assert calls[0]["payload"]["type"] == "image"
 
 def test_a_plan_notice_outside_the_window_waits_rather_than_being_refused() -> None:
     result = notifier().send(

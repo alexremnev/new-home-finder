@@ -17,6 +17,11 @@ Conn = psycopg.Connection[Row]
 
 BATCH = 300
 
+# Photographs per run. Each is a download from Telegram and an upload to
+# WhatsApp — about 200KB of traffic — and ingest runs every two minutes, so this
+# is roughly the rate at which listings arrive.
+PHOTO_BATCH = 10
+
 WHITESPACE = re.compile(r"\s+")
 
 MEDIA_KINDS = (
@@ -70,6 +75,53 @@ def urls_of(message: Any) -> list[str]:
         found.append(match.group(0).rstrip(").,;"))
 
     return list(dict.fromkeys(found))
+
+async def attach_photos(
+    conn: Conn,
+    client: Any,
+    entity: Any,
+    stage: Any,
+    source_key: str,
+    reader: str,
+) -> int:
+
+    # The photograph the feed sent, handed to WhatsApp and remembered by the id
+    # it gives back. Done here because this is the one place with an open
+    # Telegram client, and driven from the database so that messages stored
+    # before any of this existed are picked up too.
+    from worker.notify.whatsapp import configured, upload_image
+
+    if not configured():
+        stage.count("photos_skipped")
+        return 0
+
+    pending = store.messages_missing_photo(
+        conn, source_key=source_key, reader=reader, limit=PHOTO_BATCH
+    )
+    if not pending:
+        return 0
+
+    kept = 0
+    for row in pending:
+        media_id = None
+        try:
+            message = await client.get_messages(entity, ids=int(row["external_id"]))
+            if message is not None and getattr(message, "photo", None):
+                blob = await client.download_media(message, file=bytes)
+                if blob:
+                    media_id = upload_image(blob)
+        except Exception as exc:
+            # A photograph nobody can fetch is not a reason to stop reading a
+            # feed. It is marked as looked at so it is not tried forever.
+            stage.log("warn", f"photo {row['external_id']}: {type(exc).__name__}: {exc}")
+
+        store.set_message_photo(conn, int(row["id"]), media_id)
+        if media_id:
+            kept += 1
+
+    stage.count("photos_kept", kept)
+    stage.count("photos_missing", len(pending) - kept)
+    return kept
 
 def media_of(message: Any) -> list[str]:
     return [kind for kind in MEDIA_KINDS if getattr(message, kind, None)]
@@ -210,6 +262,8 @@ async def collect(
                 written = store.store_source_messages(conn, batch)
                 stored += written
                 stage.count("already_known", len(batch) - written)
+
+                await attach_photos(conn, client, entity, stage, source_key, reader)
 
                 if highest > cursor:
                     store.set_ingest_cursor(

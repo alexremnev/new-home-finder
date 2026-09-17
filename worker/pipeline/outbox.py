@@ -186,6 +186,7 @@ def listing_view(row: Row) -> ListingView:
     return ListingView(
         listing_id=(None if row.get("listing_id") is None else int(row["listing_id"])),
         image_url=row.get("image_url"),
+        wa_media_id=row.get("wa_media_id"),
         price_pcm=int(row["price_pcm"]),
         bedrooms=int(row["bedrooms"]),
         property_type=row["property_type"],
@@ -384,7 +385,19 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     continue
 
                 paid = bool(row["paid"])
-                actions = [Action(label="Pause all notifications", callback="pause")]
+
+                # Three taps, each useful to the person and each an inbound
+                # message — the only thing that reopens WhatsApp's free window.
+                # Asking "did you find one?" is worth answering, which is why it
+                # gets tapped; a button that only serves us would not be.
+                actions = [
+                    Action(label="✏️ Change my search", short="Change search",
+                           callback="change"),
+                    Action(label="🏠 I found a place", short="Found a place",
+                           callback="found"),
+                    Action(label="⏸️ Pause alerts", short="Pause alerts",
+                           callback="pause"),
+                ]
                 # Only to somebody who is not paying: an upgrade button shown to
                 # a paying customer reads as a bill.
                 if link and not paid:

@@ -3,7 +3,15 @@ import { NextResponse } from "next/server";
 import type { Criteria } from "@/lib/criteria";
 import { beginSubscription } from "@/lib/activate";
 import { query, transaction } from "@/lib/db";
-import { alreadyOnAnotherChannel, criteriaSet } from "@/lib/messages";
+import {
+  FOUND_A_PLACE,
+  NOTHING_TO_PAUSE,
+  PAUSED,
+  alreadyOnAnotherChannel,
+  criteriaSet,
+} from "@/lib/messages";
+import { siteUrl } from "@/lib/plans";
+import { stopFilter } from "@/lib/stopping";
 import { sendWhatsApp } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
@@ -26,7 +34,21 @@ export async function GET(request: Request): Promise<Response> {
   return new Response("no", { status: 403 });
 }
 
-type Message = { from?: string; type?: string; text?: { body?: string } };
+type Message = {
+  from?: string;
+  type?: string;
+  text?: { body?: string };
+  // A free-form message's reply button.
+  interactive?: { type?: string; button_reply?: { id?: string; title?: string } };
+  // A template's quick reply.
+  button?: { payload?: string; text?: string };
+};
+
+function tapped(message: Message): string | null {
+  return (
+    message.interactive?.button_reply?.id ?? message.button?.payload ?? null
+  );
+}
 
 // No word boundaries. newToken() is base64url, whose alphabet includes "-",
 // which is not a word character — so \b chopped a leading or trailing hyphen off
@@ -80,7 +102,12 @@ export async function POST(request: Request): Promise<NextResponse> {
       [number],
     );
 
-    const reply = await handle(number, message.text?.body ?? "");
+    // A tap is the only thing that reopens the free window, so it is handled
+    // before anything else and always answered.
+    const tap = tapped(message);
+    const reply = tap
+      ? await pressed(number, tap)
+      : await handle(number, message.text?.body ?? "");
     if (reply) await sendWhatsApp(number, reply).catch(() => undefined);
   }
 
@@ -109,6 +136,34 @@ async function signed(request: Request, raw: string): Promise<boolean> {
   const same = given.length === expected.length && timingSafeEqual(given, expected);
   if (!same) console.error("wa webhook refused: signature does not match WA_APP_SECRET");
   return same;
+}
+
+async function pressed(number: string, id: string): Promise<string | null> {
+  console.log("wa tap", { from: number.slice(-4), id });
+
+  if (id === "pause" || id === "found") {
+    const stopped = await stopFilter(
+      "whatsapp",
+      number,
+      id === "found" ? "found_a_place" : "paused",
+    );
+    if (!stopped) return NOTHING_TO_PAUSE;
+    return id === "found" ? FOUND_A_PLACE : PAUSED;
+  }
+
+  if (id === "change") {
+    return [
+      "Change your search here — it takes a minute:",
+      "",
+      `${siteUrl()}/`,
+      "",
+      "Saving replaces this filter. Until you do, it carries on as it is.",
+    ].join("\n");
+  }
+
+  // Unknown, but the tap has already reopened the window, which was most of
+  // the value. Saying nothing is better than saying something wrong.
+  return null;
 }
 
 async function handle(number: string, text: string): Promise<string | null> {

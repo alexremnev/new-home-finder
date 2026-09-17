@@ -18,8 +18,15 @@ class Recipient(BaseModel):
 
 class Action(BaseModel):
     label: str
+    # WhatsApp allows 20 characters on a reply button and truncates silently.
+    # Telegram has no such limit, so the full label stays the default and this
+    # is what tight channels use.
+    short: str | None = None
     url: str | None = None
     callback: str | None = None
+
+    def button(self, limit: int) -> str:
+        return (self.short or self.label)[:limit]
 
 class ListingView(BaseModel):
 
@@ -29,6 +36,9 @@ class ListingView(BaseModel):
     # The portal's own og:image. A channel that cannot make a good preview sends
     # this as a real image instead; Telegram ignores it and previews the link.
     image_url: str | None = None
+    # What WhatsApp calls the photograph from the source message, once it has
+    # been handed over. Preferred over image_url: it works for every portal.
+    wa_media_id: str | None = None
     price_pcm: int
     bedrooms: int
     property_type: str | None = None

@@ -4,6 +4,9 @@ import type Stripe from "stripe";
 import { transaction } from "@/lib/db";
 import { stripeClient } from "@/lib/stripe";
 
+import { paymentReceived } from "@/lib/messages";
+import { tell } from "@/lib/reach";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -46,6 +49,8 @@ export async function POST(request: Request): Promise<NextResponse> {
     return NextResponse.json({ ok: true, error: "incomplete metadata" });
   }
 
+  let told: { plan: string; until: Date | null } | null = null;
+
   try {
     await transaction(async (run) => {
       const plans = await run(
@@ -81,6 +86,17 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
 
       await run(`DELETE FROM user_tokens WHERE user_id = $1 AND purpose = 'upgrade'`, [userId]);
+
+      const now = await run(
+        `SELECT u.plan_until, coalesce(p.display_name, u.plan) AS plan_name
+           FROM users u LEFT JOIN plans p ON p.key = u.plan
+          WHERE u.id = $1`,
+        [userId],
+      );
+      told = {
+        plan: String(now[0]?.plan_name ?? planKey),
+        until: (now[0]?.plan_until as Date | null) ?? null,
+      };
     });
   } catch (error) {
     const message = String(error);
@@ -91,6 +107,19 @@ export async function POST(request: Request): Promise<NextResponse> {
     console.error("stripe grant failed", { session: session.id, error: message });
 
     return NextResponse.json({ error: "could not grant the plan" }, { status: 500 });
+  }
+
+  // After the transaction, never inside it: a chat app being slow or down must
+  // not roll back a payment that has already cleared.
+  if (told) {
+    const said: { plan: string; until: Date | null } = told;
+    await tell(userId, paymentReceived(said.plan, said.until)).catch((error) => {
+      console.error("payment granted but not announced", {
+        user: userId,
+        error: String(error),
+      });
+      return false;
+    });
   }
 
   return NextResponse.json({ ok: true });

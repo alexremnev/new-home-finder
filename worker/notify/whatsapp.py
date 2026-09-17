@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import urllib.error
 import urllib.request
 from collections.abc import Callable
@@ -31,6 +32,13 @@ LIMIT = 4096
 
 # An image message's caption is shorter than a text message's body.
 CAPTION_LIMIT = 1024
+
+# Reply buttons: at most three, twenty characters each, and only inside the
+# 24-hour window. They cost nothing and need no template — and a tap is an
+# inbound message, which is the only thing that reopens the window.
+REPLY_BUTTONS = 3
+BUTTON_CHARS = 20
+INTERACTIVE_BODY = 1024
 
 # WhatsApp allows a business-initiated free-form message only within this long
 # after the person's own last message. Outside it, an approved template.
@@ -121,6 +129,17 @@ def template_params(view: ListingView) -> list[str]:
         ),
     ]
 
+def _picture(view: ListingView) -> dict[str, str] | None:
+
+    # An uploaded photograph wins over the portal's url: it is the picture the
+    # feed actually sent, it exists for every portal, and WhatsApp already has
+    # it so nobody's server is asked for it again.
+    if view.wa_media_id:
+        return {"id": view.wa_media_id}
+    if view.image_url:
+        return {"link": view.image_url}
+    return None
+
 def window_open(last_inbound: datetime | None, *, now: datetime | None = None) -> bool:
 
     if last_inbound is None:
@@ -150,6 +169,76 @@ def _post(
             return {"error": {"message": f"{exc.code} {exc.reason}", "code": exc.code}}
     except urllib.error.URLError as exc:
         return {"error": {"message": f"unreachable: {exc.reason}", "code": 0}}
+
+MEDIA = "https://graph.facebook.com/{version}/{phone_id}/media"
+
+def _multipart(blob: bytes, boundary: str, *, kind: str, name: str) -> bytes:
+
+    def field(key: str, value: str) -> bytes:
+        return (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="{key}"\r\n\r\n'
+            f"{value}\r\n"
+        ).encode()
+
+    return b"".join([
+        field("messaging_product", "whatsapp"),
+        field("type", kind),
+        (
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{name}"\r\n'
+            f"Content-Type: {kind}\r\n\r\n"
+        ).encode(),
+        blob,
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+
+def upload_image(
+    blob: bytes,
+    *,
+    phone_id: str | None = None,
+    token: str | None = None,
+    kind: str = "image/jpeg",
+    version: str = VERSION,
+    timeout: float = 30.0,
+) -> str | None:
+
+    # Hands a photograph to WhatsApp and gets back an id, good for about 30
+    # days. Returns None on anything at all: a listing without a picture is a
+    # smaller problem than a run that stops.
+    phone_id = phone_id or os.environ.get("WA_PHONE_NUMBER_ID") or ""
+    token = token or os.environ.get("WA_ACCESS_TOKEN") or ""
+    if not phone_id or not token or not blob:
+        return None
+
+    boundary = "----lhf" + secrets.token_hex(12)
+    request = urllib.request.Request(
+        MEDIA.format(version=version, phone_id=phone_id),
+        data=_multipart(blob, boundary, kind=kind, name="listing.jpg"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            answer = json.load(response)
+    except urllib.error.HTTPError as exc:
+        detail = exc.read()[:300].decode("utf-8", "replace")
+        print(f"whatsapp media upload refused: {exc.code} {detail}")
+        return None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"whatsapp media upload failed: {type(exc).__name__}: {exc}")
+        return None
+
+    got = answer.get("id")
+    return str(got) if got else None
+
+def configured() -> bool:
+
+    return bool(
+        os.environ.get("WA_PHONE_NUMBER_ID") and os.environ.get("WA_ACCESS_TOKEN")
+    )
 
 def digits(address: str) -> str:
 
@@ -210,14 +299,44 @@ class WhatsAppNotifier:
             # is small and heavily compressed, and there is no setting for it;
             # an image message arrives at full resolution with the text as its
             # caption. Captions hold 1024 characters and an alert uses ~300.
-            if alert.kind == "listing" and listing is not None and listing.image_url:
+            body = render(alert)
+            picture = None if listing is None else _picture(listing)
+            if (
+                alert.kind == "listing"
+                and listing is not None
+                and picture is not None
+                # Never truncated: if the message will not fit a caption it is
+                # sent whole, without the picture, rather than cut to fit it.
+                and len(body) <= CAPTION_LIMIT
+            ):
                 return {
                     "messaging_product": "whatsapp",
                     "to": number,
                     "type": "image",
-                    "image": {
-                        "link": listing.image_url,
-                        "caption": render(alert)[:CAPTION_LIMIT],
+                    "image": {**picture, "caption": body},
+                }
+
+            taps = [a for a in alert.actions if a.callback][:REPLY_BUTTONS]
+            if taps:
+                return {
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "interactive",
+                    "interactive": {
+                        "type": "button",
+                        "body": {"text": body[:INTERACTIVE_BODY]},
+                        "action": {
+                            "buttons": [
+                                {
+                                    "type": "reply",
+                                    "reply": {
+                                        "id": a.callback,
+                                        "title": a.button(BUTTON_CHARS),
+                                    },
+                                }
+                                for a in taps
+                            ]
+                        },
                     },
                 }
 
@@ -225,7 +344,7 @@ class WhatsAppNotifier:
                 "messaging_product": "whatsapp",
                 "to": number,
                 "type": "text",
-                "text": {"preview_url": alert.kind == "listing", "body": render(alert)},
+                "text": {"preview_url": alert.kind == "listing", "body": body},
             }
 
         if alert.kind != "listing" or alert.listing is None:
@@ -249,12 +368,11 @@ class WhatsAppNotifier:
         # component the template does not have is error 132000, and every alert
         # would fail — so this is a setting rather than an inference, flipped
         # once the new template is approved.
-        if self.image_header and listing.image_url:
+        picture = _picture(listing)
+        if self.image_header and picture is not None:
             components.append({
                 "type": "header",
-                "parameters": [
-                    {"type": "image", "image": {"link": listing.image_url}}
-                ],
+                "parameters": [{"type": "image", "image": picture}],
             })
 
         components.append(

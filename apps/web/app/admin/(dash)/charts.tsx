@@ -323,12 +323,12 @@ export function Metric({
   why?: string;
 }) {
   return (
-    <div className="card metric">
+    <div className={tone ? `card metric card-${tone}` : "card metric"}>
       <h3>
         {label}
         {why && <Why text={why} />}
       </h3>
-      <div className={tone ? `metric-value ${tone}` : "metric-value"}>
+      <div className="metric-value">
         {typeof value === "number" ? comma(value) : value}
       </div>
       {note && <div className="metric-note">{note}</div>}

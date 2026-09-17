@@ -33,9 +33,11 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
         raw=parsed.raw,
     )
 
-# Bounded on purpose: the job must not be able to stall behind a slow portal,
-# and whatever is left over is picked up on the next run five minutes later.
-IMAGE_BATCH = 40
+# Bounded twice over. The job must not stall behind a slow portal, and at a
+# two-minute interval a generous batch becomes a thousand requests an hour at a
+# site that is doing us a favour by answering at all. Twelve is about 360 an
+# hour while there is a backlog, and roughly the arrival rate once there is not.
+IMAGE_BATCH = 12
 
 def fill_images(conn: Conn, run: Run, *, limit: int = IMAGE_BATCH) -> int:
 

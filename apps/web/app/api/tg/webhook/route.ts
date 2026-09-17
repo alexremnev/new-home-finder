@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { BOT_MENU, COMMAND_HELP, parseCommand } from "@/lib/commands";
 import { enforceLimits, InvalidForm, type Criteria } from "@/lib/criteria";
 import { beginSubscription } from "@/lib/activate";
+import { stopFilter, type Reason } from "@/lib/stopping";
 import { query, transaction } from "@/lib/db";
 import {
   BODY_LIMIT,
@@ -22,6 +23,7 @@ import {
 import {
   CHANGE_FILTER,
   FILTERS_BUTTON,
+  FOUND_A_PLACE,
   alreadyOnAnotherChannel,
   LINK_EXPIRED,
   NOTHING_TO_PAUSE,
@@ -326,9 +328,13 @@ async function pressed(
     const id = Number(data.slice("ignore:".length));
     return ignoreListing(chatId, press.id, messageId, id);
   }
-  if (data === "pause") {
+  if (data === "pause" || data === "found") {
     if (press.id) await answerCallback(press.id).catch(() => undefined);
-    return pause(chatId);
+    return pauseAlerts(chatId, data === "found" ? "found_a_place" : "paused");
+  }
+  if (data === "change") {
+    if (press.id) await answerCallback(press.id).catch(() => undefined);
+    return sendToForm(chatId, true);
   }
 
   if (press.id) {
@@ -383,32 +389,13 @@ async function ignoreListing(
   }
 }
 
-async function pause(chatId: string): Promise<void> {
-  const paused = await transaction(async (run) => {
-    const users = await run(
-      `SELECT u.id FROM users u
-         JOIN user_channels uc ON uc.user_id = u.id
-        WHERE uc.channel = 'telegram' AND uc.address = $1
-        FOR UPDATE OF u`,
-      [chatId],
-    );
-    const userId = users[0]?.id;
-    if (userId === undefined) return false;
-
-    const stilled = await run(
-      `UPDATE subscriptions SET active = false
-        WHERE user_id = $1 AND active RETURNING id`,
-      [userId],
-    );
-    if (stilled.length === 0) return false;
-
-    // Anything already queued would otherwise still be drained: claim_queued
-    // reads the outbox, not the subscription.
-    await run(`DELETE FROM notifications WHERE user_id = $1 AND status = 'queued'`, [userId]);
-    return true;
-  });
-
-  await sendMessage(chatId, paused ? PAUSED : NOTHING_TO_PAUSE);
+async function pauseAlerts(chatId: string, reason: Reason): Promise<void> {
+  const stopped = await stopFilter("telegram", chatId, reason);
+  if (!stopped) {
+    await sendMessage(chatId, NOTHING_TO_PAUSE);
+    return;
+  }
+  await sendMessage(chatId, reason === "found_a_place" ? FOUND_A_PLACE : PAUSED);
 }
 
 async function resume(chatId: string): Promise<void> {

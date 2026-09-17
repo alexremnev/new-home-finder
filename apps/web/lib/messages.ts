@@ -133,6 +133,26 @@ export const PAUSED = [
 
 export const NOTHING_TO_PAUSE = "You have no active filter, so there is nothing to pause.";
 
+export function paymentReceived(planName: string, until: Date | null): string {
+  const lines = [
+    "✅ Payment received — full access is on.",
+    "",
+    "Every listing that matches your filter now arrives the moment it appears,",
+    "with nothing held back.",
+  ];
+  if (until) {
+    lines.push("", `Runs until ${until.toISOString().slice(0, 10)} · ${planName}`);
+  }
+  return lines.join("\n");
+}
+
+export const FOUND_A_PLACE = [
+  "🎉 That is the whole point — congratulations.",
+  "",
+  "Alerts are off and your filter is kept. If it falls through, /resume brings",
+  "them straight back with nothing to set up again.",
+].join("\n");
+
 export const RESUMED = "Alerts are back on. Your filter is unchanged.";
 
 export const NOTHING_TO_RESUME = [

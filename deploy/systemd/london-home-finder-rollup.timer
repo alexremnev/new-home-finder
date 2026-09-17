@@ -4,7 +4,7 @@ Description=Run rollup every five minutes
 [Timer]
 Unit=london-home-finder@rollup.service
 OnBootSec=2min
-OnUnitInactiveSec=5min
+OnUnitInactiveSec=2min
 AccuracySec=15s
 Persistent=true
 

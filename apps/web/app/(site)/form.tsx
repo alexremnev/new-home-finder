@@ -31,7 +31,7 @@ export function SubscribeForm({
   districts, maxDistricts, furnished, whatsappReady, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<Channel | null>(null);
   const [chosen, setChosen] = useState<Area[]>([]);
   const [typed, setTyped] = useState("");
   const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(null);
@@ -102,15 +102,17 @@ export function SubscribeForm({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    setBusy(true);
 
     // Which button was pressed. `new FormData(form)` does not include the
-    // submitter, so it is read from the event.
+    // submitter, so it is read from the event — and it is read before the
+    // waiting state is set, so only the pressed button shows it.
     const submitter = (event.nativeEvent as SubmitEvent).submitter;
-    const channel =
+    const channel: Channel =
       submitter instanceof HTMLButtonElement && submitter.value === "whatsapp"
         ? "whatsapp"
         : "telegram";
+
+    setBusy(channel);
 
     const data = new FormData(event.currentTarget);
     const payload: Record<string, unknown> = {};
@@ -145,7 +147,7 @@ export function SubscribeForm({
       const body = (await response.json()) as { url?: string; error?: string };
       if (!response.ok || !body.url) {
         setError(body.error ?? "Something went wrong. Please try again.");
-        setBusy(false);
+        setBusy(null);
         return;
       }
 
@@ -157,7 +159,7 @@ export function SubscribeForm({
       window.location.href = body.url;
     } catch {
       setError("Could not reach the server. Please try again.");
-      setBusy(false);
+      setBusy(null);
     }
   }
 
@@ -340,9 +342,10 @@ export function SubscribeForm({
           name="channel"
           value="telegram"
           className="cta cta-telegram"
-          disabled={busy || chosen.length === 0}
+          disabled={busy !== null || chosen.length === 0}
         >
-          <TelegramMark /> {busy ? "One moment…" : "Connect to Telegram"}
+          <TelegramMark />{" "}
+          {busy === "telegram" ? "One moment…" : "Connect to Telegram"}
         </button>
 
         {whatsappReady && (
@@ -351,9 +354,10 @@ export function SubscribeForm({
             name="channel"
             value="whatsapp"
             className="cta cta-whatsapp"
-            disabled={busy || chosen.length === 0}
+            disabled={busy !== null || chosen.length === 0}
           >
-            <WhatsAppMark /> {busy ? "One moment…" : "Connect to WhatsApp"}
+            <WhatsAppMark />{" "}
+            {busy === "whatsapp" ? "One moment…" : "Connect to WhatsApp"}
           </button>
         )}
       </div>

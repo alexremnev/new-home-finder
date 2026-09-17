@@ -244,7 +244,7 @@ input[type="range"]:focus-visible::-webkit-slider-thumb {
   box-shadow: 0 0 0 4px var(--accent-wash);
 }
 
-button[type="submit"],
+.site button[type="submit"],
 .cta {
   display: block;
   width: 100%;
@@ -263,10 +263,10 @@ button[type="submit"],
   transition: background 140ms ease;
 }
 
-button[type="submit"]:hover:not(:disabled),
+.site button[type="submit"]:hover:not(:disabled),
 .cta:hover { background: var(--accent-dim); text-decoration: none; }
 
-button[type="submit"]:disabled {
+.site button[type="submit"]:disabled {
   background: #c2c2ce;
   cursor: not-allowed;
 }
@@ -1582,4 +1582,47 @@ form p.error {
   .tabs { order: 3; width: 100%; margin-bottom: -0.4rem; }
   .dash-bar-right { order: 2; }
   .tab { padding: 0.3rem 0.6rem; }
+}
+
+/* ── dashboard buttons ─────────────────────────────────────────────────────
+   Their own style, now that the site's is scoped to .site. Small, quiet, and
+   the width of their label — a dashboard action is not a call to action. */
+.dash button,
+.dash input[type="text"],
+.dash input[type="number"],
+.dash select {
+  padding: 0.25rem 0.55rem;
+  border: 1px solid var(--d-line);
+  border-radius: 4px;
+  background: var(--d-card);
+  color: var(--d-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.dash button { cursor: pointer; font-weight: 600; }
+.dash button:hover:not(:disabled) { border-color: var(--d-faint); background: var(--d-bg); }
+.dash button:disabled { color: var(--d-faint); cursor: not-allowed; }
+
+.dash button.ghost { border-color: transparent; color: var(--d-soft); }
+.dash button.ghost:hover { border-color: var(--d-line); }
+
+.dash button.danger-button { border-color: #f0b6b8; color: var(--d-bad); }
+.dash button.danger-button:hover { background: var(--d-bad-wash); border-color: var(--d-bad); }
+
+/* ── #5: a tone colours the whole card, not a line of text ─────────────────
+   "green on this page" was a caption explaining a colour that was not there.
+   The card itself carries it now, so the state is read before the words. */
+.card-good { border-color: #b9e3c9; background: var(--d-ok-wash); }
+.card-bad  { border-color: #f4bcbe; background: var(--d-bad-wash); }
+.card-warn { border-color: #eed9a8; background: var(--d-warn-wash); }
+
+.card-good .metric-value { color: #14683a; }
+.card-bad  .metric-value { color: #a12126; }
+.card-warn .metric-value { color: #8a5a00; }
+
+.card-good > h3, .card-bad > h3, .card-warn > h3 { color: inherit; opacity: 0.72; }
+.card-good .metric-note, .card-bad .metric-note, .card-warn .metric-note {
+  color: inherit;
+  opacity: 0.72;
 }

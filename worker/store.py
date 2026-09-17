@@ -240,6 +240,9 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
                    uc.address, uc.last_inbound_at,
                    src.display_name AS source_display, {columns},
                    u.plan AS plan_key,
+                   (SELECT m.wa_media_id FROM source_messages m
+                     WHERE m.listing_id = n.listing_id AND m.wa_media_id IS NOT NULL
+                     LIMIT 1) AS wa_media_id,
                    -- The same CASE as `active_subscriptions`, for the same reason:
                    -- the live plan's share while it is live, the lapsed tier's once
                    -- it is not. Selected here so the renderer can name the share in
@@ -367,14 +370,56 @@ def unparsed_messages(conn: Conn, *, source_key: str, limit: int = 500) -> list[
         ).fetchall()
     )
 
+def messages_missing_photo(
+    conn: Conn, *, source_key: str, reader: str, limit: int = 10
+) -> list[Row]:
+
+    return list(
+        conn.execute(
+            """
+            SELECT id, external_id FROM source_messages
+             WHERE source_key = %s
+               AND reader = %s
+               AND wa_media_checked_at IS NULL
+               AND 'photo' = ANY(media_kinds)
+               -- Only what can still be sent. The starter batch looks back
+               -- three days and an alert goes out in minutes.
+               AND received_at > now() - interval '7 days'
+             ORDER BY received_at DESC
+             LIMIT %s
+            """,
+            (source_key, reader, limit),
+        ).fetchall()
+    )
+
+def set_message_photo(conn: Conn, message_id: int, media_id: str | None) -> None:
+
+    conn.execute(
+        "UPDATE source_messages SET wa_media_id = %s, wa_media_checked_at = now() "
+        "WHERE id = %s",
+        (media_id, message_id),
+    )
+
 def listings_missing_image(conn: Conn, *, limit: int = 40) -> list[Row]:
 
     return list(
         conn.execute(
             """
-            SELECT id, url FROM listings
-             WHERE image_checked_at IS NULL AND status = 'active'
-             ORDER BY first_seen_at DESC
+            SELECT l.id, l.url FROM listings l
+             WHERE l.image_checked_at IS NULL
+               AND l.status = 'active'
+               -- Only listings that can still be sent. A picture for a flat
+               -- from August is a request to a portal for nobody's benefit,
+               -- and the starter batch looks back three days.
+               AND l.first_seen_at > now() - interval '7 days'
+               -- And only those with no photograph of their own: the message
+               -- that made this listing usually carried one, and asking a
+               -- portal for a picture we already have is rude twice over.
+               AND NOT EXISTS (
+                 SELECT 1 FROM source_messages m
+                  WHERE m.listing_id = l.id AND m.wa_media_id IS NOT NULL
+               )
+             ORDER BY l.first_seen_at DESC
              LIMIT %s
             """,
             (limit,),

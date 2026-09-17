@@ -71,9 +71,11 @@ export default async function SubscribersPage({
         <Metric
           label="Delivering"
           value={`${reaching}/${rows.length}`}
-          tone={reaching === rows.length ? "good" : undefined}
-          note="green on this page"
-          why="Зелёный значит, что за выбранный период человеку ушёл хотя бы один алерт и ни один не упал. Серый — подписка есть, но ничего не подошло или план закончился. Красный — канал не привязан или отправка падает."
+          tone={
+            reaching === rows.length ? "good" : reaching === 0 ? "bad" : "warn"
+          }
+          note={`of the ${rows.length} on this page`}
+          why="Сколько человек на этой странице действительно получают алерты: за выбранный период ушёл хотя бы один и ни один не упал. Серая точка в списке — подписка есть, но ничего не подошло или план закончился. Красная — канал не привязан или отправка падает."
         />
         <Metric
           label="Alerts sent"
