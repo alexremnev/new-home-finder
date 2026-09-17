@@ -2,6 +2,8 @@ import Link from "next/link";
 
 import { ticketCounts, tickets } from "@/lib/admin-queries";
 
+import { AsyncForm } from "../async-form";
+
 export const dynamic = "force-dynamic";
 
 function ago(stamp: string | null): string {
@@ -74,7 +76,7 @@ export default async function SupportPage() {
               )}
             </span>
 
-            <form method="post" action="/api/admin/support">
+            <AsyncForm action="/api/admin/support">
               <input type="hidden" name="ticket_id" value={row.id} />
               <input type="hidden" name="action" value="handle" />
               <input
@@ -84,7 +86,7 @@ export default async function SupportPage() {
                 maxLength={200}
               />
               <button type="submit">Mark handled</button>
-            </form>
+            </AsyncForm>
           </footer>
         </article>
       ))}
@@ -110,13 +112,13 @@ export default async function SupportPage() {
                   <td className="ticket-short">{row.body}</td>
                   <td>{row.handled_note || "—"}</td>
                   <td>
-                    <form method="post" action="/api/admin/support">
+                    <AsyncForm action="/api/admin/support">
                       <input type="hidden" name="ticket_id" value={row.id} />
                       <input type="hidden" name="action" value="reopen" />
                       <button type="submit" className="ghost">
                         Reopen
                       </button>
-                    </form>
+                    </AsyncForm>
                   </td>
                 </tr>
               ))}

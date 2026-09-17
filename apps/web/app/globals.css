@@ -1172,33 +1172,51 @@ form p.error {
   background: var(--d-card);
 }
 
+.dash-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
 .sign-out {
-  padding: 0.2rem 0.55rem;
+  padding: 0.12rem 0.45rem;
   border: 1px solid var(--d-line);
-  border-radius: 5px;
-  background: var(--d-card);
-  color: var(--d-soft);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--d-faint);
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
   cursor: pointer;
 }
 
 .sign-out:hover { border-color: var(--d-faint); color: var(--d-ink); }
 
 .dash-name {
-  margin-left: auto;
-  color: var(--d-faint);
+  color: var(--d-ink);
   font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
-.tabs { display: flex; gap: 0.15rem; flex-wrap: wrap; }
+.tabs {
+  display: flex;
+  gap: 0.25rem;
+  align-self: stretch;
+  margin-bottom: -0.5rem;   /* sits on the bar's own bottom border */
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar { display: none; }
 
 .tab {
-  padding: 0.3rem 0.7rem;
-  border-radius: 5px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 0 0.75rem;
+  border-bottom: 2px solid transparent;
   color: var(--d-soft);
   font-size: 13px;
   font-weight: 600;
@@ -1206,7 +1224,17 @@ form p.error {
   white-space: nowrap;
 }
 
-.tab:hover { background: var(--d-bg); color: var(--d-ink); text-decoration: none; }
+.tab:hover {
+  border-bottom-color: var(--d-line);
+  color: var(--d-ink);
+  text-decoration: none;
+}
+
+.tab-on,
+.tab-on:hover {
+  border-bottom-color: var(--d-accent);
+  color: var(--d-ink);
+}
 
 .tab-count {
   display: inline-block;
@@ -1515,4 +1543,22 @@ form p.error {
   .dash-bar { flex-wrap: wrap; gap: 0.5rem; }
   .dash-name { display: none; }
   .log-line { grid-template-columns: 1fr; gap: 0.1rem; }
+}
+
+/* A tooltip that leaves its card. Without this the hover label on the first or
+   last point of a chart is clipped by the card's own edge. */
+.card { overflow: visible; }
+
+/* The async forms wrap their fields in a fieldset so they can be disabled
+   while a request is in flight; it must not look like a fieldset. */
+.dash fieldset { display: contents; }
+
+.ticket > footer form { align-items: center; }
+
+@media (max-width: 40rem) {
+  .dash-bar { padding: 0.4rem 0.6rem; }
+  .dash-name { display: none; }
+  .tabs { order: 3; width: 100%; margin-bottom: -0.4rem; }
+  .dash-bar-right { order: 2; }
+  .tab { padding: 0.3rem 0.6rem; }
 }

@@ -165,6 +165,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
 
+  if (request.headers.get("x-async")) {
+    // The erase that removed the row has nowhere to go back to, so the caller
+    // is told where to send the person instead.
+    const gone = action === "erase" && done === "deleted";
+    return NextResponse.json({ ok: true, done, goto: gone ? "/admin/subscribers" : null });
+  }
+
   const back =
     action === "erase" && done === "deleted"
       ? `/admin?done=${encodeURIComponent(done)}`

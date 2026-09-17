@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   paymentSeries, paymentSummary, paymentsByPlan, paymentsByProvider,
   recentComps, recentPayments,
@@ -39,13 +40,12 @@ export default async function PaymentsPage({
         <h1>Payments</h1>
         <div className="window-picker" role="group" aria-label="Range">
           {RANGES.map((one) => (
-            <a
-              key={one}
+            <Link key={one}
               href={`/admin/payments?d=${one}`}
               className={one === days ? "win win-on" : "win"}
             >
               {one === 1 ? "Today" : `${one}d`}
-            </a>
+            </Link>
           ))}
         </div>
       </div>
@@ -121,7 +121,7 @@ export default async function PaymentsPage({
                       {row.user_id === null ? (
                         "erased"
                       ) : (
-                        <a href={`/admin/subscribers/${row.user_id}`}>{row.user_id}</a>
+                        <Link href={`/admin/subscribers/${row.user_id}`}>{row.user_id}</Link>
                       )}
                     </td>
                     <td className="mono">
@@ -156,7 +156,7 @@ export default async function PaymentsPage({
                 <tr key={`${row.created_at}-${row.user_id}`}>
                   <td className="mono">{row.created_at.slice(0, 16)}</td>
                   <td>
-                    <a href={`/admin/subscribers/${row.user_id}`}>{row.user_id}</a>
+                    <Link href={`/admin/subscribers/${row.user_id}`}>{row.user_id}</Link>
                   </td>
                   <td>{row.plan}</td>
                   <td className="num">{pounds(row.amount_pence)}</td>

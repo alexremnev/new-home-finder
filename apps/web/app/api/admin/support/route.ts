@@ -47,6 +47,8 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "no such action" }, { status: 400 });
   }
 
-  // A plain form post, so the answer is the page it came from.
+  // JSON for the async form, a redirect for a browser submitting it the old
+  // way. Both paths exist so the page works with JavaScript off.
+  if (request.headers.get("x-async")) return NextResponse.json({ ok: true });
   return NextResponse.redirect(new URL("/admin/support", request.url), 303);
 }

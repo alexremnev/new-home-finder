@@ -9,6 +9,8 @@ import { describeCriteria, type Criteria } from "@/lib/criteria";
 import { Metric, Series, Why } from "../../charts";
 import { DEFAULT_WINDOW, WindowPicker, windowFrom } from "../../window";
 
+import { AsyncForm } from "../../async-form";
+
 export const dynamic = "force-dynamic";
 
 const pounds = (pence: number) =>
@@ -149,7 +151,7 @@ export default async function UserPage({
       <section>
         <h2>Actions</h2>
         <div className="actions">
-          <form method="post" action="/api/admin/user" className="inline-form">
+          <AsyncForm action="/api/admin/user" className="inline-form">
             <input type="hidden" name="action" value="extend_plan" />
             <input type="hidden" name="user_id" value={who.user_id} />
             <input type="number" name="days" min={1} max={365} defaultValue={14}
@@ -157,9 +159,9 @@ export default async function UserPage({
             <input type="text" name="reason" placeholder="why" aria-label="Reason"
                    maxLength={200} />
             <button type="submit" className="ghost">Extend, free</button>
-          </form>
+          </AsyncForm>
 
-          <form method="post" action="/api/admin/user" className="inline-form">
+          <AsyncForm action="/api/admin/user" className="inline-form">
             <input type="hidden" name="action" value="set_plan" />
             <input type="hidden" name="user_id" value={who.user_id} />
             <select name="plan" aria-label="Plan" defaultValue={who.plan}>
@@ -172,17 +174,17 @@ export default async function UserPage({
             <input type="text" name="reason" placeholder="why" aria-label="Reason"
                    maxLength={200} />
             <button type="submit" className="ghost">Move to plan</button>
-          </form>
+          </AsyncForm>
 
-          <form method="post" action="/api/admin/user" className="inline-form">
+          <AsyncForm action="/api/admin/user" className="inline-form">
             <input type="hidden" name="action" value={live ? "pause" : "resume"} />
             <input type="hidden" name="user_id" value={who.user_id} />
             <button type="submit" className="ghost">
               {live ? "Pause delivery" : "Resume delivery"}
             </button>
-          </form>
+          </AsyncForm>
 
-          <form method="post" action="/api/admin/user" className="inline-form">
+          <AsyncForm action="/api/admin/user" className="inline-form">
             <input type="hidden" name="action"
                    value={who.status === "blocked" ? "unblock" : "block"} />
             <input type="hidden" name="user_id" value={who.user_id} />
@@ -191,7 +193,7 @@ export default async function UserPage({
             <button type="submit" className="ghost">
               {who.status === "blocked" ? "Unblock" : "Block"}
             </button>
-          </form>
+          </AsyncForm>
         </div>
 
         <div className="danger">
@@ -203,7 +205,11 @@ export default async function UserPage({
               ? `The ${who.paid_count} payment${who.paid_count === 1 ? "" : "s"} stay, attached to an account that no longer names anybody: a financial record has to survive a request to be forgotten, and the person does not have to.`
               : "There are no payments, so the row goes entirely."}
           </p>
-          <form method="post" action="/api/admin/user" className="inline-form">
+          <AsyncForm
+            action="/api/admin/user"
+            className="inline-form"
+            confirm="Erase this account? Payments are kept, everything that names the person is not. This cannot be undone."
+          >
             <input type="hidden" name="action" value="erase" />
             <input type="hidden" name="user_id" value={who.user_id} />
             <input type="text" name="reason" placeholder="why — recorded"
@@ -211,7 +217,7 @@ export default async function UserPage({
             <button type="submit" className="ghost danger-button">
               {who.paid_count > 0 ? "Erase personal data" : "Delete this account"}
             </button>
-          </form>
+          </AsyncForm>
         </div>
       </section>
 

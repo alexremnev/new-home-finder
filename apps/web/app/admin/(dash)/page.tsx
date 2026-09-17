@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   EXPECTED_JOBS, delivery, intakePoints, jobStates, knownJobs, logPage,
   messagePoints, problems, recentRuns, runPoints, unparseablePoints,
@@ -290,28 +291,26 @@ export default async function SystemPage({
 
         <div className="dash-head" style={{ marginBottom: "0.6rem" }}>
           <div className="window-picker">
-            <a className={!filter.job ? "win win-on" : "win"} href={link({ job: undefined, p: "1" })}>
+            <Link className={!filter.job ? "win win-on" : "win"} href={link({ job: undefined, p: "1" })}>
               all jobs
-            </a>
+            </Link>
             {jobNames.map((name) => (
-              <a
-                key={name}
+              <Link key={name}
                 className={filter.job === name ? "win win-on" : "win"}
                 href={link({ job: name, p: "1" })}
               >
                 {name}
-              </a>
+              </Link>
             ))}
           </div>
           <div className="window-picker">
             {["error", "warn", "info"].map((level) => (
-              <a
-                key={level}
+              <Link key={level}
                 className={filter.level === level ? "win win-on" : "win"}
                 href={link({ level: filter.level === level ? undefined : level, p: "1" })}
               >
                 {level}
-              </a>
+              </Link>
             ))}
           </div>
         </div>
@@ -335,18 +334,17 @@ export default async function SystemPage({
         )}
 
         <div className="pager">
-          <a className={page <= 1 ? "off" : ""} href={link({ p: String(page - 1) })}>
+          <Link className={page <= 1 ? "off" : ""} href={link({ p: String(page - 1) })}>
             ← newer
-          </a>
+          </Link>
           <span>
             page {page} of {totalPages} · {logs.total} lines
           </span>
-          <a
-            className={page >= totalPages ? "off" : ""}
+          <Link className={page >= totalPages ? "off" : ""}
             href={link({ p: String(page + 1) })}
           >
             older →
-          </a>
+          </Link>
         </div>
       </div>
     </>

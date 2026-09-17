@@ -1,3 +1,7 @@
+"use client";
+
+import { useState } from "react";
+
 // Dense, small, quiet. A dashboard chart is read in a glance beside five
 // others, so it carries no legend it can do without, no gradient, and no label
 // that repeats what the card's heading already said.
@@ -57,12 +61,63 @@ function ticksOf(points: { label: string }[]): number[] {
 
 const clock = (label: string) => (label.length > 10 ? label.slice(11, 16) : label.slice(5));
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// "2026-09-17 14:30" -> "17 Sep, 14:30"; "2026-09-17" -> "17 Sep 2026".
+function spell(label: string): string {
+  const [date, time] = label.split(" ");
+  const [year, month, day] = (date ?? "").split("-");
+  const name = month ? MONTHS[Number(month) - 1] : undefined;
+  if (!name || !day) return label;
+  return time ? `${Number(day)} ${name}, ${time}` : `${Number(day)} ${name} ${year}`;
+}
+
+// Where the pointer is, as an index into the series. Read from the element's
+// own box rather than from the svg, whose viewBox is stretched.
+function indexFrom(event: React.MouseEvent<HTMLDivElement>, count: number): number {
+  const box = event.currentTarget.getBoundingClientRect();
+  const across = (event.clientX - box.left) / Math.max(1, box.width);
+  return Math.min(count - 1, Math.max(0, Math.round(across * (count - 1))));
+}
+
+function Tip({ at, count, children }: { at: number; count: number; children: React.ReactNode }) {
+  // Pinned inside its own box at the ends, so a tooltip on the first or last
+  // point is not half off the card.
+  const left = count < 2 ? 50 : (at / (count - 1)) * 100;
+  const side = left < 22 ? "0%" : left > 78 ? "100%" : `${left}%`;
+  const shift = left < 22 ? "0" : left > 78 ? "-100%" : "-50%";
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left: side,
+        transform: `translateX(${shift})`,
+        bottom: "100%",
+        zIndex: 5,
+        padding: "0.3rem 0.45rem",
+        borderRadius: 5,
+        background: INK,
+        color: "#fff",
+        fontSize: 11,
+        lineHeight: 1.35,
+        whiteSpace: "nowrap",
+        pointerEvents: "none",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
 export function Spark({
   data,
   suffix = "",
+  marker = null,
 }: {
   data: Point[];
   suffix?: string;
+  marker?: number | null;
 }) {
   if (!data.length) return <Empty />;
 
@@ -83,6 +138,16 @@ export function Spark({
       <path d={area} fill={LINE_WASH} />
       <path d={path} fill="none" stroke={LINE} strokeWidth="2"
             strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+      {marker !== null && data[marker] && (
+        <>
+          <line x1={marker * step} x2={marker * step} y1="6" y2={H - 18}
+                stroke={FAINT} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          {/* A ring in the surface colour, so the dot reads against the line. */}
+          <circle cx={marker * step} cy={y(data[marker].value)} r="3.5"
+                  fill={LINE} stroke="#fff" strokeWidth="2"
+                  vectorEffect="non-scaling-stroke" />
+        </>
+      )}
     </svg>
   );
 }
@@ -107,12 +172,36 @@ export function Series({
           {comma(data.reduce((sum, d) => sum + d.value, 0))}{suffix} total
         </span>
       </div>
-      <Spark data={data} suffix={suffix} />
+
+      <Hover data={data} suffix={suffix} />
+
       <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: FAINT }}>
         {ticks.map((at) => (
           <span key={at}>{clock(data[at]?.label ?? "")}</span>
         ))}
       </div>
+    </div>
+  );
+}
+
+function Hover({ data, suffix }: { data: Point[]; suffix: string }) {
+  const [at, setAt] = useState<number | null>(null);
+  const point = at === null ? null : data[at];
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onMouseMove={(event) => setAt(indexFrom(event, data.length))}
+      onMouseLeave={() => setAt(null)}
+    >
+      <Spark data={data} suffix={suffix} marker={at} />
+      {point && (
+        <Tip at={at as number} count={data.length}>
+          <strong>{comma(point.value)}{suffix}</strong>
+          <br />
+          {spell(point.label)}
+        </Tip>
+      )}
     </div>
   );
 }
@@ -126,9 +215,41 @@ export function RunBars({ data }: { data: { label: string; ok: number; bad: numb
   const width = 100 / data.length;
 
   return (
-    <div>
+    <RunHover data={data} top={top} width={width} ticks={ticks} />
+  );
+}
+
+function RunHover({
+  data, top, width, ticks,
+}: {
+  data: { label: string; ok: number; bad: number }[];
+  top: number;
+  width: number;
+  ticks: number[];
+}) {
+  const [at, setAt] = useState<number | null>(null);
+  const point = at === null ? null : data[at];
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onMouseMove={(event) => setAt(indexFrom(event, data.length))}
+      onMouseLeave={() => setAt(null)}
+    >
+      {point && (
+        <Tip at={at as number} count={data.length}>
+          <strong>{point.ok} clean</strong>
+          {point.bad > 0 && <span style={{ color: "#ff9d9f" }}> · {point.bad} failed</span>}
+          <br />
+          {spell(point.label)}
+        </Tip>
+      )}
       <svg viewBox="0 0 100 72" width="100%" height={72} preserveAspectRatio="none"
            role="img" aria-label="runs over time">
+        {at !== null && (
+          <rect x={at * width} y="0" width={Math.max(width, 0.5)} height="62"
+                fill="rgba(28, 35, 48, 0.06)" />
+        )}
         {data.map((d, i) => {
           const okH = (d.ok / top) * 60;
           const badH = (d.bad / top) * 60;
@@ -168,7 +289,8 @@ export function Rank({
   return (
     <div>
       {data.map((d) => (
-        <div key={d.label} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div key={d.label} title={`${d.label}: ${comma(d.value)}${suffix}`}
+             style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
           <span style={{ width: "7rem", flex: "none", color: SOFT, fontSize: 11,
                          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {d.label}

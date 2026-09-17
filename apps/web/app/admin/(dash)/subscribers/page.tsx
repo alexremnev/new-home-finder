@@ -179,9 +179,9 @@ export default async function SubscribersPage({
         </div>
 
         <div className="pager">
-          <a className={page <= 1 ? "off" : ""} href={link(page - 1)}>← newer</a>
+          <Link className={page <= 1 ? "off" : ""} href={link(page - 1)}>← newer</Link>
           <span>page {page} of {totalPages} · {total} accounts</span>
-          <a className={page >= totalPages ? "off" : ""} href={link(page + 1)}>older →</a>
+          <Link className={page >= totalPages ? "off" : ""} href={link(page + 1)}>older →</Link>
         </div>
       </div>
     </>
