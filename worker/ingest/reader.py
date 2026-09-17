@@ -18,9 +18,15 @@ Conn = psycopg.Connection[Row]
 BATCH = 300
 
 # Photographs per run. Each is a download from Telegram and an upload to
-# WhatsApp — about 200KB of traffic — and ingest runs every two minutes, so this
-# is roughly the rate at which listings arrive.
-PHOTO_BATCH = 10
+# WhatsApp — about 200KB of traffic — so a full run is some 8MB every two
+# minutes.
+#
+# This has to stay ahead of the feed, not merely match it. The photo is attached
+# in the same run that stores the message, but the alert is sent by a separate
+# job: anything left in the queue when that job runs goes out with no picture,
+# and it is never revisited. The feed delivers 12-15 photo messages every two
+# minutes, so a batch of 10 fell permanently behind and left a standing queue.
+PHOTO_BATCH = 40
 
 WHITESPACE = re.compile(r"\s+")
 

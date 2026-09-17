@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from worker.contracts.notify import (
+    Action,
     Alert,
     AlertKind,
     ListingView,
@@ -128,6 +129,21 @@ def template_params(view: ListingView) -> list[str]:
             else None
         ),
     ]
+
+# Dismissing one listing is not offered here. WhatsApp cannot delete a message
+# it has already delivered — the Cloud API has no such method — so the listing
+# stays on screen whatever the button says, and a button that visibly does
+# nothing is worse than no button.
+#
+# The webhook still honours `ignore:` taps, because buttons already sitting in
+# people's chats should keep working.
+UNOFFERABLE = ("ignore:",)
+
+def offerable(action: Action) -> bool:
+
+    if not action.callback:
+        return False
+    return not action.callback.startswith(UNOFFERABLE)
 
 def _picture(view: ListingView) -> dict[str, str] | None:
 
@@ -316,7 +332,7 @@ class WhatsAppNotifier:
                     "image": {**picture, "caption": body},
                 }
 
-            taps = [a for a in alert.actions if a.callback][:REPLY_BUTTONS]
+            taps = [a for a in alert.actions if offerable(a)][:REPLY_BUTTONS]
             if taps:
                 return {
                     "messaging_product": "whatsapp",

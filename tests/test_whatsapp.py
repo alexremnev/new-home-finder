@@ -13,6 +13,7 @@ from worker.notify.whatsapp import (
     WhatsAppNotifier,
     configured,
     digits,
+    offerable,
     render,
     render_listing,
     template_params,
@@ -373,6 +374,40 @@ def test_inside_the_window_taps_become_reply_buttons() -> None:
     assert all(len(b["reply"]["title"]) <= 20 for b in buttons)
     # The link still reaches the person, in the text.
     assert "https://t.me/b?start=pay" in body["interactive"]["body"]["text"]
+
+def test_whatsapp_does_not_offer_to_dismiss_a_listing() -> None:
+    from worker.pipeline.outbox import listing_actions
+
+    actions = listing_actions(view(), 77)
+    # Telegram deletes the message, so "Ignore" is honest there and is built.
+    assert [a.label for a in actions] == ["Ignore"]
+    # WhatsApp cannot delete a delivered message, so it declines to offer it
+    # rather than drawing a button that would visibly do nothing.
+    assert not offerable(actions[0])
+
+def test_a_pictureless_listing_inside_the_window_is_plain_text() -> None:
+
+    # Nothing is offerable on a listing here, so there is no interactive
+    # message to send even though the window is open.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=None),
+              actions=[Action(label="Ignore", callback="ignore:7")]),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+
+def test_a_restricted_listing_still_offers_no_buttons_only_the_link() -> None:
+
+    # "Get full access" is a url, and a url is never a reply button.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view(image_url=None, share=20),
+              actions=[Action(label="Get full access", url="https://t.me/b?start=pay")]),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+    assert "https://t.me/b?start=pay" in calls[0]["payload"]["text"]["body"]
 
 def test_a_long_label_is_cut_to_what_a_button_holds() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
