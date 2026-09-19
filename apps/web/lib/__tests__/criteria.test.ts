@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidForm, parseForm } from "../criteria";
+import { InvalidForm, enforceLimits, parseForm } from "../criteria";
 
 const ENABLED = ["E14", "SE16", "SE8"];
 
@@ -119,5 +119,29 @@ describe("there is no daily cap", () => {
   it("ignores a cap someone tries to send", () => {
 
     expect(parseForm({ max_alerts_per_day: "3" }, ENABLED)).toEqual({});
+  });
+});
+
+describe("enforceLimits", () => {
+  it("refuses a filter with no area at all", () => {
+    // An absent area filter matches every area, so this is the difference
+    // between one district and the whole of London.
+    expect(() => enforceLimits({ bedrooms: { min: 2 } }, { maxDistricts: 5 })).toThrow(
+      InvalidForm,
+    );
+  });
+
+  it("refuses more areas than the plan covers", () => {
+    expect(() =>
+      enforceLimits(
+        { areas: { postcode_districts: ["E14", "E15", "N1"] } },
+        { maxDistricts: 2 },
+      ),
+    ).toThrow(/2 districts/);
+  });
+
+  it("passes a filter that is within the plan", () => {
+    const criteria = { areas: { postcode_districts: ["E14", "E15"] } };
+    expect(enforceLimits(criteria, { maxDistricts: 5 })).toBe(criteria);
   });
 });

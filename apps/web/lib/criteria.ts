@@ -25,6 +25,12 @@ export type Limits = { maxDistricts: number };
 
 export function enforceLimits(criteria: Criteria, limits: Limits): Criteria {
   const districts = criteria.areas?.postcode_districts ?? [];
+  if (districts.length === 0) {
+    // Without this, no areas means every area: the matcher treats an absent
+    // filter as "anything matches", so an empty form would sign somebody up to
+    // every listing in London.
+    throw new InvalidForm("choose at least one area to watch");
+  }
   if (districts.length > limits.maxDistricts) {
     throw new InvalidForm(
       `your plan covers ${limits.maxDistricts} ` +

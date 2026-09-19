@@ -24,21 +24,7 @@ import {
 } from "@/lib/plans";
 import { dismiss } from "@/lib/dismiss";
 import { deleteFilter, resumeFilter, stopFilter } from "@/lib/stopping";
-import {
-  BODY_LIMIT,
-  SUPPORT_ASK_EMAIL,
-  SUPPORT_BAD_EMAIL,
-  SUPPORT_CANCELLED,
-  SUPPORT_DONE,
-  SUPPORT_PROMPT,
-  SUPPORT_TOO_LONG,
-  abandonDraft,
-  openDraft,
-  readEmail,
-  recordBody,
-  startDraft,
-  submit,
-} from "@/lib/support";
+import { SUPPORT_REPLY } from "@/lib/support";
 import { sendWhatsApp } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
@@ -185,14 +171,6 @@ async function commanded(
   const command = parseCommand(text);
   console.log("wa command", { from: number.slice(-4), kind: command.kind });
 
-  // An unfinished support ticket swallows plain messages, and a command must
-  // always win — the same rule as Telegram.
-  if (!text.trim().startsWith("/")) {
-    const draft = await openDraft("whatsapp", number);
-    if (draft) return continueTicket(draft, text.trim());
-  }
-  if (text.trim().startsWith("/")) await abandonDraft("whatsapp", number);
-
   switch (command.kind) {
     case "stop": {
       const gone = await deleteFilter("whatsapp", number);
@@ -200,13 +178,10 @@ async function commanded(
     }
 
     case "support":
-      await startDraft("whatsapp", number, userId);
-      return SUPPORT_PROMPT;
+      return SUPPORT_REPLY;
 
-    case "cancel": {
-      const had = await abandonDraft("whatsapp", number);
-      return had ? SUPPORT_CANCELLED : COMMAND_HELP;
-    }
+    case "cancel":
+      return COMMAND_HELP;
 
     case "resume": {
       const woken = await resumeFilter("whatsapp", number);
@@ -245,23 +220,6 @@ async function commanded(
     default:
       return COMMAND_HELP;
   }
-}
-
-async function continueTicket(
-  draft: { id: number; status: "awaiting_body" | "awaiting_email" },
-  said: string,
-): Promise<string | null> {
-  if (draft.status === "awaiting_body") {
-    if (!said) return null;
-    if (said.length > BODY_LIMIT) return SUPPORT_TOO_LONG;
-    await recordBody(draft.id, said);
-    return SUPPORT_ASK_EMAIL;
-  }
-
-  const email = readEmail(said);
-  if (email === "invalid") return SUPPORT_BAD_EMAIL;
-  await submit(draft.id, email);
-  return SUPPORT_DONE;
 }
 
 async function pressed(number: string, id: string): Promise<string | null> {

@@ -40,6 +40,10 @@ export async function recordAttempt(ipHash: string, ok: boolean): Promise<void> 
   await query(`INSERT INTO admin_logins (ip_hash, ok) VALUES ($1, $2)`, [ipHash, ok]);
 }
 
+// Not a secret — it is printed on the form as a placeholder in most systems —
+// but a second thing to get right, which is the point of asking for it.
+export const ADMIN_USERNAME = (process.env.ADMIN_USERNAME ?? "admin").trim();
+
 export function passwordIsCorrect(password: string): boolean {
   const stored = process.env.ADMIN_PASSWORD_HASH;
   if (!stored || !password) return false;
@@ -48,6 +52,15 @@ export function passwordIsCorrect(password: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function signInIsCorrect(username: string, password: string): boolean {
+  // The password is verified whichever name was given, so a wrong name and a
+  // wrong password take the same time and the reply cannot say which was wrong.
+  const nameMatches =
+    username.trim().toLowerCase() === ADMIN_USERNAME.toLowerCase();
+  const passwordMatches = passwordIsCorrect(password);
+  return nameMatches && passwordMatches;
 }
 
 export const LOCKOUT_WINDOW_MINUTES = WINDOW_MINUTES;

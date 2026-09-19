@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import {
   LOCKOUT_WINDOW_MINUTES,
   callerHash,
-  passwordIsCorrect,
   recordAttempt,
+  signInIsCorrect,
   tooManyFailures,
 } from "@/lib/admin";
 import { COOKIE_OPTIONS, issueSession } from "@/lib/admin-session";
@@ -14,6 +14,7 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   const form = await request.formData().catch(() => null);
+  const username = String(form?.get("username") ?? "");
   const password = String(form?.get("password") ?? "");
   const ipHash = callerHash(request);
 
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!passwordIsCorrect(password)) {
+  if (!signInIsCorrect(username, password)) {
     await recordAttempt(ipHash, false);
     return NextResponse.redirect(new URL("/admin/login?e=wrong", request.url), {
       status: 303,

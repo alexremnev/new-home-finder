@@ -179,8 +179,10 @@ export function SubscribeForm({
 
   return (
     <form onSubmit={submit}>
-      <fieldset>
-        <legend>How would you like to search?</legend>
+      <fieldset aria-labelledby="search-by-label">
+        <span id="search-by-label" className="field-label">
+          How would you like to search?
+        </span>
         <div className="choices">
           {(
             [
@@ -222,8 +224,23 @@ export function SubscribeForm({
           autoComplete="off"
           placeholder={placeholder}
           onChange={(event) => {
-            setTyped(event.target.value);
+            const value = event.target.value;
             setAreaNote(null);
+
+            // Picking from the list is the choice. A datalist reports the pick
+            // as an ordinary change whose value is the option in full, so an
+            // exact match is a pick rather than someone halfway through typing
+            // — and nobody should have to press Enter after choosing.
+            const picked = options.find(
+              (one) =>
+                one.name.toLowerCase() === value.trim().toLowerCase() ||
+                one.code.toLowerCase() === value.trim().toLowerCase(),
+            );
+            if (picked) {
+              add(picked);
+              return;
+            }
+            setTyped(value);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
@@ -324,8 +341,8 @@ export function SubscribeForm({
         </small>
       </label>
 
-      <fieldset>
-        <legend>Furnishing</legend>
+      <fieldset aria-labelledby="furnishing-label">
+        <span id="furnishing-label" className="field-label">Furnishing</span>
         <div className="choices">
           {furnished.map((option) => (
             <label key={option}>
@@ -382,11 +399,9 @@ export function SubscribeForm({
       </p>
 
       <p className="hint">
-        {chosen.length === 0
-          ? "Add at least one area first."
-          : whatsappReady
-            ? "One search goes to one app, so a listing never arrives twice. Want both? Fill this in again afterwards."
-            : "Only listings posted from the moment you connect — never a backlog."}
+        {whatsappReady
+          ? "One search goes to one app, so a listing never arrives twice. Want both? Fill this in again afterwards."
+          : "Only listings posted from the moment you connect — never a backlog."}
       </p>
     </form>
   );

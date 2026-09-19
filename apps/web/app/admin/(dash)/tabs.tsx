@@ -7,13 +7,12 @@ const TABS = [
   { href: "/admin", label: "System" },
   { href: "/admin/subscribers", label: "Subscribers" },
   { href: "/admin/payments", label: "Payments" },
-  { href: "/admin/support", label: "Support" },
 ] as const;
 
 // A client component only so the current tab can be marked. /admin is a prefix
 // of every other route, so it matches exactly; the rest match their subtree, so
 // a subscriber's own page keeps Subscribers lit.
-export function Tabs({ waiting }: { waiting: number }) {
+export function Tabs() {
   const here = usePathname();
 
   return (
@@ -28,9 +27,6 @@ export function Tabs({ waiting }: { waiting: number }) {
             aria-current={on ? "page" : undefined}
           >
             {tab.label}
-            {tab.label === "Support" && waiting > 0 && (
-              <span className="tab-count">{waiting}</span>
-            )}
           </Link>
         );
       })}

@@ -16,7 +16,7 @@ export const BOT_MENU: { command: string; description: string }[] = [
   { command: "update", description: "Update my search" },
   { command: "current", description: "Show my current criteria" },
   { command: "pay", description: "Full access" },
-  { command: "support", description: "Report a problem" },
+  { command: "support", description: "How to reach us" },
   { command: "stop", description: "Delete my filter and stop" },
 ];
 
@@ -73,6 +73,6 @@ export const COMMAND_HELP = [
   "/current — the filter I'm using for you",
   "",
   "/pay — full access",
-  "/support — report a problem",
+  "/support — how to reach us",
   "/stop — delete my filter and stop the messages",
 ].join("\n");

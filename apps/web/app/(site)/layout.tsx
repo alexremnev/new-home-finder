@@ -3,8 +3,6 @@ import type { ReactNode } from "react";
 
 import { SUPPORT_EMAIL } from "@/lib/support";
 
-import { BrandMark } from "./logos";
-
 // Everything that is the public site rather than the product: the two pieces of
 // chrome every page needs, and nothing else. The width belongs to the page —
 // the landing page is two columns wide and the rest are one.
@@ -16,7 +14,7 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
       <header className="site-head">
         <div className="site-head-row">
           <Link href="/" className="brand">
-            <BrandMark />
+            <img src="/logo-mark.png" alt="" width={36} height={36} />
             London Home Finder
           </Link>
         </div>

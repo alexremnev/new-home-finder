@@ -19,13 +19,26 @@ export default async function AdminLogin({
         <div className="signin-mark" aria-hidden="true">
           🔑
         </div>
-        <h1>Console</h1>
+        <h1>Dashboard</h1>
         <p className="hint signin-warn">
           This page shows every subscriber&apos;s filter. Do not open it on a machine
           you do not control.
         </p>
 
         <form method="post" action="/api/admin/login" className="signin-form">
+          <label htmlFor="username" className="field-label">
+            Login
+          </label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            autoComplete="username"
+            spellCheck={false}
+            required
+            autoFocus
+          />
+
           <label htmlFor="password" className="field-label">
             Password
           </label>
@@ -36,7 +49,6 @@ export default async function AdminLogin({
             autoComplete="current-password"
             placeholder="••••••••••••"
             required
-            autoFocus
           />
           {reason && (
             <p className="error">

@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
-import { ticketCounts } from "@/lib/admin-queries";
 
 import { Live } from "./live";
 import { Tabs } from "./tabs";
@@ -18,14 +17,13 @@ export default async function DashLayout({ children }: { children: ReactNode }) 
     redirect("/admin/login");
   }
 
-  const waiting = await ticketCounts().catch(() => ({ open: 0, handled: 0 }));
 
   return (
     <div className="dash">
       <header className="dash-bar">
         <span className="dash-name">Dashboard</span>
 
-        <Tabs waiting={waiting.open} />
+        <Tabs />
 
         <div className="dash-bar-right">
           <Live />
