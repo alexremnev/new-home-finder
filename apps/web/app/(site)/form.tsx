@@ -5,6 +5,7 @@ import { useState } from "react";
 import { neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
 
 import { TelegramMark, WhatsAppMark } from "./logos";
+import { PhonePreview } from "./phone";
 
 type Props = {
   districts: string[];
@@ -178,7 +179,8 @@ export function SubscribeForm({
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
 
   return (
-    <form onSubmit={submit}>
+    <form onSubmit={submit} className="hero-form">
+      <div className="filter-card">
       <fieldset aria-labelledby="search-by-label">
         <span id="search-by-label" className="field-label">
           How would you like to search?
@@ -313,7 +315,6 @@ export function SubscribeForm({
           format={beds}
           openTop="+"
         />
-        <small className="note">The bottom of the range is a studio.</small>
       </div>
 
       <div>
@@ -327,9 +328,6 @@ export function SubscribeForm({
           format={rooms}
           openTop="+"
         />
-        <small className="note">
-          Listings that do not state it are still sent — most do not state it.
-        </small>
       </div>
 
       <label>
@@ -350,7 +348,6 @@ export function SubscribeForm({
             </label>
           ))}
         </div>
-        <small className="note">Nothing ticked means any.</small>
       </fieldset>
 
       <label>
@@ -366,6 +363,13 @@ export function SubscribeForm({
         </p>
       </label>
 
+      </div>
+
+      <div className="hero-aside">
+        <PhonePreview />
+      </div>
+
+      <div className="hero-actions">
       {error && <p className="error">{error}</p>}
 
       <div className="connect">
@@ -397,12 +401,7 @@ export function SubscribeForm({
       <p className="promise">
         🔒 Zero Spam Guarantee. We only store your search criteria.
       </p>
-
-      <p className="hint">
-        {whatsappReady
-          ? "One search goes to one app, so a listing never arrives twice. Want both? Fill this in again afterwards."
-          : "Only listings posted from the moment you connect — never a backlog."}
-      </p>
+      </div>
     </form>
   );
 }

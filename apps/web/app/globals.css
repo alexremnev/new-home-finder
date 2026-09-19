@@ -105,17 +105,24 @@ form, .panel {
 
 form > div,
 form > label,
-form > fieldset {
+form > fieldset,
+.filter-card > div,
+.filter-card > label,
+.filter-card > fieldset {
   display: block;
-  padding: 1.5rem 0;
+  padding: 1rem 0;
   margin: 0;
   border: none;
   border-bottom: 1px solid var(--line);
 }
 
-form > *:first-child { padding-top: 0; }
+form > *:first-child,
+.filter-card > *:first-child { padding-top: 0; }
+
 form > div:last-of-type,
-form > label:last-of-type { border-bottom: none; }
+form > label:last-of-type,
+.filter-card > div:last-child,
+.filter-card > label:last-child { border-bottom: none; }
 
 label > span:first-child,
 label[for],
@@ -1642,12 +1649,13 @@ form p.error {
   color: var(--ink-soft);
   font-size: 0.75rem;
   line-height: 1.6;
-  text-align: left;
+  text-align: center;
 }
 
 .site-foot-row {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 0.35rem 1.25rem;
   margin-bottom: 0.6rem;
 }
@@ -1664,49 +1672,129 @@ form p.error {
 .site-foot-fine { opacity: 0.8; }
 
 /* ════════════════════════════════════════════════════════════════════════
-   The landing page: copy and form on the left, an alert where it is read on
-   the right. One column until there is room for two.
+   The landing page: the filter on the left, an alert where it is read on the
+   right, and the two ways out underneath both.
    ════════════════════════════════════════════════════════════════════════ */
-
-.hero {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 2.5rem;
-}
-
-.hero-copy { min-width: 0; }
 
 .hero h1 {
   margin: 0 0 0.75rem;
-  font-size: clamp(2rem, 5vw, 3rem);
+  font-size: clamp(2rem, 4.4vw, 2.75rem);
   font-weight: 800;
   line-height: 1.1;
   letter-spacing: -0.025em;
 }
 
 .hero .lede {
-  max-width: 34rem;
-  margin: 0 0 2rem;
+  max-width: 40rem;
+  margin: 0 0 1.75rem;
   font-size: 1.125rem;
   line-height: 1.55;
 }
 
-/* The mockup is decoration on a small screen and comes last there, so it
-   neither pushes the form down nor competes with it. */
-.hero-aside {
-  display: flex;
-  justify-content: center;
+/* The form is the layout: the buttons have to stay inside it to submit it, and
+   they belong under both columns rather than under the fields. */
+.hero-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.75rem;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
 }
 
-@media (min-width: 64rem) {
-  .hero {
-    grid-template-columns: 1fr 1fr;
-    align-items: center;
-    gap: 4rem;
+.filter-card {
+  padding: 1.5rem 1.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.hero-actions { min-width: 0; }
+
+/* A phone is a picture of the product, not the product. On a narrow screen it
+   is between somebody and the button they came for, so it is not drawn at all. */
+.hero-aside { display: none; }
+
+@media (min-width: 62rem) {
+  .hero-form {
+    /* The card is capped rather than elastic: a rent slider stretched across
+       700px is harder to aim at, not easier. */
+    grid-template-columns: minmax(0, 34rem) auto;
+    justify-content: start;
+    align-items: start;
+    column-gap: 3.5rem;
   }
 
-  .hero-copy { text-align: left; }
+  .hero-aside {
+    display: block;
+    position: sticky;
+    top: 2rem;
+  }
+
+  /* Under both columns. */
+  .hero-actions {
+    grid-column: 1 / -1;
+    max-width: 34rem;
+  }
 }
+
+/* ── the messenger switch ───────────────────────────────────────────────── */
+
+.switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  width: 300px;
+  margin: 0 auto 1rem;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+}
+
+/* The moving part. Transformed rather than repositioned so it slides on the
+   compositor and cannot nudge the labels while it travels. */
+.switch-thumb {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: calc(50% - 4px);
+  height: calc(100% - 8px);
+  border-radius: 999px;
+  background: var(--accent);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), background 220ms ease;
+}
+
+.switch-thumb-whatsapp { transform: translateX(0); background: var(--wa); }
+.switch-thumb-telegram { transform: translateX(100%); background: #229ed9; }
+
+.switch label {
+  position: relative;
+  z-index: 1;
+  padding: 0.45rem 0;
+  color: var(--ink-soft);
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  transition: color 160ms ease;
+  user-select: none;
+}
+
+.switch label.switch-on { color: #fff; }
+
+/* Reachable by keyboard, invisible on screen: the label is the control. */
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.switch input:focus-visible + * { outline: none; }
+.switch:focus-within { box-shadow: 0 0 0 3px var(--accent-wash); }
 
 /* ── the phone ──────────────────────────────────────────────────────────── */
 
@@ -1912,3 +2000,68 @@ form p.error {
   opacity: 0.28;
   transform: translateX(-50%);
 }
+
+/* ── the telegram screen ────────────────────────────────────────────────── */
+
+.chat-top-whatsapp { background: var(--wa-head); }
+.chat-top-telegram { background: #517da2; }
+
+.screen-whatsapp { background: var(--wa-paper); }
+
+/* Telegram's own default wallpaper is a soft blue, not WhatsApp's beige. */
+.screen-telegram { background: linear-gradient(160deg, #dfeaf3, #cddfee); }
+
+.screen-telegram .bubble { max-width: 15.5rem; border-radius: 12px 12px 12px 4px; }
+.screen-telegram .bubble::before { display: none; }
+.screen-telegram .bubble-text { padding: 0.5rem 0.6rem 1.2rem; }
+.screen-telegram .bubble-link { color: #2e7bb8; }
+
+.tg-link {
+  color: #2e7bb8;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* The card Telegram builds from the link, rather than a photograph we sent. */
+.tg-preview {
+  margin: 0 0.6rem 0.5rem;
+  padding-left: 0.5rem;
+  border-left: 3px solid #2e7bb8;
+}
+
+.tg-preview-site {
+  display: block;
+  margin-bottom: 0.25rem;
+  color: #2e7bb8;
+  font-size: 0.6875rem;
+  font-weight: 700;
+}
+
+.tg-preview-photo {
+  display: block;
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 6px;
+}
+
+/* An inline keyboard: attached under the message, the full width of it. */
+.tg-keys {
+  max-width: 15.5rem;
+  margin-top: 3px;
+}
+
+.tg-keys span {
+  display: block;
+  padding: 0.4rem;
+  border-radius: 8px;
+  background: rgb(255 255 255 / 78%);
+  color: #2e7bb8;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.chat-compose-telegram .chat-input { color: #8a9aa8; }
+.chat-mic-telegram { background: #517da2; }
