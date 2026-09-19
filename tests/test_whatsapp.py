@@ -87,6 +87,9 @@ def test_the_restricted_notice_is_emphasised_and_last() -> None:
         "🔒 *Your plan has ended. Access is now limited to 20% of property "
         "listings. Upgrade today for full access* — you are missing 80% of what matches."
     )
+    # No gap before it, and none before the link either: the message reads as
+    # one block.
+    assert "" not in text.split("\n")
 
 def test_a_button_only_action_is_left_out_rather_than_described() -> None:
 
@@ -119,6 +122,19 @@ def sent_through(**response: Any) -> tuple[list[dict[str, Any]], Any]:
     def sender(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         calls.append({"url": url, "payload": payload, "headers": headers})
         return response
+
+    return calls, sender
+
+def sent_in_turn(*responses: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
+
+    # A different answer per call, which sent_through cannot do: the fallback
+    # only means anything when the first attempt is refused and the second is
+    # not.
+    calls: list[dict[str, Any]] = []
+
+    def sender(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+        calls.append({"url": url, "payload": payload, "headers": headers})
+        return responses[min(len(calls) - 1, len(responses) - 1)]
 
     return calls, sender
 
@@ -397,17 +413,81 @@ def test_a_pictureless_listing_inside_the_window_is_plain_text() -> None:
     )
     assert calls[0]["payload"]["type"] == "text"
 
-def test_a_restricted_listing_still_offers_no_buttons_only_the_link() -> None:
+def restricted(**extra: Any) -> Alert:
+    return Alert(
+        kind="listing",
+        listing=view(share=20, lapsed="trial", **extra),
+        actions=[Action(label="Get full access", url="https://pay.test/upgrade?t=abc")],
+    )
 
-    # "Get full access" is a url, and a url is never a reply button.
+def test_the_payment_link_is_a_button_not_a_line_of_text() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
-        Alert(kind="listing", listing=view(image_url=None, share=20),
-              actions=[Action(label="Get full access", url="https://t.me/b?start=pay")]),
+        restricted(image_url=None),
     )
-    assert calls[0]["payload"]["type"] == "text"
-    assert "https://t.me/b?start=pay" in calls[0]["payload"]["text"]["body"]
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["type"] == "cta_url"
+    assert interactive["action"] == {
+        "name": "cta_url",
+        "parameters": {
+            "display_text": "Get full access",
+            "url": "https://pay.test/upgrade?t=abc",
+        },
+    }
+    # Once, as the button. Repeating it in the body would be the same link twice.
+    assert "pay.test" not in interactive["body"]["text"]
+
+def test_the_button_keeps_the_photograph_which_reply_buttons_cannot() -> None:
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        restricted(image_url=PICTURE),
+    )
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["header"] == {"type": "image", "image": {"link": PICTURE}}
+    assert interactive["type"] == "cta_url"
+
+def test_a_digest_keeps_its_three_taps_and_leaves_the_link_in_the_text() -> None:
+
+    # One message cannot hold both, and three taps are worth more than one.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expiring", text="🔔 12 new listings matched your filter today.",
+              actions=[
+                  Action(label="Upgrade today for full access", url="https://pay.test/u"),
+                  Action(label="⏸️ Pause alerts", short="Pause alerts", callback="pause"),
+              ]),
+    )
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["type"] == "button"
+    assert "https://pay.test/u" in interactive["body"]["text"]
+
+def test_a_refused_button_falls_back_to_the_plain_message() -> None:
+
+    # A listing nobody sees is worse than a listing with no button, and the
+    # cta_url shape is the newest thing sent here.
+    calls, sender = sent_in_turn(
+        {"error": {"code": 132000, "message": "unsupported header"}},
+        {"messages": [{"id": "x"}]},
+    )
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        restricted(image_url=PICTURE),
+    )
+    assert result.ok
+    assert [call["payload"]["type"] for call in calls] == ["interactive", "image"]
+    assert "pay.test" in calls[1]["payload"]["image"]["caption"]
+
+def test_a_refused_plain_message_is_not_retried_in_a_loop() -> None:
+    calls, sender = sent_in_turn({"error": {"code": 132000, "message": "nope"}})
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        restricted(image_url=PICTURE),
+    )
+    assert not result.ok
+    assert len(calls) == 2
 
 def test_a_long_label_is_cut_to_what_a_button_holds() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])

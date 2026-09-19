@@ -82,6 +82,12 @@ def test_an_ended_trial_is_named_as_a_trial() -> None:
     assert "Please make a payment to restore full access.</b>" in text
     assert "plan has ended" not in text
 
+def test_the_notice_sits_against_the_listing_with_no_gap() -> None:
+
+    # The same shape as WhatsApp. A gap here and none there would be two
+    # different messages about the same flat.
+    assert "" not in render_listing(view(share=20, lapsed="trial")).split("\n")
+
 def test_an_ended_plan_is_not_called_a_trial() -> None:
     text = render_listing(view(share=20, lapsed="plan"))
     assert "🔒 <b>Your plan has ended." in text

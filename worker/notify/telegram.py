@@ -46,7 +46,6 @@ def render_listing(view: ListingView) -> str:
 
     notice = restriction_notice(view)
     if notice:
-        lines.append("")
         lines.append(notice)
 
     return "\n".join(lines)

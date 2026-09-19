@@ -73,12 +73,11 @@ def render_listing(view: ListingView) -> str:
 
     notice = restriction_notice(view)
     if notice:
-        lines.append("")
         lines.append(notice)
 
     return "\n".join(lines)
 
-def render(alert: Alert) -> str:
+def render(alert: Alert, button: Action | None = None) -> str:
 
     if alert.kind == "listing":
         if alert.listing is None:
@@ -88,10 +87,11 @@ def render(alert: Alert) -> str:
         text = alert.text or ""
 
     # An action that exists only as a button cannot be offered here, so it is
-    # left out rather than turned into an instruction nobody can follow.
-    links = [a for a in alert.actions if a.url]
+    # left out rather than turned into an instruction nobody can follow. Nor is
+    # the one already drawn as a button, which would otherwise appear twice.
+    links = [a for a in alert.actions if a.url and a is not button]
     if links:
-        text += "\n\n" + "\n".join(f"{a.label}: {a.url}" for a in links)
+        text += "\n" + "\n".join(f"{a.label}: {a.url}" for a in links)
 
     return text[:LIMIT]
 
@@ -138,6 +138,16 @@ def template_params(view: ListingView) -> list[str]:
 # The webhook still honours `ignore:` taps, because buttons already sitting in
 # people's chats should keep working.
 UNOFFERABLE = ("ignore:",)
+
+def call_to_action(alert: Alert) -> Action | None:
+
+    # WhatsApp's one url button. It carries exactly one, and it cannot share a
+    # message with reply buttons — so a digest, which has three taps, keeps its
+    # link in the text and only a listing gets the button.
+    if any(offerable(a) for a in alert.actions):
+        return None
+    links = [a for a in alert.actions if a.url]
+    return links[0] if len(links) == 1 else None
 
 def offerable(action: Action) -> bool:
 
@@ -300,7 +310,9 @@ class WhatsAppNotifier:
     def supports(self, kind: AlertKind) -> bool:
         return kind in ("listing", "welcome", "stopped", "expiring", "expired")
 
-    def body(self, to: Recipient, alert: Alert) -> dict[str, Any] | SendResult:
+    def body(
+        self, to: Recipient, alert: Alert, *, cta: bool = True
+    ) -> dict[str, Any] | SendResult:
 
         number = digits(to.address)
         if not number:
@@ -311,12 +323,38 @@ class WhatsAppNotifier:
 
         if window_open(to.last_inbound):
             listing = alert.listing
+            picture = None if listing is None else _picture(listing)
+
+            # A tappable button beats a url in the text, and unlike reply
+            # buttons it keeps the photograph, as the header of the same
+            # message.
+            offer = call_to_action(alert) if cta else None
+            if offer is not None and offer.url:
+                text = render(alert, offer)
+                action: dict[str, Any] = {
+                    "name": "cta_url",
+                    "parameters": {
+                        "display_text": offer.button(BUTTON_CHARS),
+                        "url": offer.url,
+                    },
+                }
+                interactive: dict[str, Any] = {"type": "cta_url"}
+                if picture is not None:
+                    interactive["header"] = {"type": "image", "image": picture}
+                interactive["body"] = {"text": text[:INTERACTIVE_BODY]}
+                interactive["action"] = action
+                return {
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "interactive",
+                    "interactive": interactive,
+                }
+
             # A real image rather than a link preview. WhatsApp's own thumbnail
             # is small and heavily compressed, and there is no setting for it;
             # an image message arrives at full resolution with the text as its
             # caption. Captions hold 1024 characters and an alert uses ~300.
             body = render(alert)
-            picture = None if listing is None else _picture(listing)
             if (
                 alert.kind == "listing"
                 and listing is not None
@@ -430,7 +468,23 @@ class WhatsAppNotifier:
                 retryable=False,
             )
 
-        payload = self.body(to, alert)
+        result = self._post(to, alert, cta=True)
+
+        # The url button is the only shape here that Meta may decline outright
+        # — a cta_url message with an image header is newer than the rest — and
+        # a declined alert is a listing the person never sees. So a permanent
+        # refusal of that one shape is retried once as the plain message, which
+        # is known to work. Only that shape: retrying anything else would post
+        # the identical payload twice for the identical refusal.
+        used_button = window_open(to.last_inbound) and call_to_action(alert) is not None
+        if used_button and not result.ok and not result.retryable and not result.recipient_gone:
+            plain = self._post(to, alert, cta=False)
+            if plain.ok:
+                return plain
+        return result
+
+    def _post(self, to: Recipient, alert: Alert, *, cta: bool) -> SendResult:
+        payload = self.body(to, alert, cta=cta)
         if isinstance(payload, SendResult):
             return payload
 
