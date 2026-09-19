@@ -5,18 +5,21 @@ import { SUPPORT_EMAIL } from "@/lib/support";
 
 import { BrandMark } from "./logos";
 
-// Everything that is the public site rather than the product: the sunset, the
-// skyline, the reading column, and the two pieces of chrome every page needs.
+// Everything that is the public site rather than the product: the two pieces of
+// chrome every page needs, and nothing else. The width belongs to the page —
+// the landing page is two columns wide and the rest are one.
 export default function SiteLayout({ children }: { children: ReactNode }) {
   const year = new Date().getFullYear();
 
   return (
     <div className="site">
       <header className="site-head">
-        <Link href="/" className="brand">
-          <BrandMark />
-          London Home Finder <span>· London rentals, the moment they list</span>
-        </Link>
+        <div className="site-head-row">
+          <Link href="/" className="brand">
+            <BrandMark />
+            London Home Finder
+          </Link>
+        </div>
       </header>
 
       <main className="shell">{children}</main>

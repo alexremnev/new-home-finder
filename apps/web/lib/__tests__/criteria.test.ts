@@ -85,6 +85,30 @@ describe("ranges", () => {
     expect(() => parseForm({ bedrooms_max: "99" }, ENABLED)).toThrow(InvalidForm);
   });
 
+  it("takes a range for rooms, not only a floor", () => {
+    // Both sliders have two handles now, so both ends arrive.
+    const criteria = parseForm(
+      { bedrooms_min: "2", bedrooms_max: "3", bathrooms_min: "1", bathrooms_max: "2" },
+      ENABLED,
+    );
+    expect(criteria.bedrooms).toEqual({ min: 2, max: 3 });
+    expect(criteria.bathrooms).toEqual({ min: 1, max: 2 });
+  });
+
+  it("leaves the top open when only a floor is given", () => {
+    // What a slider parked at its ceiling sends: no maximum at all, so a
+    // six-bedroom house is not filtered out.
+    expect(parseForm({ bedrooms_min: "2" }, ENABLED).bedrooms).toEqual({ min: 2 });
+    expect(parseForm({ bathrooms_max: "2" }, ENABLED).bathrooms).toEqual({ max: 2 });
+  });
+
+  it("refuses a room range that is inside out", () => {
+    expect(() => parseForm({ bedrooms_min: "4", bedrooms_max: "2" }, ENABLED)).toThrow(
+      InvalidForm,
+    );
+  });
+
+
   it("allows a studio, which is zero and not missing", () => {
     expect(parseForm({ bedrooms_min: "0", bedrooms_max: "0" }, ENABLED).bedrooms)
       .toEqual({ min: 0, max: 0 });

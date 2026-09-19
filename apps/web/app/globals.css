@@ -1,37 +1,35 @@
 :root {
-  --ink: #262637;
-  --ink-soft: #6a6a7c;
-  --line: #e4e4ea;
-  --line-strong: #cfcfda;
-  --bg: #f6f6f8;
+  --ink: #0f172a;
+  --ink-soft: #475569;
+  --line: #e2e8f0;
+  --line-strong: #cbd5e1;
+  --bg: #f8fafc;
   --card: #fff;
   --accent: #00a884;
   --accent-dim: #008e70;
   --accent-wash: #e6f7f2;
   --bad: #c0392b;
   --radius: 8px;
-  --radius-lg: 14px;
-  --shadow: 0 1px 2px rgb(38 38 55 / 6%), 0 8px 28px rgb(38 38 55 / 6%);
+  --radius-lg: 16px;
+  --radius-cta: 12px;
+  --shadow: 0 10px 25px -5px rgb(0 0 0 / 5%), 0 8px 10px -6px rgb(0 0 0 / 1%);
+
+  /* One height for every control, so a row of them lines up without anyone
+     measuring. */
+  --control: 44px;
+  --cta-height: 52px;
+
+  /* WhatsApp's own colours, used only where the page is imitating WhatsApp. */
+  --wa: #25d366;
+  --wa-dim: #20bd5a;
+  --wa-head: #075e54;
+  --wa-head-soft: #128c7e;
+  --wa-paper: #e5ddd5;
 }
 
 * { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
-
-.site::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  background:
-
-    var(--backdrop, url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1400' height='240' preserveAspectRatio='none' viewBox='0 0 1400 240'%3E%3Cpath fill='%23262637' fill-opacity='0.5' d='M0 240V196h38v-28h26v28h34v-52h30v52h22v-18h28v18h40v-96l16-30 16 30v96h34v-40h30v40h30v-64h26v-14h10v14h26v64h44v-30h34v30h30v-120l14-26 14 26v120h34v-44h28v44h46v-70h12v-22h10v22h12v70h40v-34h30v34h34v-58h26v58h40v-150l18-34 18 34v150h30v-46h30v46h44v-26h32v26h36v-74h28v74h40v-40h30v40h38v-54h26v54h30v-30h34v30z'/%3E%3C/svg%3E"));
-  background-repeat: no-repeat;
-  background-position: bottom center;
-  background-size: 100% auto;
-  opacity: 0.08;
-  pointer-events: none;
-}
 
 body {
   margin: 0;
@@ -48,28 +46,28 @@ body {
 .site {
   position: relative;
   min-height: 100vh;
-  padding: 3rem 1.25rem 5rem;
-
-  background:
-    linear-gradient(
-      180deg,
-      #ffd9a8 0%,
-      #ffc59b 12%,
-      #f4b3a8 24%,
-      #e8d3d0 38%,
-      var(--bg) 58%,
-      var(--bg) 100%
-    )
-    fixed;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
 }
 
 .shell {
   width: 100%;
-  max-width: 40rem;
+  max-width: 1200px;
   margin: 0 auto;
+  padding: 2.5rem 1.25rem 4rem;
+  flex: 1;
 }
 
 .shell:has(.admin) { max-width: 64rem; }
+
+/* Anything that is prose rather than a landing page: one column, kept narrow
+   enough to read. The home page opts out by being a grid. */
+.column {
+  width: 100%;
+  max-width: 40rem;
+  margin: 0 auto;
+}
 
 h1 {
   margin: 0 0 0.5rem;
@@ -89,7 +87,7 @@ h1 {
 a { color: var(--accent-dim); }
 
 form, .panel {
-  padding: 1.75rem 1.75rem 2rem;
+  padding: 2rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   background: var(--card);
@@ -148,8 +146,9 @@ input[type="date"],
 select {
   appearance: none;
   width: 100%;
-  padding: 0.7rem 0.9rem;
-  border: 1px solid var(--line-strong);
+  height: var(--control);
+  padding: 0 0.9rem;
+  border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--card);
   color: inherit;
@@ -211,64 +210,23 @@ fieldset label {
   font-size: 0.75rem;
 }
 
-.stepper input[type="range"] {
-  appearance: none;
-  flex: 1;
-  height: 1.5rem;
-  margin: 0;
-  background: none;
-  cursor: pointer;
-}
-
-.stepper input[type="range"]::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--line-strong);
-}
-
-.stepper input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 2px;
-  background: var(--line-strong);
-}
-
-.stepper input[type="range"]::-webkit-slider-thumb {
-  appearance: none;
-  width: 1.4rem;
-  height: 1.4rem;
-  margin-top: -0.55rem;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
-}
-
-.stepper input[type="range"]::-moz-range-thumb {
-  width: 1.4rem;
-  height: 1.4rem;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 1px 4px rgb(38 38 55 / 30%);
-}
-
-.stepper input[type="range"]:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 4px var(--accent-wash);
-}
-
 .site button[type="submit"],
 .cta {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
   width: 100%;
-  margin-top: 1.75rem;
-  padding: 0.9rem 1.5rem;
+  height: var(--cta-height);
+  margin-top: 1rem;
+  padding: 0 1.5rem;
   border: none;
-  border-radius: var(--radius);
+  border-radius: var(--radius-cta);
   background: var(--accent);
   color: #fff;
   font: inherit;
-  font-size: 1.0625rem;
-  font-weight: 700;
+  font-size: 16px;
+  font-weight: 600;
   text-align: center;
   text-decoration: none;
   cursor: pointer;
@@ -399,27 +357,6 @@ form p.error {
   font-size: 0.8125rem;
 }
 
-/* Reachable from every public page without any of them mentioning it. Inside
-   the same column as the content, so it lines up with the text above rather
-   than floating in the middle of a wide screen. */
-.site-foot {
-  width: 100%;
-  max-width: 40rem;
-  margin: 2.5rem auto 0;
-  color: var(--ink-soft);
-  font-size: 0.8125rem;
-  text-align: center;
-}
-
-.site-foot a {
-  color: var(--ink-soft);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-
-.site-foot a:hover { color: var(--ink); }
-
 .footnote {
   margin-top: 2.5rem;
   color: var(--ink-soft);
@@ -428,9 +365,8 @@ form p.error {
 }
 
 @media (max-width: 34rem) {
-  body { padding: 1.75rem 1rem 4rem; }
-  h1 { font-size: 1.6rem; }
-  form, .panel { padding: 1.25rem 1.15rem 1.5rem; }
+  .shell { padding: 1.75rem 1rem 3rem; }
+  form, .panel { padding: 1.25rem; }
   input[type="number"], input[type="date"] { width: 100%; }
   .choices { gap: 0.5rem 1rem; }
 }
@@ -656,13 +592,6 @@ form p.error {
 .range2 { margin-top: 0.25rem; }
 
 .range2-value,
-.stepper .range2-value {
-  display: block;
-  margin-bottom: 0.7rem;
-  font-size: 1.25rem;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-}
 
 .range2-track {
   position: relative;
@@ -758,25 +687,6 @@ form p.error {
   color: var(--ink-soft);
   font-size: 0.75rem;
 }
-
-.stepper input[type="range"] {
-  width: 100%;
-  appearance: none;
-  height: 1.6rem;
-  margin: 0;
-  background: none;
-  cursor: pointer;
-}
-
-.stepper-ticks {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 0.3rem;
-  color: var(--ink-soft);
-  font-size: 0.75rem;
-}
-
-.stepper-ticks .on { color: var(--accent-dim); font-weight: 700; }
 
 .notice {
   margin: 0.5rem 0 0;
@@ -1034,77 +944,43 @@ form p.error {
 
 /* The two ways out of the form, side by side where there is room and stacked
    where there is not. Each keeps .cta's full width inside its own column. */
+/* The two ways out of the form, stacked and full width: each is the primary
+   action for whoever reads it, and side by side neither looked it. */
 .connect {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 0.75rem;
-  margin-top: 1.75rem;
+  margin-top: 1.5rem;
 }
 
-.connect > .cta {
-  flex: 1 1 14rem;
-  width: auto;
-  margin-top: 0;
-}
-
-.cta-telegram,
-.cta-whatsapp {
-  display: block;
-  text-align: center;
-}
+.connect > .cta { margin-top: 0; }
 
 /* Disabled wins over the brand colour: submit buttons are disabled until an
    area is chosen, and a bright green button that does nothing reads as broken. */
 .connect > .cta:disabled {
-  background: #c2c2ce;
-  border-color: #c2c2ce;
+  background: var(--line-strong);
   color: #fff;
   cursor: not-allowed;
 }
 
-.cta-telegram {
-  background: #229ed9;
-  border-color: #229ed9;
-  color: #fff;
-}
+.cta-telegram { background: #229ed9; color: #fff; }
+.cta-whatsapp { background: var(--wa); color: #fff; }
 
-.cta-whatsapp {
-  margin-top: 0.75rem;
-  background: #25d366;
-  border-color: #1faa53;
-  color: #05291a;
-}
+.cta-whatsapp:hover:not(:disabled),
+.cta-whatsapp:focus-visible { background: var(--wa-dim); color: #fff; }
 
-.cta-whatsapp:hover,
-.cta-whatsapp:focus-visible {
-  background: #1faa53;
-  color: #fff;
-}
+.cta-telegram:hover:not(:disabled),
+.cta-telegram:focus-visible { background: #1b87ba; color: #fff; }
 
-.cta-telegram:hover,
-.cta-telegram:focus-visible {
-  background: #1b87ba;
-  color: #fff;
-}
-
-/* The mark sits on the text baseline rather than above it, and the gap is the
-   button's own so the label does not need a space character to make one. */
+/* Sized to the label rather than the viewbox, and placed by the button's own
+   gap — so no label needs a space character to make room for it. */
 .cta svg {
-  vertical-align: -0.25em;
-  margin-right: 0.15rem;
+  width: 1.15em;
+  height: 1.15em;
+  flex: none;
 }
 
 /* ── admin tabs ─────────────────────────────────────────────────────────── */
-
-
-
-
-
-
-
-
-
-
 
 /* ── support tickets ────────────────────────────────────────────────────── */
 
@@ -1709,42 +1585,45 @@ form p.error {
 /* ── the site header ──────────────────────────────────────────────────────── */
 
 .site-head {
+  flex: none;
+  border-bottom: 1px solid var(--line);
+  background: var(--card);
+}
+
+/* The bar runs the full width; what is inside it lines up with the page. */
+.site-head-row {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
   width: 100%;
-  max-width: 40rem;
-  margin: 0 auto 2rem;
+  max-width: 1200px;
+  height: 64px;
+  margin: 0 auto;
+  padding: 0 1.25rem;
 }
 
 .site-head svg { flex: none; }
 
 .brand {
   display: flex;
-  align-items: baseline;
-  gap: 0.4rem;
-  font-size: 1rem;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.0625rem;
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
   color: var(--ink);
   text-decoration: none;
 }
 
-.brand span { color: var(--ink-soft); font-weight: 500; }
-
 .brand:hover { text-decoration: none; }
-
-@media (max-width: 30rem) {
-  .brand span { display: none; }
-}
 
 /* ── the site footer ──────────────────────────────────────────────────────── */
 
 .site-foot {
+  flex: none;
   width: 100%;
-  max-width: 40rem;
-  margin: 3rem auto 0;
-  padding-top: 1.25rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 2.5rem;
   border-top: 1px solid var(--line);
   color: var(--ink-soft);
   font-size: 0.75rem;
@@ -1769,3 +1648,166 @@ form p.error {
 .site-foot a:hover { color: var(--ink); }
 
 .site-foot-fine { opacity: 0.8; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   The landing page: copy and form on the left, an alert where it is read on
+   the right. One column until there is room for two.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.hero {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2.5rem;
+}
+
+.hero-copy { min-width: 0; }
+
+.hero h1 {
+  margin: 0 0 0.75rem;
+  font-size: clamp(2rem, 5vw, 3rem);
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+}
+
+.hero .lede {
+  max-width: 34rem;
+  margin: 0 0 2rem;
+  font-size: 1.125rem;
+  line-height: 1.55;
+}
+
+/* The mockup is decoration on a small screen and comes last there, so it
+   neither pushes the form down nor competes with it. */
+.hero-aside {
+  display: flex;
+  justify-content: center;
+}
+
+@media (min-width: 64rem) {
+  .hero {
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
+    gap: 4rem;
+  }
+
+  .hero-copy { text-align: left; }
+}
+
+/* ── the phone ──────────────────────────────────────────────────────────── */
+
+.phone {
+  width: 300px;
+  max-width: 100%;
+  height: 560px;
+  padding: 12px;
+  border-radius: 40px;
+  background: #0b0b0f;
+  box-shadow: 0 24px 60px -20px rgb(15 23 42 / 35%), 0 2px 0 #2a2a33 inset;
+}
+
+.phone-screen {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  border-radius: 30px;
+  background: var(--wa-paper);
+}
+
+.chat-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex: none;
+  padding: 1.15rem 0.85rem 0.6rem;
+  background: var(--wa-head);
+  color: #fff;
+}
+
+.chat-avatar {
+  width: 34px;
+  height: 34px;
+  flex: none;
+}
+
+.chat-who {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.chat-who small {
+  color: rgb(255 255 255 / 75%);
+  font-size: 0.6875rem;
+  font-weight: 400;
+}
+
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0.85rem 0.7rem;
+  overflow: hidden;
+}
+
+/* An incoming bubble: square-ish, with the tail on the left. */
+.bubble {
+  position: relative;
+  max-width: 15rem;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 1px 1px rgb(15 23 42 / 12%);
+}
+
+.bubble::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -6px;
+  border-width: 0 7px 8px 0;
+  border-style: solid;
+  border-color: transparent #fff transparent transparent;
+}
+
+.bubble-photo {
+  display: block;
+  width: 100%;
+  height: 140px;
+  object-fit: cover;
+  border-radius: 8px 8px 0 0;
+}
+
+.bubble-text {
+  padding: 0.5rem 0.6rem 1.25rem;
+  color: #111b21;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.bubble-text p { margin: 0; }
+.bubble-text strong { font-weight: 700; }
+
+.bubble-link {
+  display: block;
+  color: #0a7cba;
+  word-break: break-all;
+}
+
+.bubble-time {
+  position: absolute;
+  right: 0.55rem;
+  bottom: 0.35rem;
+  color: #667781;
+  font-size: 0.625rem;
+}
+
+/* Directly under the two buttons, where somebody about to hand over a phone
+   number is looking. */
+.promise {
+  margin: 0.85rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  text-align: center;
+}

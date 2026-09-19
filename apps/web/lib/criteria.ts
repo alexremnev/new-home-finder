@@ -102,20 +102,6 @@ function districtList(value: unknown, enabled: string[]): string[] {
   return wanted;
 }
 
-function boundedRange(
-  min: number | undefined,
-  max: number | undefined,
-  ceiling: number,
-): { min?: number; max?: number } | undefined {
-  const low = integer(min, 0, ceiling);
-  const high = integer(max, 0, ceiling);
-  if (low === undefined && high === undefined) return undefined;
-  if (low !== undefined && high !== undefined && low > high) {
-    throw new InvalidForm("the minimum is above the maximum");
-  }
-  return { ...(low !== undefined && { min: low }), ...(high !== undefined && { max: high }) };
-}
-
 export function describeCriteria(criteria: Criteria): string {
 
   const districts = criteria.areas?.postcode_districts ?? [];

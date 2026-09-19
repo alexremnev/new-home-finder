@@ -1,0 +1,21 @@
+{
+  "listing": {
+    "price_pcm": 2100,
+    "bedrooms": 2,
+    "bathrooms": 1,
+    "property_type": "flat",
+    "district": "SE16",
+    "postcode": "SE16 4TH",
+    "zone": 2,
+    "area": "Rotherhithe",
+    "available_from": "2026-10-01",
+    "furnished": "furnished",
+    "pets_allowed": true,
+    "min_tenancy_months": 12,
+    "source_display": "Rightmove",
+    "is_landlord_direct": false,
+    "url": "https://www.rightmove.co.uk/properties/149283746",
+    "size_text": "650 sq ft"
+  },
+  "text": "🏠 *New listing spotted!*\n📍 Rotherhithe\n📮 SE16 4TH\n💷 *£2,100/month*\n🛏️ 2 Bedrooms\n🛁 1 Bathroom\n📐 650 sq ft\n📅 Available from 1 October 2026\n🐾 Pets allowed\n🛋 Furnished\nhttps://www.rightmove.co.uk/properties/149283746"
+}

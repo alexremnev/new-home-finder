@@ -312,17 +312,20 @@ def test_an_unreachable_recipient_stops_collecting_for_them(
 
 def test_an_unimplemented_channel_fails_only_its_own_message(conn: Any, run: Run) -> None:
 
+    # Email, not WhatsApp: WhatsApp has been implemented since this was written,
+    # and the test went on asserting it had not. It never noticed, because it
+    # only runs with TEST_DATABASE_URL set.
     user_id = make_user(conn)
     make_subscription(conn, user_id)
     outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
-    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
-    conn.execute("UPDATE notifications SET channel = 'whatsapp'")
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'email'")
+    conn.execute("UPDATE notifications SET channel = 'email'")
 
     assert outbox.drain(conn, run) == "degraded"
     row = notification(conn)
     assert row is not None
     assert row["status"] == "failed"
-    assert row["error"] is not None and "whatsapp" in row["error"]
+    assert row["error"] is not None and "email" in row["error"]
 
 def test_a_dry_run_holds_everything(conn: Any, run: Run, notifier: FakeNotifier) -> None:
     queue_one(conn, run)

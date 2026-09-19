@@ -4,6 +4,7 @@ import { headers } from "next/headers";
 import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
+import { PhonePreview } from "./phone";
 
 export const dynamic = "force-dynamic";
 
@@ -102,35 +103,36 @@ export default async function Page() {
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structured) }}
       />
 
-      <h1>Every new London rental, minutes after it lists.</h1>
-      <p className="lede">
-        Near real-time notifications from <strong>Zoopla</strong>,{" "}
-        <strong>Rightmove</strong> and <strong>OpenRent</strong> — one stream, no
-        three tabs. Tell us what you are looking for and every match arrives in
-        Telegram or WhatsApp within minutes of going live.
-      </p>
+      <div className="hero">
+        <div className="hero-copy">
+          <h1>Beat the London Rental Race. Get Instant Alerts.</h1>
+          <p className="lede">
+            Never miss a listing on Rightmove, Zoopla, or OpenRent. Set your
+            criteria and receive instant notifications directly in WhatsApp.
+          </p>
 
-      {codes.length === 0 ? (
-        <p className="panel">
-          No districts are being covered right now, so there is nothing to subscribe
-          to yet.
-        </p>
-      ) : (
-        <SubscribeForm
-          districts={codes}
-          maxDistricts={plan?.max_districts ?? 1}
-          furnished={[...FURNISHED]}
-          whatsappReady={Boolean(
-            process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
+          {codes.length === 0 ? (
+            <p className="panel">
+              No districts are being covered right now, so there is nothing to
+              subscribe to yet.
+            </p>
+          ) : (
+            <SubscribeForm
+              districts={codes}
+              maxDistricts={plan?.max_districts ?? 1}
+              furnished={[...FURNISHED]}
+              whatsappReady={Boolean(
+                process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
+              )}
+              names={names}
+            />
           )}
-          names={names}
-        />
-      )}
+        </div>
 
-      <p className="footnote">
-        We keep the criteria you choose and the one address we send to — a Telegram
-        chat id or a phone number. Nothing else.
-      </p>
+        <div className="hero-aside">
+          <PhonePreview />
+        </div>
+      </div>
     </>
   );
 }

@@ -21,7 +21,11 @@ const RENT_MIN = 400;
 const RENT_MAX = 10_000;
 const RENT_STEP = 100;
 
+const ROOMS_MIN = 0;
 const ROOMS_MAX = 5;
+
+const rooms = (value: number) => String(value);
+const beds = (value: number) => (value === 0 ? "Studio" : String(value));
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
 const percent = (value: number, min: number, max: number) =>
@@ -38,8 +42,8 @@ export function SubscribeForm({
 
   const [mode, setMode] = useState<"name" | "postcode">("name");
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
-  const [beds, setBeds] = useState(0);
-  const [baths, setBaths] = useState(0);
+  const [bedrooms, setBedrooms] = useState<[number, number]>([ROOMS_MIN, ROOMS_MAX]);
+  const [bathrooms, setBathrooms] = useState<[number, number]>([ROOMS_MIN, ROOMS_MAX]);
   const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
@@ -123,8 +127,13 @@ export function SubscribeForm({
 
     if (rent[0] > RENT_MIN) payload.price_min = String(rent[0]);
     if (rent[1] < RENT_MAX) payload.price_max = String(rent[1]);
-    if (beds > 0) payload.bedrooms_min = String(beds);
-    if (baths > 0) payload.bathrooms_min = String(baths);
+    // Only the ends that were actually moved. A slider left at its ceiling
+    // means "and above", not "at most five" — sending the max there would hide
+    // every six-bedroom house from somebody who asked for no maximum.
+    if (bedrooms[0] > ROOMS_MIN) payload.bedrooms_min = String(bedrooms[0]);
+    if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
+    if (bathrooms[0] > ROOMS_MIN) payload.bathrooms_min = String(bathrooms[0]);
+    if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
 
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
@@ -278,22 +287,28 @@ export function SubscribeForm({
 
       <div>
         <span className="field-label">Bedrooms</span>
-        <Stepper
-          value={beds}
-          onChange={setBeds}
+        <RangeSlider
+          min={ROOMS_MIN}
           max={ROOMS_MAX}
-          label={(n) => (n === 0 ? "Any" : `${n}+`)}
+          step={1}
+          value={bedrooms}
+          onChange={setBedrooms}
+          format={beds}
+          openTop="+"
         />
-        <small className="note">Any includes studios.</small>
+        <small className="note">The bottom of the range is a studio.</small>
       </div>
 
       <div>
         <span className="field-label">Bathrooms</span>
-        <Stepper
-          value={baths}
-          onChange={setBaths}
+        <RangeSlider
+          min={ROOMS_MIN}
           max={ROOMS_MAX}
-          label={(n) => (n === 0 ? "Any" : `${n}+`)}
+          step={1}
+          value={bathrooms}
+          onChange={setBathrooms}
+          format={rooms}
+          openTop="+"
         />
         <small className="note">
           Listings that do not state it are still sent — most do not state it.
@@ -345,7 +360,7 @@ export function SubscribeForm({
           disabled={busy !== null || chosen.length === 0}
         >
           <TelegramMark />{" "}
-          {busy === "telegram" ? "One moment…" : "Connect to Telegram"}
+          {busy === "telegram" ? "One moment…" : "Connect Telegram"}
         </button>
 
         {whatsappReady && (
@@ -357,10 +372,14 @@ export function SubscribeForm({
             disabled={busy !== null || chosen.length === 0}
           >
             <WhatsAppMark />{" "}
-            {busy === "whatsapp" ? "One moment…" : "Connect to WhatsApp"}
+            {busy === "whatsapp" ? "One moment…" : "Connect WhatsApp"}
           </button>
         )}
       </div>
+
+      <p className="promise">
+        🔒 Zero Spam Guarantee. We only store your search criteria.
+      </p>
 
       <p className="hint">
         {chosen.length === 0
@@ -434,36 +453,6 @@ function RangeSlider({
           {format(max)}
           {openTop}
         </span>
-      </div>
-    </div>
-  );
-}
-
-function Stepper({
-  value, onChange, max, label,
-}: {
-  value: number;
-  onChange: (next: number) => void;
-  max: number;
-  label: (n: number) => string;
-}) {
-  return (
-    <div className="stepper">
-      <output className="range2-value">{label(value)}</output>
-      <input
-        type="range"
-        min={0}
-        max={max}
-        step={1}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-      <div className="stepper-ticks">
-        {Array.from({ length: max + 1 }, (_, n) => (
-          <span key={n} className={n === value ? "on" : undefined}>
-            {n === 0 ? "Any" : n}
-          </span>
-        ))}
       </div>
     </div>
   );
