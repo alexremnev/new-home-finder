@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import type { Limits } from "./criteria";
 import { query } from "./db";
+import { stripeMode } from "./stripe";
 
 export type Plan = {
   key: string;
@@ -10,8 +11,23 @@ export type Plan = {
   duration_days: number | null;
   price_pence: number;
 
+  // The id for whichever Stripe account is in use. Both are read from the row
+  // and `priced` picks one, so nothing downstream has to know about modes.
   stripe_price_id: string | null;
 };
+
+type PlanRow = Plan & { stripe_price_id_live: string | null };
+
+// A Price id belongs to one Stripe account. Selecting it here, next to the
+// mode, is what makes going live a single variable.
+function priced(row: PlanRow): Plan {
+  const { stripe_price_id_live, ...plan } = row;
+  return {
+    ...plan,
+    stripe_price_id:
+      stripeMode() === "live" ? stripe_price_id_live : row.stripe_price_id,
+  };
+}
 
 export type Account = {
   user_id: number;
@@ -38,12 +54,12 @@ export async function signupPlan(): Promise<Plan> {
 }
 
 export async function paidPlans(): Promise<Plan[]> {
-  return query<Plan>(
-
+  const rows = await query<PlanRow>(
     `SELECT key, display_name, max_districts, duration_days, price_pence,
-            stripe_price_id
+            stripe_price_id, stripe_price_id_live
        FROM plans WHERE enabled AND price_pence > 0 ORDER BY price_pence`,
   );
+  return rows.map(priced);
 }
 
 // What an ended plan drops back to, as a percentage. Read rather than written
@@ -194,11 +210,12 @@ export async function accountForToken(
 }
 
 export async function paidPlan(key: string): Promise<Plan | null> {
-  const rows = await query<Plan>(
+  const rows = await query<PlanRow>(
     `SELECT key, display_name, max_districts, duration_days, price_pence,
-            stripe_price_id
+            stripe_price_id, stripe_price_id_live
        FROM plans WHERE key = $1 AND enabled AND price_pence > 0`,
     [key],
   );
-  return rows[0] ?? null;
+  const row = rows[0];
+  return row ? priced(row) : null;
 }

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type Stripe from "stripe";
 
 import { transaction } from "@/lib/db";
-import { stripeClient } from "@/lib/stripe";
+import { stripeClient, stripeMode, stripeWebhookSecret } from "@/lib/stripe";
 
 import { paymentReceived } from "@/lib/messages";
 import { tell } from "@/lib/reach";
@@ -12,9 +12,16 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request): Promise<NextResponse> {
   const stripe = stripeClient();
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  // The secret of the endpoint in whichever account STRIPE_MODE names. Both
+  // functions log which mode they were in and what was missing, so the usual
+  // mistake — the flag flipped and the live endpoint not added yet — says so
+  // instead of looking like a bad signature.
+  const secret = stripeWebhookSecret();
   if (!stripe || !secret) {
-    return NextResponse.json({ error: "not configured" }, { status: 503 });
+    return NextResponse.json(
+      { error: "not configured", mode: stripeMode() },
+      { status: 503 },
+    );
   }
 
   const signature = request.headers.get("stripe-signature");
@@ -25,6 +32,9 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     event = stripe.webhooks.constructEvent(await request.text(), signature, secret);
   } catch (error) {
+    // Naming the mode here because a signature that never matches is almost
+    // always the other account's endpoint calling this one.
+    console.error("stripe webhook rejected", { mode: stripeMode(), error: String(error) });
     return NextResponse.json({ error: `bad signature: ${String(error)}` }, { status: 400 });
   }
 

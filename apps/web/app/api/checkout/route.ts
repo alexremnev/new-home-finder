@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { accountForToken, paidPlan, siteUrl } from "@/lib/plans";
-import { stripeClient } from "@/lib/stripe";
+import { stripeClient, stripeMode } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,9 +24,16 @@ export async function GET(request: Request): Promise<NextResponse | Response> {
     return NextResponse.json({ error: "no such plan" }, { status: 404 });
   }
   if (!plan.stripe_price_id) {
-
+    // Which column is missing depends on the mode, and saying so is the
+    // difference between a one-line fix and a hunt.
+    const column =
+      stripeMode() === "live" ? "stripe_price_id_live" : "stripe_price_id";
     return NextResponse.json(
-      { error: `${plan.display_name} is not set up for card payment yet` },
+      {
+        error:
+          `${plan.display_name} is not set up for card payment in ` +
+          `${stripeMode()} mode: plans.${column} is empty for "${plan.key}".`,
+      },
       { status: 503 },
     );
   }
