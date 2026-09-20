@@ -284,6 +284,7 @@ class WhatsAppNotifier:
         image_header: bool = False,
         sender: Sender | None = None,
         version: str = VERSION,
+        notice_template: str | None = None,
     ) -> None:
         self.phone_id = phone_id
         self.token = token
@@ -293,6 +294,7 @@ class WhatsAppNotifier:
         self.image_header = image_header
         self.sender = sender or _post
         self.version = version
+        self.notice_template = notice_template
 
     @classmethod
     def from_env(cls) -> WhatsAppNotifier:
@@ -305,6 +307,7 @@ class WhatsAppNotifier:
             os.environ.get("WA_LINK_PREFIX") or None,
             (os.environ.get("WA_TEMPLATE_IMAGE") or "").strip().lower()
             in ("1", "true", "yes"),
+            notice_template=os.environ.get("WA_NOTICE_TEMPLATE") or None,
         )
 
     def supports(self, kind: AlertKind) -> bool:
@@ -401,10 +404,35 @@ class WhatsAppNotifier:
                 "text": {"preview_url": alert.kind == "listing", "body": body},
             }
 
+        if alert.kind == "expired" and self.notice_template and alert.params:
+            # The one notice that has to arrive. Somebody whose access just
+            # changed has, by definition, not written in for a day — which is
+            # exactly when the free-form path is shut. The template says what
+            # happened and asks them to reply; replying reopens the window, and
+            # everything after that is free text again.
+            return {
+                "messaging_product": "whatsapp",
+                "to": number,
+                "type": "template",
+                "template": {
+                    "name": self.notice_template,
+                    "language": {"code": self.language},
+                    "components": [
+                        {
+                            "type": "body",
+                            "parameters": [
+                                {"type": "text", "text": one_line(value)}
+                                for value in alert.params
+                            ],
+                        }
+                    ],
+                },
+            }
+
         if alert.kind != "listing" or alert.listing is None:
-            # Nothing but a listing has an approved shape, and inventing one
-            # here would be a message WhatsApp refuses. Retryable: the person
-            # may write in, and then the free-form path opens.
+            # Nothing else has an approved shape, and inventing one here would
+            # be a message WhatsApp refuses. Retryable: the person may write in,
+            # and then the free-form path opens.
             return SendResult(
                 ok=False,
                 error=f"outside the 24h window and {alert.kind} has no template",

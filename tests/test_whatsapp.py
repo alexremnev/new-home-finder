@@ -520,6 +520,50 @@ def test_a_listing_with_a_picture_is_still_a_picture_not_a_button_message() -> N
     )
     assert calls[0]["payload"]["type"] == "image"
 
+def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
+
+    # Somebody whose access just changed has, by definition, not written in for
+    # a day — which is exactly when free-form text is shut off. Without this the
+    # one notice that matters is the one that never arrives.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender, notice_template="plan_notice").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(
+            kind="expired",
+            text="Your free trial has ended.",
+            params=["free trial", "20% of the listings"],
+        ),
+    )
+    assert result.ok
+    body = calls[0]["payload"]
+    assert body["type"] == "template"
+    assert body["template"]["name"] == "plan_notice"
+    assert [p["text"] for p in body["template"]["components"][0]["parameters"]] == [
+        "free trial",
+        "20% of the listings",
+    ]
+
+def test_without_that_template_nothing_is_invented() -> None:
+
+    # A template WhatsApp has not approved is a message it refuses, so saying so
+    # beats sending something that cannot arrive.
+    result = notifier().send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+    )
+    assert not result.ok and "no template" in (result.error or "")
+
+def test_inside_the_window_the_notice_is_still_plain_text() -> None:
+
+    # The template exists for the closed window only: free text is free, reads
+    # better, and can carry the link.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender, notice_template="plan_notice").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expired", text="Your free trial has ended.", params=["free trial", "none"]),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+
 def test_a_plan_notice_outside_the_window_waits_rather_than_being_refused() -> None:
     result = notifier().send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),

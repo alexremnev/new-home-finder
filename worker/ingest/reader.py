@@ -88,6 +88,7 @@ async def attach_photos(
     entity: Any,
     stage: Any,
     source_key: str,
+    chat: str,
     reader: str,
 ) -> int:
 
@@ -101,8 +102,12 @@ async def attach_photos(
         stage.count("photos_skipped")
         return 0
 
+    # Keyed by chat rather than by reader: the message id means the same thing
+    # to every account reading this chat, so a photograph nobody has fetched yet
+    # is fetched by whichever reader gets there first. Keyed by reader, a dead
+    # session left its own messages without pictures for good.
     pending = store.messages_missing_photo(
-        conn, source_key=source_key, reader=reader, limit=PHOTO_BATCH
+        conn, source_key=source_key, chat=chat, reader=reader, limit=PHOTO_BATCH
     )
     if not pending:
         return 0
@@ -257,6 +262,7 @@ async def collect(
                     batch.append({
                         "source_key": source_key,
                         "reader": reader,
+                        "chat": chat,
                         "external_id": str(message.id),
                         "received_at": message.date,
                         "body": body,
@@ -269,7 +275,9 @@ async def collect(
                 stored += written
                 stage.count("already_known", len(batch) - written)
 
-                await attach_photos(conn, client, entity, stage, source_key, reader)
+                await attach_photos(
+                    conn, client, entity, stage, source_key, chat, reader
+                )
 
                 if highest > cursor:
                     store.set_ingest_cursor(

@@ -69,6 +69,11 @@ class Alert(BaseModel):
     listing: ListingView | None = None
     text: str | None = None
     actions: list[Action] = Field(default_factory=list)
+    # The same facts as `text`, separated, for a channel that may only send an
+    # approved template. WhatsApp outside its 24-hour window is the only one:
+    # it cannot send prose at all, and a notice that nobody receives is the
+    # worst of the three outcomes.
+    params: list[str] = Field(default_factory=list)
 
 class SendResult(BaseModel):
     ok: bool

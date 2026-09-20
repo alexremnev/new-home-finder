@@ -327,6 +327,77 @@ def test_an_unimplemented_channel_fails_only_its_own_message(conn: Any, run: Run
     assert row["status"] == "failed"
     assert row["error"] is not None and "email" in row["error"]
 
+def photo_pending(conn: Any, listing_id: int, *, looked: bool) -> None:
+
+    # A source message carrying a photograph, which either has or has not been
+    # handed to WhatsApp yet.
+    conn.execute(
+        """
+        INSERT INTO source_messages
+               (source_key, reader, chat, external_id, received_at, body, links,
+                media_kinds, content_hash, status, listing_id, wa_media_checked_at)
+        VALUES ('openrent', 'r1', 'feed', %s, now(), 'body', '{}',
+                ARRAY['photo'], %s, 'parsed', %s,
+                CASE WHEN %s THEN now() ELSE NULL END)
+        """,
+        (f"m{listing_id}", f"hash-{listing_id}", listing_id, looked),
+    )
+
+def test_a_whatsapp_alert_waits_for_its_photograph(conn: Any, run: Run) -> None:
+
+    # WhatsApp is sent the picture itself, so an alert that overtakes its own
+    # upload arrives as plain text and is never revisited.
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    listing_id = make_listing(conn, "1")
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[listing_id])
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+    conn.execute("UPDATE notifications SET channel = 'whatsapp'")
+    photo_pending(conn, listing_id, looked=False)
+
+    assert store.claim_queued(conn, limit=10, max_attempts=3) == []
+    # Held back, not claimed: claiming spends an attempt, and waiting is not a
+    # failed attempt at anything.
+    assert int(notification(conn)["attempts"]) == 0
+
+def test_it_stops_waiting_once_the_photograph_is_settled(conn: Any, run: Run) -> None:
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    listing_id = make_listing(conn, "1")
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[listing_id])
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+    conn.execute("UPDATE notifications SET channel = 'whatsapp'")
+    # Looked at — whether a photograph came back or not, there is nothing left
+    # to wait for.
+    photo_pending(conn, listing_id, looked=True)
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def test_it_gives_up_waiting_rather_than_holding_a_listing_for_ever(
+    conn: Any, run: Run
+) -> None:
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    listing_id = make_listing(conn, "1")
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[listing_id])
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+    conn.execute(
+        "UPDATE notifications SET channel = 'whatsapp', created_at = now() - interval '1 hour'"
+    )
+    photo_pending(conn, listing_id, looked=False)
+
+    # A stuck upload must not silence the alerts. Late and plain beats never.
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def test_telegram_never_waits_because_it_previews_the_link(conn: Any, run: Run) -> None:
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    listing_id = make_listing(conn, "1")
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[listing_id])
+    photo_pending(conn, listing_id, looked=False)
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
 def test_a_dry_run_holds_everything(conn: Any, run: Run, notifier: FakeNotifier) -> None:
     queue_one(conn, run)
     assert outbox.drain(conn, run, dry_run=True) == "ok"

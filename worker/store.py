@@ -252,14 +252,36 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
         ).fetchall()
     )
 
-def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
+# How long a WhatsApp alert waits for its photograph before going without one.
+#
+# WhatsApp is sent the picture itself rather than a link, so an alert that
+# overtakes its own upload arrives as plain text and is never revisited. Ingest
+# runs every two minutes and uploads a batch each time, so one cycle is usually
+# enough; this is the cap, not the wait.
+PHOTO_GRACE_MINUTES = 5
+
+def claim_queued(
+    conn: Conn, *, limit: int, max_attempts: int, photo_grace: int = PHOTO_GRACE_MINUTES
+) -> list[Row]:
 
     claimed = conn.execute(
         """
         WITH due AS (
-            SELECT id FROM notifications
-             WHERE status = 'queued' AND attempts < %(max_attempts)s
-             ORDER BY created_at
+            SELECT n.id FROM notifications n
+             WHERE n.status = 'queued' AND n.attempts < %(max_attempts)s
+               -- Held back, not claimed: claiming spends an attempt, and a
+               -- message waiting for a picture has not failed at anything.
+               AND NOT (
+                   n.channel = 'whatsapp'
+                   AND n.created_at > now() - make_interval(mins => %(photo_grace)s)
+                   AND EXISTS (
+                       SELECT 1 FROM source_messages m
+                        WHERE m.listing_id = n.listing_id
+                          AND 'photo' = ANY(m.media_kinds)
+                          AND m.wa_media_checked_at IS NULL
+                   )
+               )
+             ORDER BY n.created_at
              LIMIT %(limit)s
              FOR UPDATE SKIP LOCKED
         )
@@ -267,7 +289,7 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
           FROM due WHERE n.id = due.id
         RETURNING n.id
         """,
-        {"limit": limit, "max_attempts": max_attempts},
+        {"limit": limit, "max_attempts": max_attempts, "photo_grace": photo_grace},
     ).fetchall()
     ids = [int(r["id"]) for r in claimed]
     if not ids:
@@ -371,7 +393,7 @@ def store_source_messages(conn: Conn, rows: list[dict[str, Any]]) -> int:
         return 0
 
     columns = (
-        "source_key", "reader", "external_id", "received_at", "body", "links",
+        "source_key", "reader", "chat", "external_id", "received_at", "body", "links",
         "media_kinds", "content_hash",
     )
     groups = ", ".join(
@@ -411,7 +433,7 @@ def unparsed_messages(conn: Conn, *, source_key: str, limit: int = 500) -> list[
     )
 
 def messages_missing_photo(
-    conn: Conn, *, source_key: str, reader: str, limit: int = 10
+    conn: Conn, *, source_key: str, chat: str, reader: str, limit: int = 10
 ) -> list[Row]:
 
     return list(
@@ -419,16 +441,20 @@ def messages_missing_photo(
             """
             SELECT id, external_id FROM source_messages
              WHERE source_key = %s
-               AND reader = %s
                AND wa_media_checked_at IS NULL
                AND 'photo' = ANY(media_kinds)
                -- Only what can still be sent. The starter batch looks back
                -- three days and an alert goes out in minutes.
                AND received_at > now() - interval '7 days'
+               -- Anybody reading this chat can fetch it: the id means the same
+               -- thing to all of them. A row from before 0032 has no chat, and
+               -- for those only the reader that stored it knows what the id
+               -- refers to.
+               AND (chat = %s OR (chat IS NULL AND reader = %s))
              ORDER BY received_at DESC
              LIMIT %s
             """,
-            (source_key, reader, limit),
+            (source_key, chat, reader, limit),
         ).fetchall()
     )
 

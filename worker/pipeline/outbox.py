@@ -474,16 +474,25 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             if notifier is None or not row["address"]:
                 stage.count("unreachable")
                 continue
+            share = (
+                None if row.get("lapsed_share") is None else int(row["lapsed_share"])
+            )
             result = notifier.send(
                 Recipient(channel=str(row["channel"]), address=str(row["address"])),
                 Alert(
                     kind="expired" if notice_stage == "expired" else "expiring",
+                    # The same two facts as the text, apart, for a channel that
+                    # can only send an approved template — see the WhatsApp
+                    # notifier. Nothing else reads them.
+                    params=[
+                        "free trial" if str(row["plan"]) == "trial" else "subscription",
+                        "no listings" if not share else f"{share}% of the listings",
+                    ],
                     text=notice_for(
                         str(row["plan"]),
                         row["plan_until"],
                         notice_stage,
-                        None if row.get("lapsed_share") is None
-                        else int(row["lapsed_share"]),
+                        share,
                         checkout_for(conn, int(row["user_id"]), str(row["channel"])),
                     ),
                 ),
