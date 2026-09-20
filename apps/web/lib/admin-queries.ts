@@ -773,3 +773,49 @@ async function bucketed(
     [Math.round(hours), Math.round(minutes)],
   ).catch(() => []);
 }
+
+// ── who visited the site ──────────────────────────────────────────────────
+//
+// `site_visits` holds one row per visitor per day, and the hash that identifies
+// them is salted with the day — so "unique over a week" cannot be asked. What
+// these return is unique visitors per day, which is the honest number, and the
+// total is the sum of those days rather than a count of people.
+
+export type VisitDay = { day: string; visitors: number; hits: number };
+
+export async function visitorsByDay(days: number): Promise<VisitDay[]> {
+  return query<VisitDay>(
+    `SELECT day::text AS day,
+            count(*)::int      AS visitors,
+            sum(hits)::int     AS hits
+       FROM site_visits
+      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      GROUP BY day
+      ORDER BY day DESC`,
+    [days],
+  ).catch(() => []);
+}
+
+export type VisitSlice = { name: string | null; visitors: number };
+
+export async function visitorsByCountry(days: number): Promise<VisitSlice[]> {
+  return query<VisitSlice>(
+    `SELECT country AS name, count(*)::int AS visitors
+       FROM site_visits
+      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      GROUP BY country
+      ORDER BY visitors DESC, name`,
+    [days],
+  ).catch(() => []);
+}
+
+export async function visitorsByDevice(days: number): Promise<VisitSlice[]> {
+  return query<VisitSlice>(
+    `SELECT device AS name, count(*)::int AS visitors
+       FROM site_visits
+      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      GROUP BY device
+      ORDER BY visitors DESC, name`,
+    [days],
+  ).catch(() => []);
+}

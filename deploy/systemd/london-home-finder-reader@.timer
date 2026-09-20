@@ -1,0 +1,19 @@
+# Enable one of these per account:
+#
+#   systemctl enable --now london-home-finder-reader@second.timer
+#
+# Stagger them if two accounts read the same chat — RandomizedDelaySec keeps
+# them from asking Telegram for the same history in the same second.
+[Unit]
+Description=Run ingest as %i every two minutes
+
+[Timer]
+Unit=london-home-finder-reader@%i.service
+OnBootSec=2min
+OnUnitInactiveSec=2min
+RandomizedDelaySec=30s
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

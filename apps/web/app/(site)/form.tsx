@@ -12,6 +12,9 @@ type Props = {
   maxDistricts: number;
   furnished: string[];
   whatsappReady: boolean;
+  // From `plans.duration_days` for the sign-up plan, so the page cannot promise
+  // a different trial from the one the bot grants.
+  trialDays: number | null;
 
   names?: Record<string, string>;
 };
@@ -22,7 +25,11 @@ const RENT_MIN = 400;
 const RENT_MAX = 10_000;
 const RENT_STEP = 100;
 
-const ROOMS_MIN = 0;
+// Bedrooms start at nought because a studio is a real thing to search for.
+// Bathrooms do not: no flat is let with none, so a floor of zero was a value
+// nobody could ever want and a label that read as a mistake.
+const BEDS_MIN = 0;
+const BATHS_MIN = 1;
 const ROOMS_MAX = 5;
 
 const rooms = (value: number) => String(value);
@@ -33,7 +40,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, furnished, whatsappReady, names = {},
+  districts, maxDistricts, furnished, whatsappReady, trialDays, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
@@ -43,8 +50,8 @@ export function SubscribeForm({
 
   const [mode, setMode] = useState<"name" | "postcode">("name");
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
-  const [bedrooms, setBedrooms] = useState<[number, number]>([ROOMS_MIN, ROOMS_MAX]);
-  const [bathrooms, setBathrooms] = useState<[number, number]>([ROOMS_MIN, ROOMS_MAX]);
+  const [bedrooms, setBedrooms] = useState<[number, number]>([BEDS_MIN, ROOMS_MAX]);
+  const [bathrooms, setBathrooms] = useState<[number, number]>([BATHS_MIN, ROOMS_MAX]);
   const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
@@ -131,9 +138,9 @@ export function SubscribeForm({
     // Only the ends that were actually moved. A slider left at its ceiling
     // means "and above", not "at most five" — sending the max there would hide
     // every six-bedroom house from somebody who asked for no maximum.
-    if (bedrooms[0] > ROOMS_MIN) payload.bedrooms_min = String(bedrooms[0]);
+    if (bedrooms[0] > BEDS_MIN) payload.bedrooms_min = String(bedrooms[0]);
     if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
-    if (bathrooms[0] > ROOMS_MIN) payload.bathrooms_min = String(bathrooms[0]);
+    if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
     if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
 
     const wanted = String(data.get("available_on") ?? "").trim();
@@ -307,7 +314,7 @@ export function SubscribeForm({
       <div>
         <span className="field-label">Bedrooms</span>
         <RangeSlider
-          min={ROOMS_MIN}
+          min={BEDS_MIN}
           max={ROOMS_MAX}
           step={1}
           value={bedrooms}
@@ -320,7 +327,7 @@ export function SubscribeForm({
       <div>
         <span className="field-label">Bathrooms</span>
         <RangeSlider
-          min={ROOMS_MIN}
+          min={BATHS_MIN}
           max={ROOMS_MAX}
           step={1}
           value={bathrooms}
@@ -398,11 +405,33 @@ export function SubscribeForm({
         )}
       </div>
 
-      <p className="promise">
-        🔒 Zero Spam Guarantee. We only store your search criteria.
-      </p>
+      <ul className="perks">
+        {/* The trial length comes from `plans.duration_days`, so this cannot
+            promise a different one from the bot's. Left out rather than guessed
+            at if no plan is configured. */}
+        {trialDays !== null && trialDays > 0 && (
+          <li>
+            <Tick /> {trialDays}-day free trial
+          </li>
+        )}
+        <li>
+          <Tick /> Cancel anytime
+        </li>
+        <li>
+          <Tick /> Zero spam
+        </li>
+      </ul>
       </div>
     </form>
+  );
+}
+
+function Tick() {
+  return (
+    <svg className="tick" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" strokeWidth="2.2"
+            strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 

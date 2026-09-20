@@ -1,0 +1,32 @@
+# One ingest run for one Telegram account. %i is the reader's name.
+#
+# The same application, a different set of credentials — which is all that
+# reading a second account needs. The base file holds everything shared; the
+# per-reader file overrides TG_SESSION, TG_READER and, if the account has its
+# own, TG_API_ID and TG_API_HASH. systemd reads them in order and the later
+# file wins.
+#
+# Safe to run against the same chat as another reader: the unique index on
+# (source_key, content_hash) drops the duplicate, and the ingest cursor is kept
+# per reader so neither account moves the other's place in the history.
+[Unit]
+Description=London Home Finder: ingest as %i
+After=network-online.target
+Wants=network-online.target
+OnFailure=london-home-finder-alert@reader-%i.service
+
+[Service]
+Type=oneshot
+User=finder
+WorkingDirectory=/opt/london-home-finder
+EnvironmentFile=/etc/london-home-finder.env
+EnvironmentFile=/etc/london-home-finder/readers/%i.env
+ExecStart=/opt/london-home-finder/.venv/bin/python -m worker ingest --trigger schedule
+TimeoutStartSec=600
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/london-home-finder/reports

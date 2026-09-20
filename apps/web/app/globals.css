@@ -40,6 +40,21 @@ button, input, select, textarea, optgroup, output, legend, label, small, .brand 
 
 html { -webkit-text-size-adjust: 100%; }
 
+.site::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+
+    var(--backdrop, url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1400' height='240' preserveAspectRatio='none' viewBox='0 0 1400 240'%3E%3Cpath fill='%23262637' fill-opacity='0.5' d='M0 240V196h38v-28h26v28h34v-52h30v52h22v-18h28v18h40v-96l16-30 16 30v96h34v-40h30v40h30v-64h26v-14h10v14h26v64h44v-30h34v30h30v-120l14-26 14 26v120h34v-44h28v44h46v-70h12v-22h10v22h12v70h40v-34h30v34h34v-58h26v58h40v-150l18-34 18 34v150h30v-46h30v46h44v-26h32v26h36v-74h28v74h40v-40h30v40h38v-54h26v54h30v-30h34v30z'/%3E%3C/svg%3E"));
+  background-repeat: no-repeat;
+  background-position: bottom center;
+  background-size: 100% auto;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -57,7 +72,18 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+
+  background:
+    linear-gradient(
+      180deg,
+      #ffd9a8 0%,
+      #ffc59b 12%,
+      #f4b3a8 24%,
+      #e8d3d0 38%,
+      var(--bg) 58%,
+      var(--bg) 100%
+    )
+    fixed;
 }
 
 .shell {
@@ -1607,8 +1633,8 @@ form p.error {
 
 .site-head {
   flex: none;
-  border-bottom: 1px solid var(--line);
-  background: var(--card);
+  /* No fill and no rule: a white bar would cut a hard line across the sky. */
+  background: none;
 }
 
 /* The bar runs the full width; what is inside it lines up with the page. */
@@ -1685,7 +1711,6 @@ form p.error {
 }
 
 .hero .lede {
-  max-width: 40rem;
   margin: 0 0 1.75rem;
   font-size: 1.125rem;
   line-height: 1.55;
@@ -2065,3 +2090,45 @@ form p.error {
 
 .chat-compose-telegram .chat-input { color: #8a9aa8; }
 .chat-mic-telegram { background: #517da2; }
+
+/* Directly under the two buttons: the three things somebody weighs before
+   pressing either of them, on one line while there is room for one. */
+.perks {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.5rem 1.5rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.perks li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.tick {
+  width: 1.05em;
+  height: 1.05em;
+  flex: none;
+  color: var(--accent);
+}
+
+/* Tightened rather than wrapped: all three fit one line on a 390px screen at
+   this size, and three ticks on two lines read as two separate claims. */
+@media (max-width: 30rem) {
+  .perks {
+    gap: 0.4rem 0.7rem;
+  }
+
+  .perks li {
+    font-size: 0.75rem;
+    gap: 0.25rem;
+  }
+}

@@ -15,7 +15,12 @@ export default async function Page() {
   const names = await districtNames().catch(() => ({}));
 
   const head = await headers();
-  await recordVisit(head.get("x-forwarded-for"), head.get("user-agent"));
+  await recordVisit(
+    head.get("x-forwarded-for"),
+    head.get("user-agent"),
+    // Set by the edge on Vercel; absent anywhere else.
+    head.get("x-vercel-ip-country"),
+  );
 
   const site = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
     /\/+$/,
@@ -123,6 +128,7 @@ export default async function Page() {
             whatsappReady={Boolean(
               process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
             )}
+            trialDays={plan?.duration_days ?? null}
             names={names}
           />
         )}

@@ -7,6 +7,7 @@ const TABS = [
   { href: "/admin", label: "System" },
   { href: "/admin/subscribers", label: "Subscribers" },
   { href: "/admin/payments", label: "Payments" },
+  { href: "/admin/visitors", label: "Visitors" },
 ] as const;
 
 // A client component only so the current tab can be marked. /admin is a prefix

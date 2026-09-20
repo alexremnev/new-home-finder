@@ -10,7 +10,9 @@
 export const SUPPORT_EMAIL = "support@londonhomefinder.co.uk";
 
 export const SUPPORT_REPLY = [
-  `Email ${SUPPORT_EMAIL} and we will read it.`,
+  "Any questions at all — email us:",
   "",
-  "Say what happened and roughly when — that is usually enough to find it in the logs.",
+  SUPPORT_EMAIL,
+  "",
+  "We answer within 24 hours.",
 ].join("\n");

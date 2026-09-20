@@ -14,7 +14,7 @@ describe("support", () => {
     expect(SUPPORT_EMAIL).toMatch(/@londonhomefinder\.co\.uk$/);
   });
 
-  it("asks for the one thing that makes a report findable", () => {
-    expect(SUPPORT_REPLY).toContain("when");
+  it("says how long an answer takes, because a promise is why people write", () => {
+    expect(SUPPORT_REPLY).toContain("24 hours");
   });
 });

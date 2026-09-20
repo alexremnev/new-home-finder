@@ -41,7 +41,10 @@ echo "== python"
 export UV_INSTALL_DIR=/usr/local/bin
 command -v uv >/dev/null 2>&1 || curl -fsSL https://astral.sh/uv/install.sh | sh
 cd "$DIR"
-uv sync --no-dev --extra ingest
+# --frozen: install exactly what uv.lock says and never re-resolve here. Without
+# it a deploy can quietly change the dependency set on the server, which is how
+# telethon went missing once and took ingest down with it.
+uv sync --frozen --no-dev --extra ingest
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
 echo "== settings"
@@ -57,6 +60,17 @@ if [ ! -f "$ENV_FILE" ]; then
 fi
 chmod 600 "$ENV_FILE"
 chown root:"$USER_NAME" "$ENV_FILE"
+
+# A home for per-reader overrides: one file per extra Telegram account, each
+# holding just the variables that differ. See london-home-finder-reader@.service.
+mkdir -p /etc/london-home-finder/readers
+chmod 750 /etc/london-home-finder /etc/london-home-finder/readers
+chown root:"$USER_NAME" /etc/london-home-finder /etc/london-home-finder/readers
+for extra in /etc/london-home-finder/readers/*.env; do
+  [ -f "$extra" ] || continue
+  chmod 600 "$extra"
+  chown root:"$USER_NAME" "$extra"
+done
 
 echo "== timers"
 cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
