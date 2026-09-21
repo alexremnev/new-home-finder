@@ -38,6 +38,60 @@ PAGE = """<html><head><title>x</title>
  <div>Minimum Tenancy <span>6 Months</span></div>
 </body></html>"""
 
+INDEX = """<?xml version="1.0" encoding="UTF-8"?>
+<sitemapindex>
+ <sitemap><loc>https://www.openrent.co.uk/sitemap-static.xml</loc></sitemap>
+ <sitemap><loc>https://www.openrent.co.uk/sitemap-listings-1.xml</loc></sitemap>
+</sitemapindex>"""
+
+class FakeRun:
+
+    # Enough of a Run for the stage to be entered and counted against.
+    class Stage:
+        def __init__(self) -> None:
+            self.degraded: list[str] = []
+
+        def set(self, *_: object, **__: object) -> None: ...
+        def count(self, *_: object, **__: object) -> None: ...
+        def log(self, *_: object, **__: object) -> None: ...
+        def degrade(self, why: str) -> None:
+            self.degraded.append(why)
+
+    def __init__(self) -> None:
+        self.stages = self.Stage()
+
+    def stage(self, *_: object, **__: object) -> object:
+        run = self
+
+        class Held:
+            def __enter__(self) -> object:
+                return run.stages
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+        return Held()
+
+class FakeConn:
+
+    def __init__(self, districts: list[str]) -> None:
+        self.districts = districts
+        self.inserted: list[object] = []
+        self.rows: list[dict[str, object]] = []
+
+    # store reads through these two, and nothing here touches a database.
+    def execute(self, sql: str, params: object = None) -> "FakeConn":
+        if "source_locations" in sql:
+            self.rows = [{"code": code} for code in self.districts]
+        elif "external_id FROM listings" in sql:
+            self.rows = []
+        else:
+            self.rows = []
+        return self
+
+    def fetchall(self) -> list[dict[str, object]]:
+        return self.rows
+
 def only(district: str = "SE16") -> object:
     return [one for one in listings_in(SITEMAP) if one.district == district][0]
 
@@ -123,3 +177,26 @@ def test_today_is_a_date() -> None:
     assert when("Today") == date.today()
     assert when("1 October 2026") == date(2026, 10, 1)
     assert when("whenever") is None
+
+def test_a_run_of_refusals_stops_the_run() -> None:
+    import urllib.error
+
+    from worker.sources.openrent import REFUSALS_ALLOWED, collect
+
+    # A site answering 405 to everything is declining, not having a bad moment.
+    # Spending the whole budget to learn that once every fifteen minutes is both
+    # useless and rude.
+    asked: list[str] = []
+
+    def refusing(url: str) -> str:
+        asked.append(url)
+        if url.endswith(".xml"):
+            return SITEMAP if "listings" in url else INDEX
+        raise urllib.error.HTTPError(url, 405, "Not Allowed", {}, None)  # type: ignore[arg-type]
+
+    conn = FakeConn(districts=["SE16", "WC2N", "DN12"])
+    collect(conn, FakeRun(), get=refusing, pause=0)
+
+    pages = [u for u in asked if not u.endswith(".xml")]
+    assert len(pages) == REFUSALS_ALLOWED, pages
+    assert conn.inserted == []

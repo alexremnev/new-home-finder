@@ -70,6 +70,14 @@ PAGE_BUDGET = 40
 # than obedience.
 PAUSE_SECONDS = 1.0
 
+# Consecutive refusals before the run gives up.
+#
+# A site that answers 405 to the first few requests is not having a bad moment,
+# it is declining — and the honest response is to stop asking, not to spend the
+# whole budget finding out forty times and again in fifteen minutes. One
+# degraded stage says more than forty warnings.
+REFUSALS_ALLOWED = 3
+
 LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
 LISTING_URL = re.compile(
     r"/property-to-rent/[^/]+/(?P<slug>[^/]+)/(?P<id>\d+)/?$", re.IGNORECASE
@@ -296,16 +304,28 @@ def collect(
         stage.count("already_known", len(here) - len(fresh))
         stage.set("new", len(fresh))
 
+        refused = 0
         for index_of, one in enumerate(fresh[:budget]):
             if index_of:
                 time.sleep(pause)
             try:
                 page = read(one.url)
             except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-                # One unreachable page is not a reason to abandon the run.
-                stage.log("warn", f"{one.external_id}: {type(exc).__name__}: {exc}")
+                # One unreachable page is not a reason to abandon a run; a run
+                # of them is. Only the first is described, because forty copies
+                # of one sentence is not forty pieces of information.
+                refused += 1
+                if refused == 1:
+                    stage.log("warn", f"{one.external_id}: {type(exc).__name__}: {exc}")
                 stage.count("unreachable")
+                if refused >= REFUSALS_ALLOWED and not stored:
+                    stage.degrade(
+                        f"openrent refused {refused} requests in a row and gave "
+                        f"nothing — stopping this run rather than asking again"
+                    )
+                    break
                 continue
+            refused = 0
 
             listing = as_listing(one, page)
             if listing is None:
