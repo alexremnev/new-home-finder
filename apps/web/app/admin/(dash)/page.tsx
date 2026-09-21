@@ -1,7 +1,8 @@
 import Link from "next/link";
 import {
   EXPECTED_JOBS, delivery, intakePoints, jobStates, knownJobs, logPage,
-  messagePoints, problems, recentRuns, runPoints, sourceFeeds, unparseablePoints,
+  messagePoints, problems, recentRuns, runPoints, scrapeBytes, sourceFeeds,
+  unparseablePoints,
 } from "@/lib/admin-queries";
 
 import { Metric, RunBars, Series, Why } from "./charts";
@@ -18,7 +19,15 @@ export const dynamic = "force-dynamic";
 // `portal` is which site the listing is from; `feed` is how it reached us — a
 // listing came from the Telegram feed exactly when a source message points at
 // it, and from a scraper when none does.
-const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
+const FEEDS: {
+  label: string;
+  portal: string;
+  feed: boolean;
+  why: string;
+  // Only the scraper downloads anything of ours to measure: a feed listing
+  // arrives inside a Telegram message somebody else paid to deliver.
+  traffic?: boolean;
+}[] = [
   {
     label: "tg → Rightmove",
     portal: "rightmove",
@@ -41,6 +50,7 @@ const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
     label: "scraper → OpenRent",
     portal: "openrent",
     feed: false,
+    traffic: true,
     why: "OpenRent из собственного скрапера — объявления, за которыми не стоит ни одно сообщение фида. Это основной источник OpenRent; фид остаётся страховкой, и если он найдёт то же объявление, оно склеится в ту же строку.",
   },
 ];
@@ -48,6 +58,14 @@ const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
 // Ten is enough to see what is wrong. Uncapped, one repeating check buries
 // every other kind — and the kinds are the information.
 const FAULTS_SHOWN = 10;
+
+// Bytes as somebody reads them. One decimal, because the second never changed
+// a decision.
+function weight(bytes: number): string {
+  if (bytes <= 0) return "no traffic";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function tone(day: number, hour: number): "good" | "warn" | "bad" {
   if (hour > 0) return "good";
@@ -120,6 +138,7 @@ export default async function SystemPage({
   const bucket = bucketMinutes(win.hours);
   const [
     jobs, points, logs, jobNames, queue, read, made, unread, faults, runs, feeds,
+    downloaded,
   ] = await Promise.all([
     jobStates(win.hours),
     runPoints(win.hours, bucket),
@@ -132,6 +151,7 @@ export default async function SystemPage({
     problems().catch(() => []),
     recentRuns(12).catch(() => []),
     sourceFeeds(),
+    scrapeBytes(win.hours, "openrent"),
   ]);
 
   const messages = read.reduce((sum, d) => sum + d.value, 0);
@@ -223,8 +243,20 @@ export default async function SystemPage({
               label={one.label}
               value={day}
               tone={tone(day, hour)}
-              note={found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days"}
-              why={one.why}
+              note={[
+                found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days",
+                // Only the scraper has a bill attached to it, and it follows
+                // the window above rather than a fixed day.
+                one.traffic ? `${weight(downloaded)} in ${win.label}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              why={
+                one.traffic
+                  ? one.why +
+                    " Объём — сколько скрапер скачал за выбранный сверху период, по счётчикам прогонов. Запрос идёт без сжатия, поэтому это ровно то, что прошло по сети. Большая часть этого — карта сайта: в ней нет lastmod, поэтому она качается целиком каждый прогон."
+                  : one.why
+              }
             />
           );
         })}

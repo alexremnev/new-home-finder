@@ -747,8 +747,8 @@ export async function unparseablePoints(hours: number, minutes: number): Promise
 // One shape for all four. The table, column and predicate are written here and
 // never come from a request, so there is nothing for a caller to inject.
 async function bucketed(
-  table: "notifications" | "listings" | "source_messages",
-  column: "sent_at" | "first_seen_at" | "stored_at",
+  table: "notifications" | "listings" | "source_messages" | "site_visits",
+  column: "sent_at" | "first_seen_at" | "stored_at" | "first_at",
   predicate: string,
   hours: number,
   minutes: number,
@@ -923,4 +923,45 @@ export async function sourceFeeds(): Promise<SourceFeed[]> {
        FROM seen
       GROUP BY source_key, from_feed`,
   ).catch(() => []);
+}
+
+// Visitors over time, bucketed as coarsely as the range deserves: by hour for
+// today, and by day for a week. `first_at` is when somebody arrived, so one
+// visitor lands in exactly one bucket — the row itself is one per person per
+// day, which is why counting rows counts people.
+export async function visitorPoints(hours: number, minutes: number): Promise<Slice[]> {
+  return bucketed(`site_visits`, `first_at`, `true`, hours, minutes);
+}
+
+export async function visitorsByBrowser(days: number): Promise<VisitSlice[]> {
+  return query<VisitSlice>(
+    `SELECT browser AS name, count(*)::int AS visitors
+       FROM site_visits
+      WHERE day > (now() AT TIME ZONE 'Europe/London')::date
+                  - make_interval(days => $1::int)
+      GROUP BY browser
+      ORDER BY visitors DESC, name`,
+    [days],
+  ).catch(() => []);
+}
+
+// How much the scraper has downloaded over a window.
+//
+// Read from `job_stages.counters`, which the stage already writes — the run log
+// is per-stage and timestamped, so it answers "over this period" without a
+// table of its own.
+//
+// The guard on `jsonb_typeof` is there so a counter that is somehow not a
+// number cannot break the page with a cast error.
+export async function scrapeBytes(hours: number, source: string): Promise<number> {
+  const rows = await query<{ bytes: string | number | null }>(
+    `SELECT coalesce(sum((counters->>'bytes')::bigint), 0) AS bytes
+       FROM job_stages
+      WHERE stage = 'scrape'
+        AND source_key = $2
+        AND jsonb_typeof(counters->'bytes') = 'number'
+        AND started_at > now() - make_interval(hours => $1::int)`,
+    [Math.round(hours), source],
+  ).catch(() => []);
+  return Number(rows[0]?.bytes ?? 0);
 }

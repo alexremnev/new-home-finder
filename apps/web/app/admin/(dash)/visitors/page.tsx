@@ -1,6 +1,9 @@
 import Link from "next/link";
 
-import { visitorsByCountry, visitorsByDay, visitorsByDevice } from "@/lib/admin-queries";
+import {
+  visitorPoints, visitorsByBrowser, visitorsByCountry, visitorsByDay,
+  visitorsByDevice,
+} from "@/lib/admin-queries";
 
 import { Metric, Rank, Series, Why } from "../charts";
 
@@ -8,6 +11,16 @@ export const dynamic = "force-dynamic";
 
 const RANGES = [1, 2, 7] as const;
 type Days = (typeof RANGES)[number];
+
+// How wide a bucket the chart uses, by range. A day of traffic has a shape
+// worth seeing by the hour; a week of it drawn hourly is 168 points of noise.
+const BUCKET_MINUTES: Record<Days, number> = { 1: 60, 2: 240, 7: 1440 };
+
+const BUCKET_WORDS: Record<Days, string> = {
+  1: "по часам",
+  2: "по четыре часа",
+  7: "по дням",
+};
 
 // Two letters is all that is stored, so the name is looked up here rather than
 // kept in a column that would need maintaining.
@@ -31,10 +44,12 @@ export default async function VisitorsPage({
   const asked = Number(params.d ?? 1);
   const days: Days = (RANGES as readonly number[]).includes(asked) ? (asked as Days) : 1;
 
-  const [byDay, byCountry, byDevice] = await Promise.all([
+  const [byDay, byCountry, byDevice, byBrowser, points] = await Promise.all([
     visitorsByDay(days),
     visitorsByCountry(days),
     visitorsByDevice(days),
+    visitorsByBrowser(days),
+    visitorPoints(days * 24, BUCKET_MINUTES[days]),
   ]);
 
   const visitors = byDay.reduce((sum, one) => sum + one.visitors, 0);
@@ -64,7 +79,7 @@ export default async function VisitorsPage({
           label="Visitors"
           value={visitors}
           note={days === 1 ? "today" : `over ${days} days`}
-          why="Уникальные посетители, посчитанные по дням и сложенные. Отпечаток посетителя солится датой, поэтому один и тот же человек в два разных дня — это две единицы: так можно считать людей, но нельзя следить за одним. Боты отбрасываются по user-agent."
+          why="Уникальные посетители, посчитанные по дням и сложенные. Отпечаток посетителя солится датой, поэтому один и тот же человек в два разных дня — это две единицы: так можно считать людей, но нельзя следить за одним. Боты отсекаются дважды: списком тех, кто называет себя роботом, и — что важнее — тем, что визит без узнаваемого браузера не записывается вообще."
         />
         <Metric label="Page views" value={hits} note="all visits" />
         <Metric
@@ -78,13 +93,9 @@ export default async function VisitorsPage({
 
       <div className="dash-row dash-row-wide">
         <div className="card">
-          <h2>Visitors per day</h2>
-          <Series
-            data={[...byDay]
-              .reverse()
-              .map((one) => ({ label: one.day, value: one.visitors }))}
-          />
-          <Why text="По одной точке на день. Часы здесь не показать: таблица хранит посетителя одной строкой на сутки, а не по времени прихода." />
+          <h2>Visitors, {BUCKET_WORDS[days]}</h2>
+          <Series data={points} />
+          <Why text="Бакет зависит от периода: сегодня — по часам, 2 дня — по четыре часа, неделя — по дням. Считается по first_at, то есть по времени прихода, поэтому один посетитель попадает ровно в один бакет. Неделя, нарисованная по часам, — это 168 точек шума, поэтому шаг растёт вместе с периодом." />
         </div>
       </div>
 
@@ -98,6 +109,17 @@ export default async function VisitorsPage({
             }))}
           />
           <Why text="Страна берётся из заголовка, который ставит edge Vercel по адресу — сам адрес мы не храним. «unknown» значит, что заголовка не было: так выглядят визиты, записанные до этой возможности, и всё, что открыто не через Vercel." />
+        </div>
+
+        <div className="card">
+          <h2>Which browser</h2>
+          <Rank
+            data={byBrowser.map((one) => ({
+              label: one.name ?? "unknown",
+              value: one.visitors,
+            }))}
+          />
+          <Why text="Определяется по user-agent, без версий: версия — это отпечаток, а вопрос был про браузер. «unknown» бывает только у визитов, записанных до появления этой колонки: с этого момента визит без узнаваемого браузера не записывается вовсе — это и есть основной фильтр от ботов." />
         </div>
 
         <div className="card">

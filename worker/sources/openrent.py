@@ -156,9 +156,20 @@ class Found:
     property_type: str | None
 
 def fetch(url: str, *, timeout: float = 20.0) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": AGENT})
+    # Accept-Encoding: identity so that what we measure is what crossed the
+    # wire. With compression the decoded length would be two or three times the
+    # bytes actually received, and "how much do we download" would be wrong in
+    # the unflattering direction.
+    request = urllib.request.Request(
+        url, headers={"User-Agent": AGENT, "Accept-Encoding": "identity"}
+    )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", errors="replace")
+
+def weigh(body: str) -> int:
+    # The body's size in bytes. Exact rather than indicative, because the
+    # request asks for no compression: the decoded text is the transfer.
+    return len(body.encode("utf-8"))
 
 def as_text(markup: str) -> str:
 
@@ -331,12 +342,18 @@ def collect(
             return Sweep([], [])
 
         index = read(SITEMAP_INDEX)
+        stage.count("bytes", weigh(index))
         children = [u for u in LOC.findall(index) if "listings" in u.lower()]
         stage.set("sitemaps", len(children))
 
         found: list[Found] = []
         for child in children:
-            found.extend(listings_in(read(child)))
+            sitemap = read(child)
+            # Counted too, and it is the larger half: the whole listings
+            # sitemap is fetched every run because it carries no lastmod, so
+            # most of what we download is the same file again.
+            stage.count("bytes", weigh(sitemap))
+            found.extend(listings_in(sitemap))
         stage.set("in_sitemap", len(found))
 
         here = [one for one in found if one.district in wanted]
@@ -389,6 +406,7 @@ def collect(
                     break
                 continue
             refused = 0
+            stage.count("bytes", weigh(page))
 
             listing = as_listing(one, page)
             if listing is None:
@@ -409,5 +427,6 @@ def collect(
 
 __all__ = [
     "AGENT", "PAGE_BUDGET", "REFUSALS_ALLOWED", "SOURCE_KEY", "Found", "Sweep",
-    "as_listing", "as_text", "collect", "listings_in", "read_slug", "when",
+    "as_listing", "as_text", "collect", "listings_in", "read_slug", "weigh",
+    "when",
 ]

@@ -7,6 +7,7 @@ from worker.sources.openrent import (
     as_text,
     listings_in,
     read_slug,
+    weigh,
     when,
 )
 
@@ -50,9 +51,15 @@ class FakeRun:
     class Stage:
         def __init__(self) -> None:
             self.degraded: list[str] = []
+            # Accumulated the way the real Stage does, because these end up in
+            # job_stages.counters and the admin reads them back.
+            self.counters: dict[str, int] = {}
 
         def set(self, *_: object, **__: object) -> None: ...
-        def count(self, *_: object, **__: object) -> None: ...
+
+        def count(self, name: str, by: int = 1) -> None:
+            self.counters[name] = self.counters.get(name, 0) + by
+
         def log(self, *_: object, **__: object) -> None: ...
         def degrade(self, why: str) -> None:
             self.degraded.append(why)
@@ -315,3 +322,28 @@ def test_settling_one_district_does_not_release_another() -> None:
     swept = collect(conn, FakeRun(), get=serving(range(12)), pause=0)
     assert len(swept.stored) == 12
     assert swept.announce == []
+
+def test_a_body_is_weighed_in_the_bytes_that_crossed_the_wire() -> None:
+
+    # Measured as UTF-8, not as characters: the page is fetched with
+    # Accept-Encoding: identity, so this is what the network actually carried.
+    assert weigh("abc") == 3
+    assert weigh("£2,100") == 7  # the pound sign is two bytes
+    assert weigh("") == 0
+
+def test_every_fetch_is_added_to_the_traffic_counter() -> None:
+    from worker.sources.openrent import collect
+
+    # What the System tab shows as the period's volume. All three kinds of
+    # fetch count: the index, each child sitemap, and each listing page — the
+    # sitemap is the larger half, because it carries no lastmod and so is
+    # downloaded whole every run.
+    run = FakeRun()
+    conn = FakeConn(districts=["SE16"])
+    collect(conn, run, get=serving(range(3)), pause=0)
+
+    sitemap = listings_sitemap(range(3))
+    page = "<p>Rent &#xA3;2,100.00 per month</p>"
+    expected = weigh(INDEX) + weigh(sitemap) + 3 * weigh(page)
+
+    assert run.stages.counters["bytes"] == expected
