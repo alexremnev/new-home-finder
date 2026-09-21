@@ -133,14 +133,17 @@ MONTHS = {
 
 @dataclass(frozen=True)
 class Sweep:
-    """What one run did, and whether it has caught up with the site.
+    """What one run did.
 
-    `caught_up` is false while there is still a backlog — and that decides
-    whether the listings are worth alerting anybody about. See the caller.
+    `stored` is everything written; `announce` is the part anybody should hear
+    about. They differ for a district this source has not been read through yet:
+    the sitemap has no dates, so a first pass cannot tell a listing posted an
+    hour ago from one posted in June, and announcing it would send a new
+    subscriber the whole standing market.
     """
 
     stored: list[int]
-    caught_up: bool
+    announce: list[int]
 
 @dataclass(frozen=True)
 class Found:
@@ -297,11 +300,12 @@ def collect(
 
     read = get or fetch
     stored: list[int] = []
+    announce: list[int] = []
 
     with run.stage("scrape", source_key=SOURCE_KEY) as stage:
         if dry_run:
             stage.set("suppressed", True)
-            return Sweep([], caught_up=False)
+            return Sweep([], [])
 
         wanted = set(store.subscribed_districts(conn))
         stage.set("districts", len(wanted))
@@ -310,7 +314,7 @@ def collect(
             # Said out loud, because silence here looks identical to a broken
             # scraper — but this is not a fault, it is an empty subscriber list.
             stage.log("info", "no active subscription names a district; nothing to scrape")
-            return Sweep([], caught_up=True)
+            return Sweep([], [])
 
         index = read(SITEMAP_INDEX)
         children = [u for u in LOC.findall(index) if "listings" in u.lower()]
@@ -323,8 +327,11 @@ def collect(
 
         here = [one for one in found if one.district in wanted]
         stage.set("in_our_districts", len(here))
-        if not here:
-            return Sweep([], caught_up=True)
+
+        # No early return when this is empty. A district that genuinely has no
+        # OpenRent listings right now still has to be marked as read through,
+        # or it would never settle and so would never announce anything once it
+        # did get one.
 
         known = store.known_external_ids(
             conn, source_key=SOURCE_KEY, external_ids=[one.external_id for one in here]
@@ -332,6 +339,19 @@ def collect(
         fresh = [one for one in here if one.external_id not in known]
         stage.count("already_known", len(here) - len(fresh))
         stage.set("new", len(fresh))
+
+        # Which districts we had finished reading *before* this run. Read first,
+        # because a district settled below must not retroactively make this
+        # run's own backlog announceable.
+        settled = store.settled_districts(conn, SOURCE_KEY)
+        stage.set("settled_districts", len(settled))
+
+        # A district with nothing new left in it has been read through. From the
+        # next run on, anything appearing there appeared after we looked.
+        with_fresh = {one.district for one in fresh}
+        for district in sorted(wanted - with_fresh - settled):
+            store.settle_district(conn, SOURCE_KEY, district)
+            stage.count("district_settled")
 
         refused = 0
         for index_of, one in enumerate(fresh[:budget]):
@@ -361,14 +381,17 @@ def collect(
                 stage.count("no_price")
                 continue
 
-            stored.append(store.insert_listing(conn, listing))
+            listing_id = store.insert_listing(conn, listing)
+            stored.append(listing_id)
+            if one.district in settled:
+                announce.append(listing_id)
             stage.count("stored")
 
-        backlog = max(0, len(fresh) - budget)
-        stage.count("over_budget", backlog)
+        stage.count("over_budget", max(0, len(fresh) - budget))
         stage.set("stored", len(stored))
+        stage.count("stored_not_announced", len(stored) - len(announce))
 
-    return Sweep(stored, caught_up=backlog == 0)
+    return Sweep(stored, announce)
 
 __all__ = [
     "AGENT", "PAGE_BUDGET", "REFUSALS_ALLOWED", "SOURCE_KEY", "Found", "Sweep",

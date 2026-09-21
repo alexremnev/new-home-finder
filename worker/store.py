@@ -172,6 +172,29 @@ def subscribed_districts(conn: Conn) -> list[str]:
         ).fetchall()
     ]
 
+def settled_districts(conn: Conn, source_key: str) -> set[str]:
+
+    # Districts this source has been read through at least once. Anything new
+    # in one of these genuinely appeared after we last looked; anything new in
+    # a district that is not here may have been on the market for months.
+    return {
+        str(row["district"])
+        for row in conn.execute(
+            "SELECT district FROM source_sweeps WHERE source_key = %s", (source_key,)
+        ).fetchall()
+    }
+
+def settle_district(conn: Conn, source_key: str, district: str) -> None:
+
+    conn.execute(
+        """
+        INSERT INTO source_sweeps (source_key, district)
+        VALUES (%s, %s)
+        ON CONFLICT (source_key, district) DO NOTHING
+        """,
+        (source_key, district.upper()),
+    )
+
 def known_external_ids(
     conn: Conn, *, source_key: str, external_ids: list[str]
 ) -> set[str]:

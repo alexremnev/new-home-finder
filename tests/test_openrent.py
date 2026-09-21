@@ -75,8 +75,9 @@ class FakeRun:
 class FakeConn:
     """A connection that answers the two queries the scraper makes."""
 
-    def __init__(self, districts: list[str]) -> None:
+    def __init__(self, districts: list[str], settled: list[str] | None = None) -> None:
         self.districts = districts
+        self.settled = list(settled or [])
         self.inserted: list[object] = []
         self.rows: list[dict[str, object]] = []
         self.next_id = 0
@@ -89,6 +90,12 @@ class FakeConn:
             # The districts live subscriptions name — what the scraper now
             # follows instead of an operator's list of coverage.
             self.rows = [{"code": code} for code in self.districts]
+        elif "FROM source_sweeps" in sql:
+            self.rows = [{"district": code} for code in self.settled]
+        elif "INSERT INTO source_sweeps" in sql:
+            assert isinstance(params, tuple)
+            self.settled.append(str(params[1]))
+            self.rows = []
         elif "INSERT INTO listings" in sql:
             self.next_id += 1
             self.inserted.append(params)
@@ -242,22 +249,67 @@ def test_an_escaped_tag_cannot_become_a_tag() -> None:
     assert "<script>" in text  # as visible text, which is harmless
     assert "£2,100.00" in text
 
-def test_a_sweep_that_hit_the_budget_is_not_caught_up() -> None:
-    from worker.sources.openrent import PAGE_BUDGET, collect
-
-    # More new listings than one run can read means the standing market is still
-    # being worked through, and none of it should be announced as new.
-    many = "".join(
+def listings_sitemap(ids: range | list[int], district: str = "se16") -> str:
+    return "<urlset>" + "".join(
         f"<url><loc>https://www.openrent.co.uk/property-to-rent/london/"
-        f"2-bed-flat-street-se16/{n}</loc></url>"
-        for n in range(PAGE_BUDGET + 5)
-    )
+        f"2-bed-flat-street-{district}/{n}</loc></url>"
+        for n in ids
+    ) + "</urlset>"
 
-    def serving(url: str) -> str:
+def serving(ids: range | list[int], district: str = "se16") -> object:
+    def get(url: str) -> str:
+        if "sitemap.xml" in url:
+            return INDEX
         if url.endswith(".xml"):
-            return INDEX if "sitemap.xml" in url else f"<urlset>{many}</urlset>"
+            return listings_sitemap(ids, district)
         return "<p>Rent &#xA3;2,100.00 per month</p>"
 
-    swept = collect(FakeConn(districts=["SE16"]), FakeRun(), get=serving, pause=0)
-    assert len(swept.stored) == PAGE_BUDGET
-    assert swept.caught_up is False
+    return get
+
+def test_a_first_pass_over_a_district_announces_nothing() -> None:
+    from worker.sources.openrent import collect
+
+    # The sitemap has no dates, so a listing seen for the first time may have
+    # been on the market since June. Announcing a first pass would send a new
+    # subscriber the whole standing market — which is the flood this prevents.
+    conn = FakeConn(districts=["SE16"])
+    swept = collect(conn, FakeRun(), get=serving(range(25)), pause=0)
+
+    assert len(swept.stored) == 25
+    assert swept.announce == []
+
+def test_a_first_pass_under_the_budget_is_still_silent() -> None:
+    from worker.sources.openrent import PAGE_BUDGET, collect
+
+    # The rule this replaced asked "did we hit the budget", which said yes to a
+    # district of twenty-five and sent every one of them.
+    conn = FakeConn(districts=["SE16"])
+    swept = collect(conn, FakeRun(), get=serving(range(PAGE_BUDGET - 5)), pause=0)
+    assert swept.announce == []
+
+def test_a_district_with_nothing_new_becomes_settled() -> None:
+    from worker.sources.openrent import collect
+
+    # Nothing new left means everything on the market there is stored, so from
+    # now on anything appearing genuinely appeared after we looked.
+    conn = FakeConn(districts=["SE16"])
+    collect(conn, FakeRun(), get=serving([]), pause=0)
+    assert conn.settled == ["SE16"]
+
+def test_once_settled_a_new_listing_is_announced() -> None:
+    from worker.sources.openrent import collect
+
+    conn = FakeConn(districts=["SE16"], settled=["SE16"])
+    swept = collect(conn, FakeRun(), get=serving([9001]), pause=0)
+    assert len(swept.stored) == 1
+    assert swept.announce == swept.stored
+
+def test_settling_one_district_does_not_release_another() -> None:
+    from worker.sources.openrent import collect
+
+    # E14 is settled and quiet; SE16 is being read for the first time. The run
+    # settles E14 and must not let that make SE16's backlog announceable.
+    conn = FakeConn(districts=["SE16", "E14"], settled=["E14"])
+    swept = collect(conn, FakeRun(), get=serving(range(12)), pause=0)
+    assert len(swept.stored) == 12
+    assert swept.announce == []
