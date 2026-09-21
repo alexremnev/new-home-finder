@@ -1,4 +1,4 @@
-import { FURNISHED } from "@/lib/criteria";
+import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
@@ -125,6 +125,7 @@ export default async function Page() {
             districts={codes}
             maxDistricts={plan?.max_districts ?? 1}
             furnished={[...FURNISHED]}
+            types={[...PROPERTY_TYPES]}
             whatsappReady={Boolean(
               process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
             )}

@@ -41,13 +41,17 @@ describe("checkboxes", () => {
 
   it("ignores a criterion the form does not collect", () => {
 
-    // The form asks for areas, rent, bedrooms, bathrooms, a date, furnishing and
-    // pets. Anything else reaching this route was hand-crafted, and accepting it
-    // would put a filter in the database that nobody can see or change.
+    // The form asks for areas, rent, bedrooms, bathrooms, a date, property type,
+    // furnishing and pets. Anything else reaching this route was hand-crafted,
+    // and accepting it would put a filter in the database that nobody can see
+    // or change.
+    //
+    // `landlord_direct_only` is the one to watch: the matcher supports it, but
+    // nothing ever stores `is_landlord_direct = false`, so honouring it here
+    // would be a filter that silently does nothing.
     const criteria = parseForm(
       {
         districts: ["SE16"],
-        property_types: ["flat"],
         bills_included: "on",
         landlord_direct_only: "on",
         min_tenancy_max_months: "12",
@@ -143,5 +147,27 @@ describe("enforceLimits", () => {
   it("passes a filter that is within the plan", () => {
     const criteria = { areas: { postcode_districts: ["E14", "E15"] } };
     expect(enforceLimits(criteria, { maxDistricts: 5 })).toBe(criteria);
+  });
+});
+
+describe("property type", () => {
+  it("keeps the four words the parsers store", () => {
+    expect(
+      parseForm({ property_types: ["flat", "house"] }, ENABLED).property_types,
+    ).toEqual(["flat", "house"]);
+  });
+
+  it("throws away anything the matcher could not answer", () => {
+    // The matcher compares the stored type as an exact string, so a word no
+    // parser writes would filter everything out rather than nothing.
+    expect(
+      parseForm({ property_types: ["flat", "terraced house", "castle"] }, ENABLED)
+        .property_types,
+    ).toEqual(["flat"]);
+  });
+
+  it("is absent when nothing is ticked", () => {
+    expect(parseForm({}, ENABLED).property_types).toBeUndefined();
+    expect(parseForm({ property_types: [] }, ENABLED).property_types).toBeUndefined();
   });
 });

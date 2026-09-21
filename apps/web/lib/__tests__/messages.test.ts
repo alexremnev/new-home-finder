@@ -102,3 +102,19 @@ describe("the announcement", () => {
     }
   });
 });
+
+describe("property type in the card", () => {
+  it("names the type in words somebody chose", () => {
+    const text = criteriaCard({
+      areas: { postcode_districts: ["SE16"] },
+      property_types: ["flat", "room"],
+    });
+    expect(text).toContain("🏘 Type: flat, room in a shared flat");
+  });
+
+  it("says nothing when no type was chosen", () => {
+    expect(criteriaCard({ areas: { postcode_districts: ["SE16"] } })).not.toContain(
+      "Type:",
+    );
+  });
+});

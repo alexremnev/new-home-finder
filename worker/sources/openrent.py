@@ -195,10 +195,22 @@ def read_slug(slug: str) -> tuple[str, int, str | None] | None:
     if not beds:
         return None
 
-    for name in ("terraced-house", "detached-house", "semi-detached-house",
-                 "maisonette", "bungalow", "flat", "house"):
+    # Narrowed to four words, and on purpose. The matcher compares the stored
+    # type against the filter as an exact string, so "terraced house" would not
+    # answer a filter for "house" — and a form offering every phrase the site
+    # uses is not a choice anybody can make. The specific word is kept in `raw`.
+    for name, kind in (
+        ("terraced-house", "house"),
+        ("detached-house", "house"),
+        ("semi-detached-house", "house"),
+        ("bungalow", "house"),
+        ("house", "house"),
+        ("maisonette", "flat"),
+        ("flat", "flat"),
+        ("apartment", "flat"),
+    ):
         if name in words:
-            return district, int(beds.group(1)), name.replace("-", " ")
+            return district, int(beds.group(1)), kind
     return district, int(beds.group(1)), None
 
 def listings_in(sitemap: str) -> list[Found]:
@@ -284,7 +296,9 @@ def as_listing(found: Found, html: str) -> Listing | None:
         postcode_district=found.district,
         # Every OpenRent listing is let by the landlord; that is the site.
         is_landlord_direct=True,
-        raw={"slug_type": found.property_type or ""},
+        # The exact phrase from the url, kept because `property_type` is
+        # deliberately narrowed to four words for filtering.
+        raw={"slug": found.url.rsplit("/", 2)[-2] if "/" in found.url else ""},
     )
 
 def collect(

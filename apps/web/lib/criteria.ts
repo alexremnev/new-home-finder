@@ -5,6 +5,7 @@ function day(value: unknown): string | undefined {
 
 export type Criteria = {
   price_pcm?: { min?: number; max?: number };
+  property_types?: string[];
   bedrooms?: { min?: number; max?: number };
 
   bathrooms?: { min?: number; max?: number };
@@ -15,6 +16,17 @@ export type Criteria = {
 };
 
 export const FURNISHED = ["furnished", "unfurnished", "part"] as const;
+
+// Four words, matching what the parsers store. The matcher compares the stored
+// type against this as an exact string, so the two lists have to be the same
+// list — anything finer ("terraced house") would answer no filter at all.
+//
+// Worth knowing what this can and cannot do: the Telegram feed only states a
+// type for studios and rooms, and an unstated type matches everything. So
+// choosing flat and house excludes rooms and studios, which is the useful
+// direction; choosing flat alone does not exclude a house that never said it
+// was one.
+export const PROPERTY_TYPES = ["flat", "house", "studio", "room"] as const;
 
 const PRICE_LIMIT = 20_000;
 const BEDROOM_LIMIT = 10;
@@ -59,6 +71,9 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
 
   const furnished = subset(form.furnished, FURNISHED);
   if (furnished.length) criteria.furnished = furnished;
+
+  const types = subset(form.property_types, PROPERTY_TYPES);
+  if (types.length) criteria.property_types = types;
 
   const districts = districtList(form.districts, enabledDistricts);
   if (districts.length) criteria.areas = { postcode_districts: districts };
@@ -115,6 +130,9 @@ export function describeCriteria(criteria: Criteria): string {
   if (criteria.price_pcm) lines.push(`Rent: ${rangeText(criteria.price_pcm, "£")}`);
   if (criteria.bedrooms) lines.push(`Bedrooms: ${rangeText(criteria.bedrooms, "")}`);
   if (criteria.bathrooms) lines.push(`Bathrooms: ${rangeText(criteria.bathrooms, "")}`);
+  if (criteria.property_types?.length) {
+    lines.push(`Type: ${criteria.property_types.join(", ")}`);
+  }
   if (criteria.furnished?.length) {
     lines.push(`Furnishing: ${criteria.furnished.join(", ")}`);
   }

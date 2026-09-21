@@ -11,6 +11,7 @@ type Props = {
   districts: string[];
   maxDistricts: number;
   furnished: string[];
+  types: string[];
   whatsappReady: boolean;
   // From `plans.duration_days` for the sign-up plan, so the page cannot promise
   // a different trial from the one the bot grants.
@@ -33,6 +34,14 @@ const BATHS_MIN = 1;
 const ROOMS_MAX = 5;
 
 const rooms = (value: number) => String(value);
+
+// "room" on its own reads as a bedroom count rather than as what it is.
+const TYPE_LABELS: Record<string, string> = {
+  flat: "Flat",
+  house: "House",
+  studio: "Studio",
+  room: "Room in a shared flat",
+};
 const beds = (value: number) => (value === 0 ? "Studio" : String(value));
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
@@ -40,7 +49,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, furnished, whatsappReady, trialDays, names = {},
+  districts, maxDistricts, furnished, types, whatsappReady, trialDays, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
@@ -345,6 +354,22 @@ export function SubscribeForm({
           a listing that gives no date is sent either way.
         </small>
       </label>
+
+      <fieldset aria-labelledby="type-label">
+        <span id="type-label" className="field-label">Property type</span>
+        <div className="choices">
+          {types.map((option) => (
+            <label key={option}>
+              <input type="checkbox" name="property_types" value={option} />{" "}
+              {TYPE_LABELS[option] ?? option}
+            </label>
+          ))}
+        </div>
+        <small className="note">
+          Ticking Flat and House is how you stop hearing about rooms and studios.
+          A listing that does not say what it is still comes through.
+        </small>
+      </fieldset>
 
       <fieldset aria-labelledby="furnishing-label">
         <span id="furnishing-label" className="field-label">Furnishing</span>

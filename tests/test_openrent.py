@@ -137,9 +137,11 @@ def test_the_district_comes_from_the_url_not_the_page() -> None:
 
 def test_the_slug_gives_rooms_and_type() -> None:
     assert read_slug("2-bed-flat-rotherhithe-street-se16") == ("SE16", 2, "flat")
-    assert read_slug("3-bed-terraced-house-mallard-avenue-cv10") == (
-        "CV10", 3, "terraced house",
-    )
+    # Narrowed to four words: the matcher compares exact strings, so a filter
+    # for "house" has to be answered by a terraced one.
+    assert read_slug("3-bed-terraced-house-mallard-avenue-cv10") == ("CV10", 3, "house")
+    assert read_slug("2-bed-maisonette-high-street-se16") == ("SE16", 2, "flat")
+    assert read_slug("4-bed-bungalow-lane-cv10") == ("CV10", 4, "house")
     # A room in somebody else's flat: the number is not a bedroom count.
     assert read_slug("room-in-a-shared-house-beresford-road-dn12") == ("DN12", 1, "room")
     assert read_slug("studio-craven-street-wc2n") == ("WC2N", 0, "studio")

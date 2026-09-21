@@ -31,6 +31,17 @@ function pounds(amount: number): string {
 // A studio has no bedrooms, and "0" reads like a mistake rather than a choice.
 const bedroom = (count: number) => (count === 0 ? "studio" : String(count));
 
+// The words the form shows, not the words stored: "room" on its own reads as a
+// bedroom count rather than as what it is.
+const TYPE_NAMES: Record<string, string> = {
+  flat: "flat",
+  house: "house",
+  studio: "studio",
+  room: "room in a shared flat",
+};
+
+const typeName = (key: string) => TYPE_NAMES[key] ?? key;
+
 function span(
   value: { min?: number; max?: number } | undefined,
   render: (n: number) => string,
@@ -62,6 +73,10 @@ export function criteriaCard(criteria: Criteria): string {
 
   const bathrooms = span(criteria.bathrooms, String);
   if (bathrooms) lines.push(`🛁 Bathrooms: ${bathrooms}`);
+
+  if (criteria.property_types?.length) {
+    lines.push(`🏘 Type: ${criteria.property_types.map(typeName).join(", ")}`);
+  }
 
   if (criteria.furnished?.length) {
     lines.push(`🛋 Furnishing: ${criteria.furnished.join(", ")}`);

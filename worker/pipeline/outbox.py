@@ -124,6 +124,7 @@ SEED_POOL = 400
 # experience is not silence.
 SEED_SKIPS = frozenset({"whatsapp"})
 
+
 def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
     with run.stage("seed") as stage:
