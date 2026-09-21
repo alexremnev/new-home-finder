@@ -1463,9 +1463,21 @@ form p.error {
 .log-level { font-weight: 700; font-size: 10px; text-transform: uppercase; }
 .log-message { overflow-wrap: anywhere; }
 
+/* A heading with its own controls on the right, inside a card. */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.card-head h2 { margin: 0; }
+
 .pager {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 0.5rem;
   margin-top: 0.6rem;
   color: var(--d-soft);

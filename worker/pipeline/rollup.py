@@ -67,6 +67,36 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
         ).fetchall()
 
         stage.set("days", len(written))
+
+        # The same window, one grain finer: listings per district per day. Kept
+        # in the same job because it answers the same question at a different
+        # zoom, and because running it here means it inherits the property that
+        # matters — a missed run leaves no hole, the next one repairs it.
+        #
+        # London, not UTC: every date in the admin is London time, and a day
+        # that ended at 01:00 in summer would file an evening on tomorrow.
+        districts = conn.execute(
+            """
+            INSERT INTO district_days (day, district, listings, computed_at)
+            SELECT (l.first_seen_at AT TIME ZONE 'Europe/London')::date AS day,
+                   l.postcode_district,
+                   count(*),
+                   now()
+              FROM listings l
+             WHERE l.postcode_district IS NOT NULL
+               AND (l.first_seen_at AT TIME ZONE 'Europe/London')::date
+                   > (now() AT TIME ZONE 'Europe/London')::date
+                     - make_interval(days => %(days)s::int)
+             GROUP BY 1, 2
+            ON CONFLICT (day, district) DO UPDATE
+               SET listings    = EXCLUDED.listings,
+                   computed_at = now()
+            RETURNING day
+            """,
+            {"days": days},
+        ).fetchall()
+
+        stage.set("district_rows", len(districts))
         return len(written)
 
 __all__ = ["DAYS", "run_rollup"]
