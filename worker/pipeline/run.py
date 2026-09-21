@@ -66,11 +66,28 @@ def run_job(
         # takes — which is why there is nothing here but collect and queue.
         from worker.sources.openrent import collect as scrape_openrent
 
-        listing_ids = scrape_openrent(conn, run, dry_run=cfg.dry_run)
-        if listing_ids:
+        sweep = scrape_openrent(conn, run, dry_run=cfg.dry_run)
+
+        # Nothing is alerted while the scraper is still catching up.
+        #
+        # The sitemap has no lastmod, so a listing found for the first time
+        # looks new whether it went up an hour ago or a month ago. On the first
+        # runs that is the whole standing market, and a subscriber would be sent
+        # hundreds of flats that have been available for weeks — which is both
+        # useless and indistinguishable from spam. They are stored, so they are
+        # matched from then on; they are simply not announced retrospectively.
+        if sweep.stored and sweep.caught_up:
             queue_matches(
-                conn, run, source_key="openrent", listing_ids=listing_ids
+                conn, run, source_key="openrent", listing_ids=sweep.stored
             )
+        elif sweep.stored:
+            with run.stage("seed-openrent") as stage:
+                stage.count("stored_not_announced", len(sweep.stored))
+                stage.log(
+                    "info",
+                    f"{len(sweep.stored)} openrent listings stored without "
+                    "alerting: still working through the backlog",
+                )
         return "ok"
 
     run.event("error", f"unknown job {job!r}")

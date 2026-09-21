@@ -24,6 +24,18 @@ schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:02 ^
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:03 ^
   /TN "home rollup" /TR "%RUN% rollup"
 
+REM OpenRent, read from the site. It lives here rather than on the server because
+REM the server's address is refused on listing pages — 405 — while this machine is
+REM served normally. Half-hourly, not every five minutes: the sitemap carries no
+REM lastmod, so each run fetches it whole to find what is new, and a listing
+REM found half an hour later is still found the day it appeared.
+REM
+REM Discovery happens here; delivery still happens on the server, because both
+REM share one database and `drain` runs there. This machine being asleep delays
+REM OpenRent listings, it does not stop the alerts.
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 30 /ST 00:04 ^
+  /TN "home scrape" /TR "%RUN% scrape"
+
 schtasks /Create /F /RL LIMITED /SC HOURLY /MO 1 /ST 00:20 ^
   /TN "home report" /TR "cmd /c cd /d \"%PROJECT%\" && .venv\Scripts\python.exe scripts\report.py >> logs\report.log 2>&1"
 

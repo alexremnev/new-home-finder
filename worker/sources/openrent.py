@@ -36,6 +36,7 @@ available inside a link, so it is taken from the HTML before stripping.
 
 from __future__ import annotations
 
+import html
 import re
 import time
 import urllib.error
@@ -91,8 +92,14 @@ SPACES = re.compile(r"\s+")
 # Confirmed against a live page: "Rent £1,000.00 per month", "£1,000.00 p/m",
 # "Deposit / Bond is £1,000.00", "1 bathrooms", "Minimum Tenancy 6 Months",
 # and the postcode inside a comparebroadband link.
+# Tried in order, so the most explicit statement of the rent wins. The bare
+# "per month" form is third because it also catches the monthly figure a
+# weekly-priced listing gives in brackets — "£2,950pw (£12,783 per month)" —
+# which is the number we want and the only one stated per month.
 RENT = (
     re.compile(r"Rent\s*£\s*([\d,]+(?:\.\d{2})?)\s*per\s*month", re.IGNORECASE),
+    re.compile(r"To\s*Rent\s*Now\s*for\s*£\s*([\d,]+(?:\.\d{2})?)", re.IGNORECASE),
+    re.compile(r"£\s*([\d,]+(?:\.\d{2})?)\s*per\s*month", re.IGNORECASE),
     re.compile(r"£\s*([\d,]+(?:\.\d{2})?)\s*p\s*/\s*m", re.IGNORECASE),
     re.compile(r"£\s*([\d,]+(?:\.\d{2})?)\s*pcm", re.IGNORECASE),
 )
@@ -120,6 +127,17 @@ MONTHS = {
 }
 
 @dataclass(frozen=True)
+class Sweep:
+    """What one run did, and whether it has caught up with the site.
+
+    `caught_up` is false while there is still a backlog — and that decides
+    whether the listings are worth alerting anybody about. See the caller.
+    """
+
+    stored: list[int]
+    caught_up: bool
+
+@dataclass(frozen=True)
 class Found:
     """What the sitemap alone reveals, before any page is fetched."""
 
@@ -134,8 +152,14 @@ def fetch(url: str, *, timeout: float = 20.0) -> str:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read().decode("utf-8", errors="replace")
 
-def as_text(html: str) -> str:
-    return SPACES.sub(" ", TAGS.sub(" ", html)).strip()
+def as_text(markup: str) -> str:
+
+    # Entities are decoded, and after the tags rather than before: the pound
+    # sign arrives as "&#xA3;" on most of this site, so matching a literal "£"
+    # found nothing on pages that plainly showed a price. Decoding first would
+    # let an escaped "&lt;script&gt;" become a tag after the stripping that was
+    # supposed to remove it.
+    return SPACES.sub(" ", html.unescape(TAGS.sub(" ", markup))).strip()
 
 def money(raw: str) -> float | None:
     try:
@@ -263,8 +287,8 @@ def collect(
     pause: float = PAUSE_SECONDS,
     dry_run: bool = False,
     get: Any = None,
-) -> list[int]:
-    """Store every new listing in an enabled district. Returns their ids."""
+) -> Sweep:
+    """Store every new listing in an enabled district."""
 
     read = get or fetch
     stored: list[int] = []
@@ -272,7 +296,7 @@ def collect(
     with run.stage("scrape", source_key=SOURCE_KEY) as stage:
         if dry_run:
             stage.set("suppressed", True)
-            return []
+            return Sweep([], caught_up=False)
 
         wanted = set(store.enabled_source_districts(conn, SOURCE_KEY))
         stage.set("districts", len(wanted))
@@ -281,7 +305,7 @@ def collect(
             # look for. Said out loud, because silence here looks identical to
             # a broken scraper.
             stage.degrade("no districts are enabled for openrent")
-            return []
+            return Sweep([], caught_up=False)
 
         index = read(SITEMAP_INDEX)
         children = [u for u in LOC.findall(index) if "listings" in u.lower()]
@@ -295,7 +319,7 @@ def collect(
         here = [one for one in found if one.district in wanted]
         stage.set("in_our_districts", len(here))
         if not here:
-            return []
+            return Sweep([], caught_up=True)
 
         known = store.known_external_ids(
             conn, source_key=SOURCE_KEY, external_ids=[one.external_id for one in here]
@@ -335,12 +359,13 @@ def collect(
             stored.append(store.insert_listing(conn, listing))
             stage.count("stored")
 
-        stage.count("over_budget", max(0, len(fresh) - budget))
+        backlog = max(0, len(fresh) - budget)
+        stage.count("over_budget", backlog)
         stage.set("stored", len(stored))
 
-    return stored
+    return Sweep(stored, caught_up=backlog == 0)
 
 __all__ = [
-    "AGENT", "PAGE_BUDGET", "SOURCE_KEY", "Found", "as_listing", "as_text",
-    "collect", "listings_in", "read_slug", "when",
+    "AGENT", "PAGE_BUDGET", "REFUSALS_ALLOWED", "SOURCE_KEY", "Found", "Sweep",
+    "as_listing", "as_text", "collect", "listings_in", "read_slug", "when",
 ]

@@ -78,12 +78,18 @@ class FakeConn:
         self.districts = districts
         self.inserted: list[object] = []
         self.rows: list[dict[str, object]] = []
+        self.next_id = 0
 
-    # store reads through these two, and nothing here touches a database.
+    # store reads and writes through these three, and nothing here touches a
+    # database.
     def execute(self, sql: str, params: object = None) -> "FakeConn":
+        self.one: dict[str, object] | None = None
         if "source_locations" in sql:
             self.rows = [{"code": code} for code in self.districts]
-        elif "external_id FROM listings" in sql:
+        elif "INSERT INTO listings" in sql:
+            self.next_id += 1
+            self.inserted.append(params)
+            self.one = {"id": self.next_id}
             self.rows = []
         else:
             self.rows = []
@@ -91,6 +97,9 @@ class FakeConn:
 
     def fetchall(self) -> list[dict[str, object]]:
         return self.rows
+
+    def fetchone(self) -> dict[str, object] | None:
+        return self.one
 
 def only(district: str = "SE16") -> object:
     return [one for one in listings_in(SITEMAP) if one.district == district][0]
@@ -195,8 +204,57 @@ def test_a_run_of_refusals_stops_the_run() -> None:
         raise urllib.error.HTTPError(url, 405, "Not Allowed", {}, None)  # type: ignore[arg-type]
 
     conn = FakeConn(districts=["SE16", "WC2N", "DN12"])
-    collect(conn, FakeRun(), get=refusing, pause=0)
+    swept = collect(conn, FakeRun(), get=refusing, pause=0)
+    assert swept.stored == []
 
     pages = [u for u in asked if not u.endswith(".xml")]
     assert len(pages) == REFUSALS_ALLOWED, pages
     assert conn.inserted == []
+
+def test_the_pound_sign_arrives_as_an_entity() -> None:
+
+    # Most of this site writes "&#xA3;" rather than "£". Matching the literal
+    # character found nothing on pages that plainly showed a price — 28 of 40 in
+    # the first real run.
+    page = (
+        "<title>London - 1 Bed Flat, Courtfield Road, SW7 - To Rent Now for "
+        "&#xA3;3,141.67 p/m</title><body>&#xA3;3,141.67 p/m</body>"
+    )
+    listing = as_listing(only(), page)
+    assert listing is not None and listing.price_pcm == 3142
+
+def test_the_monthly_figure_wins_over_a_weekly_one() -> None:
+
+    # A weekly-priced listing states the month in brackets, and that is the
+    # number a monthly filter has to compare against.
+    page = "<p>&#xA3;2,950pw (&#xA3;12,783 per month)</p>"
+    listing = as_listing(only(), page)
+    assert listing is not None and listing.price_pcm == 12783
+
+def test_an_escaped_tag_cannot_become_a_tag() -> None:
+
+    # Entities are decoded after the tags are stripped, not before, or this
+    # would smuggle a script past the stripping.
+    text = as_text("<p>&lt;script&gt;alert(1)&lt;/script&gt; Rent &#xA3;2,100.00 per month</p>")
+    assert "<script>" in text  # as visible text, which is harmless
+    assert "£2,100.00" in text
+
+def test_a_sweep_that_hit_the_budget_is_not_caught_up() -> None:
+    from worker.sources.openrent import PAGE_BUDGET, collect
+
+    # More new listings than one run can read means the standing market is still
+    # being worked through, and none of it should be announced as new.
+    many = "".join(
+        f"<url><loc>https://www.openrent.co.uk/property-to-rent/london/"
+        f"2-bed-flat-street-se16/{n}</loc></url>"
+        for n in range(PAGE_BUDGET + 5)
+    )
+
+    def serving(url: str) -> str:
+        if url.endswith(".xml"):
+            return INDEX if "sitemap.xml" in url else f"<urlset>{many}</urlset>"
+        return "<p>Rent &#xA3;2,100.00 per month</p>"
+
+    swept = collect(FakeConn(districts=["SE16"]), FakeRun(), get=serving, pause=0)
+    assert len(swept.stored) == PAGE_BUDGET
+    assert swept.caught_up is False

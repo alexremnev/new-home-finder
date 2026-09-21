@@ -1,7 +1,7 @@
 @echo off
 REM Runs one worker job, logs it, and shouts if it failed.
 REM
-REM   run-job.cmd ingest | drain
+REM   run-job.cmd ingest | scrape | drain | rollup
 REM
 REM ── why this file exists at all ─────────────────────────────────────────────
 REM
@@ -27,7 +27,7 @@ REM neither Python nor a working venv — so it still fires when those are the f
 
 setlocal EnableDelayedExpansion
 if "%~1"=="" (
-  echo Usage: run-job.cmd ingest ^| drain
+  echo Usage: run-job.cmd ingest ^| scrape ^| drain ^| rollup
   exit /b 2
 )
 set JOB=%~1
