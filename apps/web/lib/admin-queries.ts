@@ -822,137 +822,55 @@ export async function visitorsByDevice(days: number): Promise<VisitSlice[]> {
 
 // ── what each district produces ───────────────────────────────────────────
 //
-// Read from `district_days`, which the rollup keeps. Counted with no criteria
-// beyond the district itself — the widest possible filter, so these are the
-// ceiling a real filter is measured against rather than what anybody receives.
+// The rows come back per day and unaggregated, and the page does the windowing,
+// sorting and paging in the browser. One fetch of a month of days is a few
+// thousand small rows; the alternative was a server round trip for every range
+// and every column heading, which is what made the page feel like it reloaded.
+//
+// Counted with no criteria beyond the district itself — the widest possible
+// filter, so these are the ceiling a real filter is measured against rather
+// than what anybody receives.
 
-export type DistrictRow = {
-  district: string;
-  listings: number;
-  days: number;
-  max_day: number;
-  // The true minimum for the window, which is zero for any district that was
-  // silent on one of its days — a row only exists for a day that produced
-  // something, so the smallest stored value would otherwise report the
-  // quietest day the district *appeared* on and quietly overstate it.
-  min_day: number;
-};
+export type DistrictDay = { day: string; district: string; listings: number };
 
-// Sorting by the average would be sorting by the total: every district is
-// divided by the same number of days, so the order is identical. The other two
-// are genuinely different questions — which district spikes, and which one
-// never goes quiet.
-const SORTS = {
-  max: "sum(listings) DESC",
-  min: "sum(listings) ASC",
-  peak: "max(listings) DESC",
-  reliable: "min_day DESC",
-} as const;
-export type DistrictSort = keyof typeof SORTS;
-
-const WINDOW_START =
-  "(now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)";
-
-export async function districtDays(
-  days: number,
-  sort: DistrictSort,
-  limit: number,
-  offset: number,
-): Promise<DistrictRow[]> {
-  // Interpolated, not a parameter: it is an ordering rather than a value, and
-  // it can only ever be one of the four from the map above.
-  const order = SORTS[sort];
-  return query<DistrictRow>(
-    `WITH span AS (
-        SELECT count(DISTINCT day)::int AS covered
-          FROM district_days WHERE day > ${WINDOW_START}
-     )
-     SELECT district,
-            sum(listings)::int AS listings,
-            count(*)::int      AS days,
-            max(listings)::int AS max_day,
-            -- The rule lives here rather than in the page, so the table and
-            -- every top five agree on what a minimum is.
-            CASE WHEN count(*) = (SELECT covered FROM span)
-                 THEN min(listings)::int ELSE 0 END AS min_day
-       FROM district_days
-      WHERE day > ${WINDOW_START}
-      GROUP BY district
-      ORDER BY ${order}, district
-      LIMIT $2 OFFSET $3`,
-    [days, limit, offset],
-  ).catch(() => []);
-}
-
-export type DistrictWindow = {
-  districts: number;
-  listings: number;
-  days_covered: number;
-  busiest: string | null;
-  computed_at: string | null;
-};
-
-export async function districtWindow(days: number): Promise<DistrictWindow> {
-  const rows = await query<DistrictWindow>(
-    `SELECT count(DISTINCT district)::int AS districts,
-            coalesce(sum(listings), 0)::int AS listings,
-            -- Days that actually have rows, not the width of the window: the
-            -- history starts when the table was filled, so dividing by 30 on
-            -- day three would understate every district by a factor of ten.
-            count(DISTINCT day)::int AS days_covered,
-            (SELECT d2.district FROM district_days d2
-              WHERE d2.day > (now() AT TIME ZONE 'Europe/London')::date
-                             - make_interval(days => $1::int)
-              GROUP BY d2.district ORDER BY sum(d2.listings) DESC LIMIT 1) AS busiest,
-            max(computed_at)::text AS computed_at
-       FROM district_days
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date
-                  - make_interval(days => $1::int)`,
-    [days],
-  ).catch(() => []);
-  return (
-    rows[0] ?? {
-      districts: 0, listings: 0, days_covered: 0, busiest: null, computed_at: null,
-    }
-  );
-}
-
-// One row per day for the chosen district, or for everything when none is named.
-export async function districtTrend(
-  days: number,
-  district: string | null,
-): Promise<{ day: string; listings: number }[]> {
-  return query<{ day: string; listings: number }>(
-    `SELECT day::text AS day, sum(listings)::int AS listings
+export async function districtDaily(days: number): Promise<DistrictDay[]> {
+  return query<DistrictDay>(
+    `SELECT day::text AS day, district, listings
        FROM district_days
       WHERE day > (now() AT TIME ZONE 'Europe/London')::date
                   - make_interval(days => $1::int)
-        AND ($2::text IS NULL OR district = $2)
-      GROUP BY day
       ORDER BY day`,
-    [days, district],
+    [days],
   ).catch(() => []);
 }
 
-export type TopRecipient = {
+export type RecipientDay = {
+  day: string;
   user_id: number;
   sent: number;
   channel: string | null;
   plan: string | null;
+  districts: string[] | null;
 };
 
-// Who receives the most. Counted on `sent_at`, so it is what actually went out
-// rather than what was queued — and on WhatsApp, from October, this is also the
-// list of who costs the most.
-export async function topRecipients(
-  days: number,
-  limit: number,
-): Promise<TopRecipient[]> {
-  return query<TopRecipient>(
-    `SELECT n.user_id,
+export async function recipientDaily(days: number): Promise<RecipientDay[]> {
+  // Per day, like the districts, so the page can answer every range without
+  // asking again. `districts` is what the person actually subscribed to — the
+  // question asked of every name in this list.
+  return query<RecipientDay>(
+    `SELECT (n.sent_at AT TIME ZONE 'Europe/London')::date::text AS day,
+            n.user_id,
             count(*)::int AS sent,
-            uc.channel,
-            coalesce(p.display_name, u.plan) AS plan
+            max(uc.channel) AS channel,
+            max(coalesce(p.display_name, u.plan)) AS plan,
+            (ARRAY(
+               SELECT DISTINCT upper(area)
+                 FROM subscriptions s
+                 CROSS JOIN LATERAL jsonb_array_elements_text(
+                     coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+                 ) AS area
+                WHERE s.user_id = n.user_id AND s.active
+             )) AS districts
        FROM notifications n
        JOIN users u ON u.id = n.user_id
        LEFT JOIN plans p ON p.key = u.plan
@@ -961,10 +879,8 @@ export async function topRecipients(
         AND (n.sent_at AT TIME ZONE 'Europe/London')::date
             > (now() AT TIME ZONE 'Europe/London')::date
               - make_interval(days => $1::int)
-      GROUP BY n.user_id, uc.channel, p.display_name, u.plan
-      ORDER BY count(*) DESC, n.user_id
-      LIMIT $2`,
-    [days, limit],
+      GROUP BY day, n.user_id`,
+    [days],
   ).catch(() => []);
 }
 

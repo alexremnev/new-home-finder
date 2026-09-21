@@ -45,6 +45,10 @@ const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
   },
 ];
 
+// Ten is enough to see what is wrong. Uncapped, one repeating check buries
+// every other kind — and the kinds are the information.
+const FAULTS_SHOWN = 10;
+
 function tone(day: number, hour: number): "good" | "warn" | "bad" {
   if (hour > 0) return "good";
   return day > 0 ? "warn" : "bad";
@@ -173,20 +177,32 @@ export default async function SystemPage({
       </div>
 
       {faults.length > 0 && (
-        <div className="card" style={{ marginBottom: "0.75rem" }}>
-          <h2>
-            Problems
-            <Why text="Проверки, которые смотрят дальше кода возврата задачи: встала ли очередь, есть ли куда отправлять, не сменил ли источник формат. Задача может завершиться успешно и при этом ничего не сделать." />
-          </h2>
-          {faults.map((fault) => (
+        <details className="card faults" open>
+          <summary>
+            <span>
+              Problems <strong>{faults.length}</strong>
+            </span>
+            <Why text="Проверки, которые смотрят дальше кода возврата задачи: встала ли очередь, есть ли куда отправлять, не сменил ли источник формат. Задача может завершиться успешно и при этом ничего не сделать. Периоды у проверок разные: ошибки задач — за 48 часов, неразобранные сообщения — за 7 дней, «ничего не прочитано» — порог 6 часов, «доставка встала» — очередь старше часа. Дата в строке — последний раз, когда это случилось." />
+          </summary>
+
+          {faults.slice(0, FAULTS_SHOWN).map((fault) => (
             <div key={fault.kind + fault.detail} className="log-line">
+              <span className="log-when">{at(fault.last_at)}</span>
               <span className="log-level bad">{fault.kind}</span>
-              <span className="log-message" style={{ gridColumn: "span 2" }}>
+              <span className="log-message">
                 {fault.detail}
+                {fault.count > 1 ? ` · ×${fault.count}` : ""}
               </span>
             </div>
           ))}
-        </div>
+
+          {faults.length > FAULTS_SHOWN && (
+            <p className="hint">
+              {faults.length - FAULTS_SHOWN} more of the same kind, not shown.
+              The list is capped so one noisy check cannot bury the rest.
+            </p>
+          )}
+        </details>
       )}
 
       <div className="dash-head">

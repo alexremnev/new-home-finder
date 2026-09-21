@@ -343,3 +343,60 @@ def test_every_message_survives_the_reordering() -> None:
 
 def test_an_empty_batch_is_handled() -> None:
     assert interleave_by_user([]) == []
+
+def test_the_starter_batch_skips_whatsapp_but_still_settles_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+
+    # Five listings at sign-up is five billed messages on WhatsApp, sent before
+    # the person has decided whether they want the service. Telegram is free and
+    # keeps them.
+    from worker import store
+    from worker.pipeline import outbox
+
+    owed = [
+        {"id": 1, "user_id": 10, "criteria": {}, "channel": "whatsapp"},
+        {"id": 2, "user_id": 20, "criteria": {}, "channel": "telegram"},
+    ]
+    settled: list[int] = []
+    queued: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(store, "unseeded_subscriptions", lambda conn: owed)
+    monkeypatch.setattr(
+        store, "recent_listings",
+        lambda conn, days, limit: [row(id=n, delivery_share=None) for n in (1, 2, 3)],
+    )
+    monkeypatch.setattr(
+        store, "mark_seeded", lambda conn, sid: settled.append(sid)
+    )
+    monkeypatch.setattr(
+        store, "queue_notifications",
+        lambda conn, rows: (queued.extend(rows), set())[1],
+    )
+
+    outbox.seed_new_subscriptions(None, FakeRun())
+
+    # Both are settled, so neither is reconsidered on every later run.
+    assert sorted(settled) == [1, 2]
+    # Only the free channel was actually sent anything.
+    assert {one["channel"] for one in queued} == {"telegram"}
+
+class FakeRun:
+
+    class Stage:
+        def set(self, *_: object, **__: object) -> None: ...
+        def count(self, *_: object, **__: object) -> None: ...
+        def log(self, *_: object, **__: object) -> None: ...
+        def degrade(self, *_: object) -> None: ...
+
+    def stage(self, *_: object, **__: object) -> object:
+        held = self.Stage()
+
+        class Open:
+            def __enter__(self) -> object:
+                return held
+
+            def __exit__(self, *_: object) -> bool:
+                return False
+
+        return Open()

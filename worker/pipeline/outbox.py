@@ -113,6 +113,17 @@ SEED_DAYS = 3
 
 SEED_POOL = 400
 
+# Channels that do not get a starter batch.
+#
+# WhatsApp bills per message, so five listings at sign-up is five paid messages
+# sent before the person has decided whether they want the service at all.
+# Telegram costs nothing and keeps it.
+#
+# The batch exists because signing up and hearing nothing looks broken — but on
+# WhatsApp the criteria card arrives immediately either way, so the first
+# experience is not silence.
+SEED_SKIPS = frozenset({"whatsapp"})
+
 def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
     with run.stage("seed") as stage:
@@ -129,6 +140,13 @@ def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> No
 
         rows: list[dict[str, Any]] = []
         for subscription in owed:
+            if str(subscription["channel"]) in SEED_SKIPS:
+                # Marked as settled rather than left alone: an unseeded row is
+                # reconsidered on every run, and this answer will not change.
+                store.mark_seeded(conn, int(subscription["id"]))
+                stage.count("skipped_costly_channel")
+                continue
+
             criteria = subscription["criteria"] or {}
             chosen = 0
             for listing in pool:

@@ -2144,3 +2144,55 @@ form p.error {
     gap: 0.25rem;
   }
 }
+
+/* The range picker stays put while a long table scrolls under it: the whole
+   point of having ten ranges is switching between them, and hunting for the
+   control after every scroll defeats it. */
+.dash-head-stuck {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 0.6rem 0;
+  margin: 0 0 0.6rem;
+  background: var(--d-bg, #fff);
+  box-shadow: 0 6px 12px -10px rgb(15 23 42 / 45%);
+}
+
+/* A sortable heading is a button, so it is reachable by keyboard and says what
+   it does. The cell keeps the table's alignment; the button inherits it. */
+.grid th.sortable { padding: 0; }
+
+.grid th.sortable button {
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.grid th.sortable button:hover { color: var(--d-ink, inherit); text-decoration: underline; }
+.grid th.num.sortable button { text-align: right; }
+
+.pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* The problems panel folds away. Open by default — a problem nobody sees is a
+   problem nobody fixes — but foldable, because it sits above everything else. */
+.faults { margin-bottom: 0.75rem; }
+
+.faults > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.faults > summary::marker { color: var(--d-faint); }
+.faults > summary strong { color: #a12126; }
+.faults > summary + .log-line { margin-top: 0.5rem; }

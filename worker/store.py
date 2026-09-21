@@ -140,17 +140,33 @@ def subscribed_districts(conn: Conn) -> list[str]:
     #
     # Following the subscriptions cannot drift: there is one list, and it is the
     # one that decides who gets sent what.
+    # The conditions are `active_subscriptions` own, deliberately: that query
+    # decides who is sent anything, so anything it excludes is a district worth
+    # no requests. A finished trial is *not* excluded — it drops the person to
+    # the lapsed share rather than stopping them, and a share of nothing is
+    # nothing. A lapsed tier set to zero is excluded, because then they really
+    # do receive nothing.
     return [
         str(row["code"])
         for row in conn.execute(
             """
             SELECT DISTINCT upper(area) AS code
               FROM subscriptions s
-              JOIN users u ON u.id = s.user_id AND u.status = 'active'
+              JOIN users u          ON u.id = s.user_id AND u.status = 'active'
+              JOIN plans p          ON p.key = u.plan
+              JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
+              JOIN channels c       ON c.key = uc.channel AND c.enabled
+              LEFT JOIN plan_settings ps ON ps.id
+              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
               CROSS JOIN LATERAL jsonb_array_elements_text(
                   coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
               ) AS area
              WHERE s.active
+               AND CASE
+                       WHEN u.plan_until IS NULL OR u.plan_until > now()
+                           THEN p.delivery_share
+                       ELSE coalesce(lapsed.delivery_share, 0)
+                   END > 0
              ORDER BY code
             """
         ).fetchall()

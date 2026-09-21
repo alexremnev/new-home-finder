@@ -107,3 +107,17 @@ export function windowLeft(lastInbound: string | null): string | null {
   if (mins < 60) return `${Math.round(mins)}m left`;
   return `${Math.floor(mins / 60)}h left`;
 }
+
+// Today in London, as YYYY-MM-DD.
+//
+// Asked for explicitly because the server runs in UTC: on a summer evening
+// `new Date().toISOString()` already says tomorrow, and every day-keyed table
+// in this project is keyed on London days.
+export function londonDay(at: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: LONDON,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(at);
+}
