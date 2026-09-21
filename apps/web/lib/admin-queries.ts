@@ -461,7 +461,7 @@ export type JobState = {
 // Every job that has run in the window, plus the ones that should have. A job
 // missing from job_runs is the interesting case — silence, not health — and a
 // name that stopped existing should not haunt the page forever.
-export const EXPECTED_JOBS = ["ingest", "drain", "rollup", "report"] as const;
+export const EXPECTED_JOBS = ["ingest", "scrape", "drain", "rollup", "report"] as const;
 
 export async function jobStates(hours: number): Promise<JobState[]> {
   return query<JobState>(
@@ -965,5 +965,46 @@ export async function topRecipients(
       ORDER BY count(*) DESC, n.user_id
       LIMIT $2`,
     [days, limit],
+  ).catch(() => []);
+}
+
+// ── which source is actually producing ────────────────────────────────────
+//
+// A listing came from the Telegram feed exactly when a `source_messages` row
+// points at it, and from a scraper when none does. Both write the portal into
+// `listings.source_key`, so that column says *which site* and this says *how it
+// reached us* — the two questions the panels answer.
+//
+// Bounded to 30 days on purpose: the panels ask "is this working now", and an
+// unbounded max() over every listing is a scan for an answer nobody reads.
+
+export type SourceFeed = {
+  portal: string;
+  from_feed: boolean;
+  hour: number;
+  day: number;
+  week: number;
+  newest: string | null;
+};
+
+export async function sourceFeeds(): Promise<SourceFeed[]> {
+  return query<SourceFeed>(
+    `WITH seen AS (
+        SELECT l.source_key,
+               l.first_seen_at,
+               EXISTS (
+                 SELECT 1 FROM source_messages m WHERE m.listing_id = l.id
+               ) AS from_feed
+          FROM listings l
+         WHERE l.first_seen_at > now() - interval '30 days'
+     )
+     SELECT source_key AS portal,
+            from_feed,
+            count(*) FILTER (WHERE first_seen_at > now() - interval '1 hour')::int  AS hour,
+            count(*) FILTER (WHERE first_seen_at > now() - interval '24 hours')::int AS day,
+            count(*) FILTER (WHERE first_seen_at > now() - interval '7 days')::int   AS week,
+            max(first_seen_at)::text AS newest
+       FROM seen
+      GROUP BY source_key, from_feed`,
   ).catch(() => []);
 }

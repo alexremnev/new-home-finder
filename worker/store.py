@@ -127,6 +127,42 @@ def upgrade_token(conn: Conn, user_id: int) -> str:
     )
     return token
 
+def enabled_source_districts(conn: Conn, source_key: str) -> list[str]:
+
+    # The outward codes this source is switched on for. The scraper filters the
+    # sitemap against these before requesting a single page, which is why a
+    # nationwide sitemap costs tens of requests rather than thousands.
+    return [
+        str(row["code"])
+        for row in conn.execute(
+            """
+            SELECT loc.code
+              FROM source_locations sl
+              JOIN locations loc ON loc.id = sl.location_id
+             WHERE sl.source_key = %s AND sl.enabled AND loc.kind = 'postcode_district'
+             ORDER BY loc.code
+            """,
+            (source_key,),
+        ).fetchall()
+    ]
+
+def known_external_ids(
+    conn: Conn, *, source_key: str, external_ids: list[str]
+) -> set[str]:
+
+    # Asked in one query rather than one per id: the sitemap has no lastmod, so
+    # every run compares its whole list against what is already stored.
+    if not external_ids:
+        return set()
+    return {
+        str(row["external_id"])
+        for row in conn.execute(
+            "SELECT external_id FROM listings "
+            "WHERE source_key = %s AND external_id = ANY(%s)",
+            (source_key, external_ids),
+        ).fetchall()
+    }
+
 def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
 
     return list(

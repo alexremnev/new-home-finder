@@ -1,7 +1,7 @@
 import Link from "next/link";
 import {
   EXPECTED_JOBS, delivery, intakePoints, jobStates, knownJobs, logPage,
-  messagePoints, problems, recentRuns, runPoints, unparseablePoints,
+  messagePoints, problems, recentRuns, runPoints, sourceFeeds, unparseablePoints,
 } from "@/lib/admin-queries";
 
 import { Metric, RunBars, Series, Why } from "./charts";
@@ -10,6 +10,45 @@ import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "./windo
 import { ago, at } from "@/lib/when";
 
 export const dynamic = "force-dynamic";
+
+// Named and ordered here, not taken from whatever the database happens to
+// return: a source that has never produced anything still needs a panel, and a
+// red one is the whole point.
+//
+// `portal` is which site the listing is from; `feed` is how it reached us — a
+// listing came from the Telegram feed exactly when a source message points at
+// it, and from a scraper when none does.
+const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
+  {
+    label: "tg → Rightmove",
+    portal: "rightmove",
+    feed: true,
+    why: "Объявления Rightmove, пришедшие через Telegram-фид. Зелёный — что-то пришло за последний час; жёлтый — было сегодня, но в этот час тихо; красный — за сутки ничего.",
+  },
+  {
+    label: "tg → Zoopla",
+    portal: "zoopla",
+    feed: true,
+    why: "То же для Zoopla. Источник определяется по ссылке в сообщении фида, а не по названию канала.",
+  },
+  {
+    label: "tg → OpenRent",
+    portal: "openrent",
+    feed: true,
+    why: "OpenRent через Telegram-фид. Красный — ожидаемо: фид его не публикует, это и была причина завести отдельный скрапер. Станет зелёным, если фид когда-нибудь начнёт.",
+  },
+  {
+    label: "scraper → OpenRent",
+    portal: "openrent",
+    feed: false,
+    why: "OpenRent из собственного скрапера — объявления, за которыми не стоит ни одно сообщение фида. Это основной источник OpenRent; фид остаётся страховкой, и если он найдёт то же объявление, оно склеится в ту же строку.",
+  },
+];
+
+function tone(day: number, hour: number): "good" | "warn" | "bad" {
+  if (hour > 0) return "good";
+  return day > 0 ? "warn" : "bad";
+}
 
 // Russian, as asked: the names being explained are English and whoever reads
 // this did not write them.
@@ -75,8 +114,9 @@ export default async function SystemPage({
   };
 
   const bucket = bucketMinutes(win.hours);
-  const [jobs, points, logs, jobNames, queue, read, made, unread, faults, runs] =
-    await Promise.all([
+  const [
+    jobs, points, logs, jobNames, queue, read, made, unread, faults, runs, feeds,
+  ] = await Promise.all([
     jobStates(win.hours),
     runPoints(win.hours, bucket),
     logPage(win.hours, filter, page),
@@ -87,6 +127,7 @@ export default async function SystemPage({
     unparseablePoints(win.hours, bucket),
     problems().catch(() => []),
     recentRuns(12).catch(() => []),
+    sourceFeeds(),
   ]);
 
   const messages = read.reduce((sum, d) => sum + d.value, 0);
@@ -151,6 +192,26 @@ export default async function SystemPage({
       <div className="dash-head">
         <h1>System</h1>
         <WindowPicker here="/admin" chosen={win.key} extra={filter} />
+      </div>
+
+      <div className="dash-row">
+        {FEEDS.map((one) => {
+          const found = feeds.find(
+            (row) => row.portal === one.portal && row.from_feed === one.feed,
+          );
+          const day = found?.day ?? 0;
+          const hour = found?.hour ?? 0;
+          return (
+            <Metric
+              key={one.label}
+              label={one.label}
+              value={day}
+              tone={tone(day, hour)}
+              note={found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days"}
+              why={one.why}
+            />
+          );
+        })}
       </div>
 
       <div className="dash-row">

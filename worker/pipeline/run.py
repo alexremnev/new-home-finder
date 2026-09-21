@@ -59,6 +59,20 @@ def run_job(
 
         return "ok"
 
+    if job == "scrape":
+
+        # The one portal the Telegram feed does not publish, so it is fetched
+        # from the site. Everything after this is the same path a feed listing
+        # takes — which is why there is nothing here but collect and queue.
+        from worker.sources.openrent import collect as scrape_openrent
+
+        listing_ids = scrape_openrent(conn, run, dry_run=cfg.dry_run)
+        if listing_ids:
+            queue_matches(
+                conn, run, source_key="openrent", listing_ids=listing_ids
+            )
+        return "ok"
+
     run.event("error", f"unknown job {job!r}")
     return "failed"
 

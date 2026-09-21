@@ -1,0 +1,19 @@
+# OpenRent, read from the site rather than from the Telegram feed.
+#
+# Slower than ingest on purpose. The sitemap carries no lastmod, so every run
+# fetches it whole to find what is new — doing that every two minutes would be
+# rude to a site that allowed us in, and there is nothing to gain: a listing
+# discovered fifteen minutes later is still discovered the same day it appeared.
+[Unit]
+Description=Scrape OpenRent every fifteen minutes
+
+[Timer]
+Unit=london-home-finder@scrape.service
+OnBootSec=3min
+OnUnitInactiveSec=15min
+RandomizedDelaySec=60s
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

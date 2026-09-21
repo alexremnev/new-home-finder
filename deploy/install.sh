@@ -75,7 +75,7 @@ done
 echo "== timers"
 cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
-for job in ingest drain rollup report; do
+for job in ingest scrape drain rollup report; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 
