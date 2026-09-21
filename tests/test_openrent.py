@@ -73,6 +73,7 @@ class FakeRun:
         return Held()
 
 class FakeConn:
+    """A connection that answers the two queries the scraper makes."""
 
     def __init__(self, districts: list[str]) -> None:
         self.districts = districts
@@ -84,7 +85,9 @@ class FakeConn:
     # database.
     def execute(self, sql: str, params: object = None) -> "FakeConn":
         self.one: dict[str, object] | None = None
-        if "source_locations" in sql:
+        if "FROM subscriptions" in sql:
+            # The districts live subscriptions name — what the scraper now
+            # follows instead of an operator's list of coverage.
             self.rows = [{"code": code} for code in self.districts]
         elif "INSERT INTO listings" in sql:
             self.next_id += 1

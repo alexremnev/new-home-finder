@@ -127,22 +127,32 @@ def upgrade_token(conn: Conn, user_id: int) -> str:
     )
     return token
 
-def enabled_source_districts(conn: Conn, source_key: str) -> list[str]:
+def subscribed_districts(conn: Conn) -> list[str]:
 
-    # The outward codes this source is switched on for. The scraper filters the
-    # sitemap against these before requesting a single page, which is why a
-    # nationwide sitemap costs tens of requests rather than thousands.
+    # The districts somebody is actually waiting to hear about: taken from live
+    # subscriptions rather than from an operator's list of what a source covers.
+    #
+    # This is what the scraper filters the sitemap against, and the reason is
+    # that the two lists disagreed in both directions. A district on the list
+    # that nobody had chosen cost requests for nothing; a district somebody had
+    # chosen but which was missing from the list was never fetched at all, and
+    # that subscriber heard nothing from this source with no error anywhere.
+    #
+    # Following the subscriptions cannot drift: there is one list, and it is the
+    # one that decides who gets sent what.
     return [
         str(row["code"])
         for row in conn.execute(
             """
-            SELECT loc.code
-              FROM source_locations sl
-              JOIN locations loc ON loc.id = sl.location_id
-             WHERE sl.source_key = %s AND sl.enabled AND loc.kind = 'postcode_district'
-             ORDER BY loc.code
-            """,
-            (source_key,),
+            SELECT DISTINCT upper(area) AS code
+              FROM subscriptions s
+              JOIN users u ON u.id = s.user_id AND u.status = 'active'
+              CROSS JOIN LATERAL jsonb_array_elements_text(
+                  coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+              ) AS area
+             WHERE s.active
+             ORDER BY code
+            """
         ).fetchall()
     ]
 

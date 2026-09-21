@@ -16,6 +16,11 @@ established by comparing the ids it lists against the ids already stored.
 
 ── why the district filter comes first ───────────────────────────────────────
 
+The districts come from live subscriptions — what somebody is waiting to hear
+about — not from a list of what this source is said to cover. Those two
+disagreed in both directions: fetching districts nobody had chosen, and never
+fetching one that somebody had.
+
 The sitemap is nationwide: Doncaster and Reading sit beside London. But a
 listing URL ends with its own outward code —
 `/property-to-rent/nuneaton/3-bed-terraced-house-mallard-avenue-cv10/55214` —
@@ -298,14 +303,14 @@ def collect(
             stage.set("suppressed", True)
             return Sweep([], caught_up=False)
 
-        wanted = set(store.enabled_source_districts(conn, SOURCE_KEY))
+        wanted = set(store.subscribed_districts(conn))
         stage.set("districts", len(wanted))
         if not wanted:
-            # Nothing is switched on for this source, so there is nothing to
-            # look for. Said out loud, because silence here looks identical to
-            # a broken scraper.
-            stage.degrade("no districts are enabled for openrent")
-            return Sweep([], caught_up=False)
+            # Nobody is waiting for anything, so there is nothing to fetch.
+            # Said out loud, because silence here looks identical to a broken
+            # scraper — but this is not a fault, it is an empty subscriber list.
+            stage.log("info", "no active subscription names a district; nothing to scrape")
+            return Sweep([], caught_up=True)
 
         index = read(SITEMAP_INDEX)
         children = [u for u in LOC.findall(index) if "listings" in u.lower()]

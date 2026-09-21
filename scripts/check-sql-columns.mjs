@@ -301,6 +301,7 @@ const NOT_COLUMNS = new Set(
    foreign references cascade restrict check unique if not to_jsonb jsonb_build_object
    string_agg array_agg date_trunc age justify_hours width_bucket percentile_cont
    within ordinality current_setting format regexp_replace split_part
+   jsonb_array_elements jsonb_array_elements_text jsonb_typeof
    excluded`
     .split(/\s+/)
     .filter(Boolean),
