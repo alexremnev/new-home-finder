@@ -13,11 +13,17 @@ type Props = {
   furnished: string[];
   types: string[];
   whatsappReady: boolean;
-  // From `plans.duration_days` for the sign-up plan, so the page cannot promise
-  // a different trial from the one the bot grants.
-  trialDays: number | null;
+  // Both read from `plans`, so neither card can promise a trial or a price the
+  // bot then contradicts. The trial differs by messenger because a WhatsApp
+  // alert is billed per message; the price differs for the same reason.
+  offers: Record<Channel, Offer>;
 
   names?: Record<string, string>;
+};
+
+export type Offer = {
+  trialDays: number | null;
+  pricePence: number | null;
 };
 
 type Channel = "telegram" | "whatsapp";
@@ -49,7 +55,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, furnished, types, whatsappReady, trialDays, names = {},
+  districts, maxDistricts, furnished, types, whatsappReady, offers, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
@@ -404,50 +410,96 @@ export function SubscribeForm({
       <div className="hero-actions">
       {error && <p className="error">{error}</p>}
 
-      <div className="connect">
-        <button
-          type="submit"
-          name="channel"
-          value="telegram"
-          className="cta cta-telegram"
-          disabled={busy !== null || chosen.length === 0}
-        >
-          <TelegramMark />{" "}
-          {busy === "telegram" ? "One moment…" : "Connect Telegram"}
-        </button>
+      <p className="offers-lead">Start with a free trial. Cancel anytime.</p>
+
+      <div className={whatsappReady ? "offers" : "offers offers-one"}>
+        <Choice
+          channel="telegram"
+          label="Connect Telegram"
+          mark={<TelegramMark />}
+          offer={offers.telegram}
+          busy={busy}
+          ready={chosen.length > 0}
+          // Free to deliver on, so it is the one we would rather people use —
+          // and saying so is more honest than pricing them towards it quietly.
+          flag="Highly recommended"
+        />
 
         {whatsappReady && (
-          <button
-            type="submit"
-            name="channel"
-            value="whatsapp"
-            className="cta cta-whatsapp"
-            disabled={busy !== null || chosen.length === 0}
-          >
-            <WhatsAppMark />{" "}
-            {busy === "whatsapp" ? "One moment…" : "Connect WhatsApp"}
-          </button>
+          <Choice
+            channel="whatsapp"
+            label="Connect WhatsApp"
+            mark={<WhatsAppMark />}
+            offer={offers.whatsapp}
+            busy={busy}
+            ready={chosen.length > 0}
+          />
         )}
       </div>
+      </div>
+    </form>
+  );
+}
 
-      <ul className="perks">
-        {/* The trial length comes from `plans.duration_days`, so this cannot
-            promise a different one from the bot's. Left out rather than guessed
-            at if no plan is configured. */}
-        {trialDays !== null && trialDays > 0 && (
+// Pence to pounds, whole: a price list reads better without ".00" on it.
+const pounds = (pence: number) =>
+  "£" + Math.round(pence / 100).toLocaleString("en-GB");
+
+// One messenger's offer: what it costs to try, then the button that starts it.
+//
+// The four points are the same on both cards except the trial length, which is
+// the only thing that differs — so they are written once and the length is
+// passed in.
+function Choice({
+  channel, label, mark, offer, busy, ready, flag,
+}: {
+  channel: Channel;
+  label: string;
+  mark: React.ReactNode;
+  offer: Offer;
+  busy: Channel | null;
+  ready: boolean;
+  flag?: string;
+}) {
+  const { trialDays, pricePence } = offer;
+
+  return (
+    <div className={flag ? "offer offer-best" : "offer"}>
+      {flag && <span className="offer-flag">{flag}</span>}
+
+      <ul className="offer-points">
+        {/* Omitted rather than guessed at when no plan is configured: a trial
+            this page invented is a promise the bot would not keep. */}
+        {trialDays !== null && (
           <li>
-            <Tick /> {trialDays}-day free trial
+            <Tick /> {trialDays} {trialDays === 1 ? "day" : "days"} free trial
           </li>
         )}
         <li>
           <Tick /> Cancel anytime
         </li>
         <li>
-          <Tick /> Zero spam
+          <Tick /> Real-time alerts
+        </li>
+        <li>
+          <Tick /> No credit card required to start
         </li>
       </ul>
-      </div>
-    </form>
+
+      <button
+        type="submit"
+        name="channel"
+        value={channel}
+        className={`cta cta-${channel}`}
+        disabled={busy !== null || !ready}
+      >
+        {mark}
+        {busy === channel ? "One moment…" : label}
+        {pricePence !== null && (
+          <span className="offer-price">{pounds(pricePence)}/month</span>
+        )}
+      </button>
+    </div>
   );
 }
 

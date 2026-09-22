@@ -42,8 +42,12 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
                   WHERE m.stored_at::date = span.day),
                 (SELECT count(*) FROM source_messages m
                   WHERE m.status = 'unparseable' AND m.stored_at::date = span.day),
+                -- Originals only. The second portal's copy of a flat is not a
+                -- listing the market produced, and counting it made a quiet
+                -- day look like a busy one.
                 (SELECT count(*) FROM listings l
-                  WHERE l.first_seen_at::date = span.day),
+                  WHERE l.first_seen_at::date = span.day
+                    AND l.duplicate_of IS NULL),
                 (SELECT count(*) FROM site_visits v WHERE v.day = span.day),
                 (SELECT count(*) FROM users u WHERE u.created_at::date = span.day),
                 (SELECT coalesce(sum(p.amount_pence), 0) FROM payments p
@@ -84,6 +88,9 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
                    now()
               FROM listings l
              WHERE l.postcode_district IS NOT NULL
+               -- Originals only, for the same reason: a district that appears
+               -- on two portals is not a district with twice the stock.
+               AND l.duplicate_of IS NULL
                AND (l.first_seen_at AT TIME ZONE 'Europe/London')::date
                    > (now() AT TIME ZONE 'Europe/London')::date
                      - make_interval(days => %(days)s::int)

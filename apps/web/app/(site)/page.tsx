@@ -1,7 +1,9 @@
 import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
-import { districtNames, enabledDistricts, signupPlan } from "@/lib/plans";
+import {
+  districtNames, enabledDistricts, entryPrice, signupPlan, trialDaysOn,
+} from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
 
@@ -13,6 +15,23 @@ export default async function Page() {
   const plan = await signupPlan().catch(() => null);
 
   const names = await districtNames().catch(() => ({}));
+
+  // What each card says. Both numbers come from `plans`, so the page cannot
+  // offer a trial the bot will not grant or a price checkout will not charge.
+  const whatsappPrice = await entryPrice("whatsapp");
+  const offers = {
+    telegram: {
+      trialDays: plan ? trialDaysOn(plan, "telegram") : null,
+      // No price on the Telegram card: the cheapest Telegram plan is a week, so
+      // "per month" would be the wrong unit, and a second unit on the other
+      // card is one more thing to compare while choosing a messenger.
+      pricePence: null as number | null,
+    },
+    whatsapp: {
+      trialDays: plan ? trialDaysOn(plan, "whatsapp") : null,
+      pricePence: whatsappPrice?.price_pence ?? null,
+    },
+  };
 
   const head = await headers();
   await recordVisit(
@@ -129,7 +148,7 @@ export default async function Page() {
             whatsappReady={Boolean(
               process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
             )}
-            trialDays={plan?.duration_days ?? null}
+            offers={offers}
             names={names}
           />
         )}

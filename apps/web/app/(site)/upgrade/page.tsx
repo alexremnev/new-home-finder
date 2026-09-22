@@ -16,7 +16,11 @@ export default async function UpgradePage({
   const { t } = await searchParams;
   const token = t ?? "";
   const account = token ? await accountForToken(token, "upgrade").catch(() => null) : null;
-  const plans = await paidPlans().catch(() => []);
+  // Only what their messenger is priced at. WhatsApp costs us per message, so
+  // offering the Telegram month here would be selling delivery below cost.
+  const plans = account
+    ? await paidPlans(account.channel ?? undefined).catch(() => [])
+    : [];
   const share = await lapsedShare().catch(() => null);
 
   if (!account) {

@@ -108,6 +108,13 @@ def run_parse(
             listing_id = store.insert_listing(conn, listing)
             store.mark_parsed(conn, message_id, listing_id)
 
+            # Rightmove and Zoopla both carry most London stock, so the same
+            # flat arrives twice within minutes. The copy is kept for its url
+            # but pointed at the original, which is what keeps it out of the
+            # outbox and out of the per-district counts.
+            if store.mark_duplicate(conn, listing_id) is not None:
+                stage.count("duplicate")
+
             if listing_id not in written:
                 written.append(listing_id)
             stage.count("parsed")

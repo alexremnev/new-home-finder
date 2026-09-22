@@ -991,24 +991,122 @@ form p.error {
 
 /* The two ways out of the form, side by side where there is room and stacked
    where there is not. Each keeps .cta's full width inside its own column. */
-/* The two ways out of the form, side by side. They stack only when the card is
-   too narrow to hold two labels. */
-.connect {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(11.5rem, 1fr));
-  gap: 0.75rem;
-  margin-top: 1.5rem;
+/* One line above both cards, because it is true of either and repeating it on
+   each would read as two different promises. */
+.offers-lead {
+  margin: 1.5rem 0 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.9375rem;
+  text-align: center;
 }
 
-.connect > .cta { margin-top: 0; }
+/* The two ways out of the form, side by side. They stack only when the card is
+   too narrow to hold two of them. */
+.offers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+  align-items: stretch;
+}
+
+/* One messenger available: a lone card stretched across the full width reads as
+   a banner rather than a choice. */
+.offers-one { grid-template-columns: minmax(0, 22rem); justify-content: center; }
+
+.offer {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: 1.1rem 1.1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card, 12px);
+  background: var(--surface, #fff);
+}
+
+/* The one we would rather people use, said out loud. Accented rather than
+   enlarged: two cards of different sizes look like a layout mistake. */
+.offer-best {
+  border-color: #229ed9;
+  box-shadow: 0 0 0 1px #229ed9 inset;
+}
+
+.offer-flag {
+  position: absolute;
+  top: -0.6rem;
+  left: 1.1rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background: #229ed9;
+  color: #fff;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+/* One claim per line, so the trial length is read rather than scanned past. */
+.offer-points {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.offer-points li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  color: var(--ink);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.offer-points .tick { margin-top: 0.1em; }
+
+/* Pushed to the bottom of the card so both buttons sit on one line even when
+   one card's points wrap and the other's do not.
+
+   Height is a floor rather than a fixed value, and the contents may wrap: in a
+   266px card "Connect WhatsApp £20/month" does not fit on one line, and a fixed
+   height made the second line spill out of the button.
+
+   The padding is tightened just enough that a label and a price still fit
+   inside the standard height, so the button with a price and the button without
+   one are the same size rather than nearly the same size. */
+.offer > .cta {
+  height: auto;
+  min-height: var(--cta-height);
+  margin-top: 1rem;
+  padding: 0.4rem 1rem;
+  flex-wrap: wrap;
+  row-gap: 0.1rem;
+  line-height: 1.25;
+}
 
 /* Disabled wins over the brand colour: submit buttons are disabled until an
    area is chosen, and a bright green button that does nothing reads as broken. */
-.connect > .cta:disabled {
+.offer > .cta:disabled {
   background: var(--line-strong);
   color: #fff;
   cursor: not-allowed;
 }
+
+/* The price belongs to the button but not to its label: its own line, lighter
+   and smaller, so "Connect WhatsApp" stays the thing being pressed and the two
+   never compete for the same row. */
+.offer-price {
+  flex-basis: 100%;
+  text-align: center;
+  opacity: 0.85;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.offer > .cta:disabled .offer-price { opacity: 0.9; }
 
 .cta-telegram { background: #229ed9; color: #fff; }
 .cta-whatsapp { background: var(--wa); color: #fff; }
@@ -2103,28 +2201,6 @@ form p.error {
 .chat-compose-telegram .chat-input { color: #8a9aa8; }
 .chat-mic-telegram { background: #517da2; }
 
-/* Directly under the two buttons: the three things somebody weighs before
-   pressing either of them, on one line while there is room for one. */
-.perks {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.5rem 1.5rem;
-  margin: 1rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.perks li {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  color: var(--ink);
-  font-size: 0.875rem;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .tick {
   width: 1.05em;
   height: 1.05em;
@@ -2132,17 +2208,14 @@ form p.error {
   color: var(--accent);
 }
 
-/* Tightened rather than wrapped: all three fit one line on a 390px screen at
-   this size, and three ticks on two lines read as two separate claims. */
-@media (max-width: 30rem) {
-  .perks {
-    gap: 0.4rem 0.7rem;
-  }
-
-  .perks li {
-    font-size: 0.75rem;
-    gap: 0.25rem;
-  }
+/* The one number the duplicates panel is about, sized so it is read before the
+   table under it. */
+.dupe-big {
+  margin: 0.2rem 0 0.1rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
 }
 
 /* The range picker stays put while a long table scrolls under it: the whole

@@ -29,17 +29,35 @@ OG_IMAGE_REVERSED = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Site furniture dressed as a preview. OpenRent states three og:image tags and
+# the first two are its own share graphic, so taking the first match in document
+# order would put OpenRent's logo in the alert rather than the flat. These are
+# the words a portal uses for the picture it shows when it has no picture.
+FURNITURE = re.compile(
+    r"share-graphic|/logos?/|placeholder|no[-_]?image|default|sprite|watermark",
+    re.IGNORECASE,
+)
+
 def image_in(html: str) -> str | None:
 
+    # Every candidate, not the first one: a portal may state its own branding
+    # before the photograph, and the photograph is the point.
+    found: list[str] = []
     for pattern in (OG_IMAGE, OG_IMAGE_REVERSED):
-        found = pattern.search(html)
-        if found:
-            url = found.group(1).strip()
+        for match in pattern.finditer(html):
+            url = match.group(1).strip()
             # Only something a phone can fetch: WhatsApp will not follow a
             # relative path or a data uri, and neither will anybody's browser.
-            if url.startswith("https://"):
-                return url[:1000]
-    return None
+            if url.startswith("https://") and url not in found:
+                found.append(url[:1000])
+
+    for url in found:
+        if not FURNITURE.search(url):
+            return url
+
+    # Everything on offer looked like branding. Better the portal's own graphic
+    # than no picture at all, since the alert is still about a real flat.
+    return found[0] if found else None
 
 def fetch_image(url: str, *, opener: object | None = None) -> str | None:
 

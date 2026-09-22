@@ -56,10 +56,58 @@ def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
     return list(
         conn.execute(
             f"SELECT id, first_seen_at, {columns} FROM listings "
-            "WHERE id = ANY(%s) ORDER BY first_seen_at, id",
+            # The second portal's copy of a flat somebody has already been sent.
+            # Filtered here rather than in the matcher so that every path into
+            # the outbox — an alert, a digest, a starter batch — inherits it.
+            "WHERE id = ANY(%s) AND duplicate_of IS NULL "
+            "ORDER BY first_seen_at, id",
             (listing_ids,),
         ).fetchall()
     )
+
+def mark_duplicate(conn: Conn, listing_id: int) -> int | None:
+    """Point a listing at the copy of it we already have, if there is one.
+
+    Returns the id it was pointed at, or None when this is the one that counts.
+
+    The comparison is against the OLDEST listing sharing the fingerprint on that
+    London day, and only when that one came from a different portal. Two from
+    the same portal are a block of identical flats, not one flat twice — see
+    0040 for why that distinction is the whole rule.
+    """
+
+    row = conn.execute(
+        """
+        UPDATE listings me
+           SET duplicate_of = keeper.id
+          FROM listings mine
+          JOIN LATERAL (
+            -- The oldest listing sharing the fingerprint that day, which may
+            -- well be `mine` itself — that is how an original is recognised.
+            SELECT o.id, o.source_key
+              FROM listings o
+             WHERE o.postcode  = mine.postcode
+               AND o.price_pcm = mine.price_pcm
+               AND o.bedrooms  = mine.bedrooms
+               -- Not stated on both portals as often as the rest, and NULL has
+               -- to match NULL for the pair to be found at all.
+               AND o.bathrooms IS NOT DISTINCT FROM mine.bathrooms
+               AND (o.first_seen_at AT TIME ZONE 'Europe/London')::date
+                 = (mine.first_seen_at AT TIME ZONE 'Europe/London')::date
+             ORDER BY o.first_seen_at, o.id
+             LIMIT 1
+          ) AS keeper ON true
+         WHERE mine.id = %(id)s
+           AND me.id = mine.id
+           AND mine.postcode IS NOT NULL
+           AND me.duplicate_of IS NULL
+           AND keeper.id <> mine.id
+           AND keeper.source_key <> mine.source_key
+        RETURNING me.duplicate_of
+        """,
+        {"id": listing_id},
+    ).fetchone()
+    return int(row["duplicate_of"]) if row and row["duplicate_of"] else None
 
 def active_subscriptions(conn: Conn) -> list[Row]:
 

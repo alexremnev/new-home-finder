@@ -86,6 +86,7 @@ class FakeConn:
         self.districts = districts
         self.settled = list(settled or [])
         self.inserted: list[object] = []
+        self.images: list[object] = []
         self.rows: list[dict[str, object]] = []
         self.next_id = 0
 
@@ -107,6 +108,10 @@ class FakeConn:
             self.next_id += 1
             self.inserted.append(params)
             self.one = {"id": self.next_id}
+            self.rows = []
+        elif "UPDATE listings SET image_url" in sql:
+            assert isinstance(params, tuple)
+            self.images.append(params[0])
             self.rows = []
         else:
             self.rows = []
@@ -347,3 +352,55 @@ def test_every_fetch_is_added_to_the_traffic_counter() -> None:
     expected = weigh(INDEX) + weigh(sitemap) + 3 * weigh(page)
 
     assert run.stages.counters["bytes"] == expected
+
+# The real page's meta tags, in the order OpenRent states them: its own share
+# graphic twice, then the photograph of the flat.
+METAS = """<meta name="twitter:image" content="https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG">
+<meta property="og:image" content="https://staticcdn.openrent.co.uk/images/logos/meta/share-graphic-2.jpg"/>
+<meta property="og:image" content="https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"/>"""
+
+def test_the_portals_own_logo_is_not_taken_for_the_flat() -> None:
+    from worker.ingest.photo import image_in
+
+    # Three og:image tags, two of them OpenRent's branding. Taking the first in
+    # document order would put their logo in the alert instead of the property.
+    reordered = """<meta property="og:image" content="https://staticcdn.openrent.co.uk/images/logos/meta/share-graphic-1.jpg"/>
+<meta property="og:image" content="https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"/>"""
+    assert image_in(reordered) == "https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"
+    assert image_in(METAS) == "https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"
+
+def test_branding_is_better_than_no_picture_at_all() -> None:
+    from worker.ingest.photo import image_in
+
+    # When branding is all the page offers, the alert is still about a real
+    # flat, so it goes out with a picture rather than without one.
+    only_furniture = '<meta property="og:image" content="https://staticcdn.openrent.co.uk/images/logos/meta/share-graphic-1.jpg"/>'
+    assert image_in(only_furniture) is not None
+
+def test_the_photograph_is_taken_from_the_page_already_fetched() -> None:
+    from worker.sources.openrent import collect
+
+    # The images job cannot do this for OpenRent: it runs on the server, and the
+    # server is answered 405. The scraper is holding the page anyway, so the
+    # picture costs no request at all.
+    def get(url: str) -> str:
+        if "sitemap.xml" in url:
+            return INDEX
+        if url.endswith(".xml"):
+            return listings_sitemap([4242])
+        return "<p>Rent &#xA3;2,100.00 per month</p>" + METAS
+
+    conn = FakeConn(districts=["SE16"], settled=["SE16"])
+    collect(conn, FakeRun(), get=get, pause=0)
+
+    assert conn.images == ["https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"]
+
+def test_a_page_without_a_picture_is_recorded_as_looked_at() -> None:
+    from worker.sources.openrent import collect
+
+    # Written as None rather than skipped: "looked and found nothing" has to be
+    # distinguishable from "not looked at", or the server retries it forever and
+    # is refused every time.
+    conn = FakeConn(districts=["SE16"], settled=["SE16"])
+    collect(conn, FakeRun(), get=serving([7]), pause=0)
+    assert conn.images == [None]

@@ -925,6 +925,58 @@ export async function sourceFeeds(): Promise<SourceFeed[]> {
   ).catch(() => []);
 }
 
+export type Duplicates = {
+  // Copies suppressed over the window, and how many listings arrived in total,
+  // so the panel can state a share rather than a bare number nobody can size.
+  copies: number;
+  listings: number;
+  // Which portal the copy came from, paired with the portal we kept. Ordered by
+  // how often the pair occurs, because that is what says where the overlap is.
+  pairs: { copy: string; kept: string; copies: number }[];
+};
+
+/**
+ * How much of the intake was the same flat arriving twice.
+ *
+ * A copy is a listing whose `duplicate_of` was set at parse time: same
+ * postcode, rent, bedrooms and bathrooms as an earlier listing first seen the
+ * same London day, from a different portal. See 0040 for why the rule is what
+ * it is, and why two from one portal are not copies.
+ */
+export async function duplicates(hours: number): Promise<Duplicates> {
+  const [totals, pairs] = await Promise.all([
+    query<{ copies: string | number; listings: string | number }>(
+      `SELECT count(*) FILTER (WHERE duplicate_of IS NOT NULL) AS copies,
+              count(*) AS listings
+         FROM listings
+        WHERE first_seen_at > now() - make_interval(hours => $1::int)`,
+      [Math.round(hours)],
+    ).catch(() => []),
+    query<{ copy: string; kept: string; copies: string | number }>(
+      `SELECT copy.source_key AS copy,
+              kept.source_key AS kept,
+              count(*) AS copies
+         FROM listings copy
+         JOIN listings kept ON kept.id = copy.duplicate_of
+        WHERE copy.first_seen_at > now() - make_interval(hours => $1::int)
+        GROUP BY 1, 2
+        ORDER BY count(*) DESC, 1, 2
+        LIMIT 8`,
+      [Math.round(hours)],
+    ).catch(() => []),
+  ]);
+
+  return {
+    copies: Number(totals[0]?.copies ?? 0),
+    listings: Number(totals[0]?.listings ?? 0),
+    pairs: pairs.map((one) => ({
+      copy: one.copy,
+      kept: one.kept,
+      copies: Number(one.copies),
+    })),
+  };
+}
+
 // Visitors over time, bucketed as coarsely as the range deserves: by hour for
 // today, and by day for a week. `first_at` is when somebody arrived, so one
 // visitor lands in exactly one bucket — the row itself is one per person per

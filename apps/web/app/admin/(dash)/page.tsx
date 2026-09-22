@@ -1,8 +1,8 @@
 import Link from "next/link";
 import {
   EXPECTED_JOBS, delivery, intakePoints, jobStates, knownJobs, logPage,
-  messagePoints, problems, recentRuns, runPoints, scrapeBytes, sourceFeeds,
-  unparseablePoints,
+  duplicates, messagePoints, problems, recentRuns, runPoints, scrapeBytes,
+  sourceFeeds, unparseablePoints,
 } from "@/lib/admin-queries";
 
 import { Metric, RunBars, Series, Why } from "./charts";
@@ -138,7 +138,7 @@ export default async function SystemPage({
   const bucket = bucketMinutes(win.hours);
   const [
     jobs, points, logs, jobNames, queue, read, made, unread, faults, runs, feeds,
-    downloaded,
+    downloaded, copies,
   ] = await Promise.all([
     jobStates(win.hours),
     runPoints(win.hours, bucket),
@@ -152,6 +152,7 @@ export default async function SystemPage({
     recentRuns(12).catch(() => []),
     sourceFeeds(),
     scrapeBytes(win.hours, "openrent"),
+    duplicates(win.hours),
   ]);
 
   const messages = read.reduce((sum, d) => sum + d.value, 0);
@@ -260,6 +261,50 @@ export default async function SystemPage({
             />
           );
         })}
+      </div>
+
+      <div className="dash-row dash-row-wide">
+        <div className="card">
+          <h2>Duplicates across portals</h2>
+
+          <div className="dupe-big">{copies.copies.toLocaleString("en-GB")}</div>
+          <p className="hint">
+            copies suppressed in {win.label}
+            {copies.listings > 0
+              ? ` · ${Math.round((copies.copies / copies.listings) * 100)}% of ${copies.listings.toLocaleString("en-GB")} listings`
+              : ""}
+          </p>
+
+          {copies.pairs.length === 0 ? (
+            <p className="hint">
+              No pair found in this window. Either the portals published nothing
+              in common, or nothing arrived at all — the panels above say which.
+            </p>
+          ) : (
+            <table className="grid">
+              <thead>
+                <tr>
+                  <th>Copy came from</th>
+                  <th>Kept the one from</th>
+                  <th className="num">Copies</th>
+                </tr>
+              </thead>
+              <tbody>
+                {copies.pairs.map((pair) => (
+                  <tr key={`${pair.copy}:${pair.kept}`}>
+                    <td>{pair.copy}</td>
+                    <td>
+                      <strong>{pair.kept}</strong>
+                    </td>
+                    <td className="num">{pair.copies.toLocaleString("en-GB")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <Why text="Копией считается объявление с тем же полным индексом, той же ценой и тем же числом спален и ванных, что у более раннего объявления, впервые увиденного в тот же лондонский день, — и обязательно с другого портала. Одна и та же квартира приходит и с Rightmove, и с Zoopla: отправляется та, что пришла первой, вторая сохраняется ради своей ссылки, но помечается и не уходит никому. Два объявления с одного портала копиями не считаются — это, как правило, дом-новостройка, где сорок одинаковых студий действительно сдаются отдельно. Объявления без полного индекса не сравниваются вовсе. Эти копии исключены и из счёта по районам, и из общего числа новых объявлений за день." />
+        </div>
       </div>
 
       <div className="dash-row">

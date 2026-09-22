@@ -362,7 +362,7 @@ async function handle(number: string, text: string): Promise<string | null> {
       [userId, number],
     );
 
-    await beginSubscription(run, userId);
+    await beginSubscription(run, userId, "whatsapp");
 
     const found = await run(
       `SELECT criteria FROM subscriptions

@@ -195,7 +195,9 @@ function money(pence: number): string {
 }
 
 export async function upgradeInvitation(account: Account, token?: string): Promise<string> {
-  const plans = await paidPlans();
+  // Only what their messenger is priced at. Listing the Telegram week to a
+  // WhatsApp subscriber offers a price checkout will then refuse.
+  const plans = await paidPlans(account.channel ?? undefined);
   const share = await lapsedShare().catch(() => null);
   const lines = [
     planLine(account.plan_name, account.plan_until, true),

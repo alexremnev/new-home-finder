@@ -4,6 +4,8 @@ import type { Limits } from "./criteria";
 import { query } from "./db";
 import { stripeMode } from "./stripe";
 
+export type Channel = "telegram" | "whatsapp";
+
 export type Plan = {
   key: string;
   display_name: string;
@@ -40,11 +42,18 @@ export type Account = {
   plan_name: string;
   max_districts: number;
   price_pence: number;
+  // Which messenger this person is actually on, so the prices they are shown
+  // are the ones their channel is priced at. Null only for an account with no
+  // channel connected yet, which cannot reach a paid page anyway.
+  channel: Channel | null;
 };
 
-export async function signupPlan(): Promise<Plan> {
-  const rows = await query<Plan>(
-    `SELECT key, display_name, max_districts, duration_days, price_pence
+export type SignupPlan = Plan & { duration_days_whatsapp: number | null };
+
+export async function signupPlan(): Promise<SignupPlan> {
+  const rows = await query<SignupPlan>(
+    `SELECT key, display_name, max_districts, duration_days, price_pence,
+            duration_days_whatsapp
        FROM plans WHERE is_signup_default AND enabled`,
   );
   const plan = rows[0];
@@ -53,13 +62,40 @@ export async function signupPlan(): Promise<Plan> {
   return plan;
 }
 
-export async function paidPlans(): Promise<Plan[]> {
+/** How many days the trial lasts on one messenger. */
+export function trialDaysOn(plan: SignupPlan, channel: Channel): number | null {
+  const days =
+    channel === "whatsapp"
+      ? plan.duration_days_whatsapp ?? plan.duration_days
+      : plan.duration_days;
+  return days && days > 0 ? days : null;
+}
+
+// What somebody on this messenger may buy. A plan with no channel is for
+// either; one with a channel is only for that one, because what it costs us to
+// deliver differs. Passing no channel asks for the whole list, which is what the
+// admin wants and nobody buying wants.
+export async function paidPlans(channel?: Channel): Promise<Plan[]> {
   const rows = await query<PlanRow>(
     `SELECT key, display_name, max_districts, duration_days, price_pence,
             stripe_price_id, stripe_price_id_live
-       FROM plans WHERE enabled AND price_pence > 0 ORDER BY price_pence`,
+       FROM plans
+      WHERE enabled AND price_pence > 0
+        AND ($1::text IS NULL OR channel IS NULL OR channel = $1)
+      ORDER BY price_pence`,
+    [channel ?? null],
   );
   return rows.map(priced);
+}
+
+/**
+ * The price to put on the sign-up button for one messenger: the cheapest way in
+ * after the trial. Read rather than written into the copy, so the button cannot
+ * promise a figure that `/pay` then contradicts.
+ */
+export async function entryPrice(channel: Channel): Promise<Plan | null> {
+  const plans = await paidPlans(channel).catch(() => []);
+  return plans[0] ?? null;
 }
 
 // What an ended plan drops back to, as a percentage. Read rather than written
@@ -83,7 +119,8 @@ export async function accountForChat(
   const rows = await query<Account>(
     `SELECT u.id AS user_id, u.status, u.plan, u.plan_until, u.payment_ref,
             s.id AS subscription_id, s.criteria,
-            p.display_name AS plan_name, p.max_districts, p.price_pence
+            p.display_name AS plan_name, p.max_districts, p.price_pence,
+            uc.channel AS channel
        FROM users u
        JOIN user_channels uc ON uc.user_id = u.id
        JOIN plans p          ON p.key = u.plan
@@ -195,7 +232,13 @@ export async function accountForToken(
   const rows = await query<Account>(
     `SELECT u.id AS user_id, u.status, u.plan, u.plan_until, u.payment_ref,
             s.id AS subscription_id, s.criteria,
-            p.display_name AS plan_name, p.max_districts, p.price_pence
+            p.display_name AS plan_name, p.max_districts, p.price_pence,
+            (SELECT uc.channel
+               FROM user_channels uc
+               JOIN channels c ON c.key = uc.channel AND c.enabled
+              WHERE uc.user_id = u.id
+              ORDER BY uc.is_primary DESC, uc.channel
+              LIMIT 1) AS channel
        FROM user_tokens t
        JOIN users u ON u.id = t.user_id
        JOIN plans p ON p.key = u.plan

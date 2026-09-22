@@ -54,6 +54,7 @@ import psycopg
 
 from worker import store
 from worker.contracts.listing import Listing
+from worker.ingest.photo import image_in
 from worker.obs import Run
 
 Row = dict[str, Any]
@@ -414,6 +415,24 @@ def collect(
                 continue
 
             listing_id = store.insert_listing(conn, listing)
+
+            # Usually nothing to find — this is the only source for OpenRent —
+            # but a flat listed both here and on an agent's Rightmove page is
+            # the same flat, and whichever arrived first is the one sent.
+            duplicate = store.mark_duplicate(conn, listing_id)
+            if duplicate is not None:
+                stage.count("duplicate")
+
+            # The picture is taken from the page we are already holding, not by
+            # the images job. That job runs on the server, and OpenRent answers
+            # the server 405 — the same datacentre block that moved this scraper
+            # to a desk in the first place. It would fetch nothing, write "no
+            # picture" and never ask again, which is why these alerts arrived
+            # bare while the listing plainly had photographs.
+            picture = image_in(page)
+            store.set_listing_image(conn, listing_id, picture)
+            stage.count("with_photo" if picture else "no_photo")
+
             stored.append(listing_id)
             if one.district in settled:
                 announce.append(listing_id)

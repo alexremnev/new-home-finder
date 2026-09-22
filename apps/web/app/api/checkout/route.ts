@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { accountForToken, paidPlan, siteUrl } from "@/lib/plans";
+import { accountForToken, paidPlan, paidPlans, siteUrl } from "@/lib/plans";
 import { stripeClient, stripeMode } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -22,6 +22,22 @@ export async function GET(request: Request): Promise<NextResponse | Response> {
   const plan = wanted ? await paidPlan(wanted) : null;
   if (!plan) {
     return NextResponse.json({ error: "no such plan" }, { status: 404 });
+  }
+
+  // The plan key arrives in the query string, so the page offering only this
+  // channel's prices is a courtesy rather than a control. Without this check a
+  // WhatsApp subscriber could buy the Telegram month by editing the url, and
+  // every alert after that is delivered below cost.
+  const allowed = await paidPlans(account.channel ?? undefined);
+  if (!allowed.some((one) => one.key === plan.key)) {
+    return NextResponse.json(
+      {
+        error:
+          `${plan.display_name} is not sold for ${account.channel ?? "this messenger"}. ` +
+          `Send /pay to the bot for the prices that apply to you.`,
+      },
+      { status: 403 },
+    );
   }
   if (!plan.stripe_price_id) {
     // Which column is missing depends on the mode, and saying so is the
