@@ -5,7 +5,7 @@ import {
 } from "@/lib/admin-queries";
 
 import { Metric, Rank, Series, Why } from "../charts";
-import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "../window";
+import { DEFAULT_SPAN, bucketMinutes, spanFrom, spanWords } from "../span";
 
 import { dayOf, since, windowLeft } from "@/lib/when";
 
@@ -40,18 +40,15 @@ export default async function SubscribersPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const win = windowFrom(params.w ?? DEFAULT_WINDOW);
+  const win = spanFrom(params.w ?? DEFAULT_SPAN);
   const page = Math.max(1, Number(params.p ?? 1) || 1);
 
-  // byDistrict and byPrice are written against whole days; the shortest window
-  // they can honestly answer is one.
-  const days = Math.max(1, Math.round(win.hours / 24)) as 1 | 7 | 30 | 90;
   const [{ rows, total }, plans, sent, districts, prices] = await Promise.all([
-    subscriberPage(win.hours, page, PER_PAGE),
+    subscriberPage(win, page, PER_PAGE),
     planMix(),
-    alertPoints(win.hours, bucketMinutes(win.hours)),
-    byDistrict(days),
-    byPrice(days),
+    alertPoints(win, bucketMinutes(win.hours)),
+    byDistrict(win),
+    byPrice(win),
   ]);
 
   const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
@@ -63,11 +60,15 @@ export default async function SubscribersPage({
     <>
       <div className="dash-head">
         <h1>Subscribers</h1>
-        <WindowPicker here="/admin/subscribers" chosen={win.key} />
       </div>
 
       <div className="dash-row">
-        <Metric label="Accounts" value={total} note="everyone not erased" />
+        <Metric
+          label="Accounts"
+          value={total}
+          tone={total > 0 ? "good" : "warn"}
+          note="everyone not erased"
+        />
         <Metric
           label="Delivering"
           value={`${reaching}/${rows.length}`}
@@ -80,7 +81,10 @@ export default async function SubscribersPage({
         <Metric
           label="Alerts sent"
           value={delivered}
-          note={`on this page · last ${win.label}`}
+          // Nothing sent over the window is the thing worth noticing, and it is
+          // not visible from a neutral card.
+          tone={delivered > 0 ? "good" : "warn"}
+          note={`on this page · ${spanWords(win)}`}
         />
         <div className="card">
           <h3>
@@ -134,7 +138,9 @@ export default async function SubscribersPage({
                 <th>Channel</th>
                 <th>Free window</th>
                 <th>Areas</th>
-                <th className="num">Last {win.label}</th>
+                <th className="num">{win.key === "today" || win.key === "yesterday"
+                  ? win.label
+                  : `Last ${win.label}`}</th>
                 <th className="num">All time</th>
                 <th className="num">Last alert</th>
                 <th>Joined</th>

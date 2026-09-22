@@ -1250,10 +1250,16 @@ form p.error {
   font-variant-numeric: tabular-nums;
 }
 
-.dash-bar {
+/* The bar and the range row below it stay put together. Sticking them
+   separately would mean knowing the bar's height in CSS, and it changes with
+   the viewport. */
+.dash-top {
   position: sticky;
   top: 0;
   z-index: 10;
+}
+
+.dash-bar {
   display: flex;
   align-items: center;
   gap: 1rem;
@@ -1333,17 +1339,31 @@ form p.error {
   white-space: nowrap;
 }
 
+/* A faint bottom border was the whole hover state, which on a bar of six tabs
+   is not enough to tell you what you are about to click. A tinted background
+   and the accent underline make the target unmistakable. */
 .tab:hover {
-  border-bottom-color: var(--d-line);
+  border-bottom-color: var(--d-accent);
+  background: rgb(91 76 245 / 0.07);
   color: var(--d-ink);
   text-decoration: none;
 }
 
-.tab-on,
-.tab-on:hover {
+/* Rounded only at the top: the bottom edge is the underline. */
+.tab { border-radius: 5px 5px 0 0; transition: background 120ms ease; }
+
+.tab:focus-visible {
+  background: rgb(91 76 245 / 0.07);
+  color: var(--d-ink);
+}
+
+.tab-on {
   border-bottom-color: var(--d-accent);
   color: var(--d-ink);
 }
+
+/* The current tab still responds, so hovering it does not feel dead. */
+.tab-on:hover { background: rgb(91 76 245 / 0.12); }
 
 .tab-count {
   display: inline-block;
@@ -1438,6 +1458,32 @@ form p.error {
 .win:hover { background: var(--d-bg); text-decoration: none; }
 .win-on { background: var(--d-ink); color: #fff; }
 .win-on:hover { background: var(--d-ink); color: #fff; }
+
+/* The one range for the whole dashboard, directly under the bar. Sixteen
+   choices do not fit a phone, so the row scrolls rather than wrapping into
+   three lines that push every page down. */
+.dash-span {
+  display: flex;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--d-line);
+  background: var(--d-card);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.dash-span::-webkit-scrollbar { display: none; }
+
+.span-picker {
+  display: inline-flex;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid var(--d-line);
+  border-radius: 6px;
+  background: var(--d-card);
+}
+
+/* Same chip as the old per-page pickers, so nothing had to be relearned. */
+.span-picker .win { white-space: nowrap; }
 
 .dash-head {
   display: flex;
@@ -1652,13 +1698,15 @@ form p.error {
   cursor: help;
 }
 
+/* Fixed, with `left` and `top`/`bottom` set in script — see `Why` in charts.tsx.
+   As an absolute child it was clipped by its card and ran off the edge of the
+   screen; nothing in CSS alone can know how much room a card has left. */
 .why-text {
-  position: absolute;
-  z-index: 20;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  width: max-content;
-  max-width: 17rem;
+  position: fixed;
+  z-index: 60;
+  /* A long explanation on a short screen scrolls rather than overflowing it. */
+  max-height: 60vh;
+  overflow-y: auto;
   padding: 0.5rem 0.65rem;
   border-radius: 6px;
   background: var(--d-ink);
@@ -1669,17 +1717,16 @@ form p.error {
   text-align: left;
   text-transform: none;
   letter-spacing: 0;
-  transform: translateX(-50%);
-  opacity: 0;
-  visibility: hidden;
-  transition: opacity 90ms;
+  /* Not a hover target itself: moving onto the box would otherwise count as
+     leaving the mark, and the two would fight. */
+  pointer-events: none;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
 }
 
-.why:hover .why-text,
-.why:focus-visible .why-text { opacity: 1; visibility: visible; }
-
+/* On a narrow screen the box is as wide as the screen allows, and the inline
+   width from script is the cap rather than the value. */
 @media (max-width: 30rem) {
-  .why-text { left: 0; transform: none; max-width: 14rem; }
+  .why-text { max-width: calc(100vw - 1rem); }
 }
 
 @media (max-width: 40rem) {
@@ -2252,19 +2299,6 @@ form p.error {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
-}
-
-/* The range picker stays put while a long table scrolls under it: the whole
-   point of having ten ranges is switching between them, and hunting for the
-   control after every scroll defeats it. */
-.dash-head-stuck {
-  position: sticky;
-  top: 0;
-  z-index: 5;
-  padding: 0.6rem 0;
-  margin: 0 0 0.6rem;
-  background: var(--d-bg, #fff);
-  box-shadow: 0 6px 12px -10px rgb(15 23 42 / 45%);
 }
 
 /* A sortable heading is a button, so it is reachable by keyboard and says what

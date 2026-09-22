@@ -181,8 +181,23 @@ def test_the_digest_agrees_with_itself_about_one_listing() -> None:
 
 def test_the_digest_names_the_average_rent_when_there_is_one() -> None:
     text = digest_notice(12, 20, avg_price=1840)
-    assert "💷 Average rent in what matched: £1,840/month" in text
+    # "rooms aside", because the figure leaves them out: a £900 room averaged
+    # with a £2,100 flat describes neither.
+    assert "💷 Average rent, rooms aside: £1,840/month" in text
     assert "missing 80%" in text
+
+def test_a_filter_for_rooms_alone_is_told_the_room_average() -> None:
+    # Somebody searching only for rooms wants the rooms figure, and saying which
+    # one it is matters: the two numbers are not comparable.
+    text = digest_notice(12, 100, avg_price=910, rooms_only=True)
+    assert "💷 Average room rent: £910/month" in text
+    assert "rooms aside" not in text
+
+def test_no_average_means_no_line_at_all() -> None:
+    # A rooms-only filter that matched no room, or a filter whose only matches
+    # were rooms: better silent than a figure invented to fill the line.
+    assert "💷" not in digest_notice(12, 100, avg_price=None)
+    assert "💷" not in digest_notice(12, 100, avg_price=None, rooms_only=True)
 
 def test_a_paying_subscriber_is_not_told_what_they_are_missing() -> None:
 

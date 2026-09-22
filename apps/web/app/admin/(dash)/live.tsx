@@ -7,7 +7,9 @@ const CHOICES = [0, 15, 60] as const;
 
 export function Live() {
   const router = useRouter();
-  const [every, setEvery] = useState<number>(15);
+  // Off by default. Auto-refresh moves the page under whoever is reading it,
+  // and re-runs every query on it; asking for it is a choice, not a default.
+  const [every, setEvery] = useState<number>(0);
   const [age, setAge] = useState(0);
 
   useEffect(() => {

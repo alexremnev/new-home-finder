@@ -7,25 +7,6 @@ import type { DistrictDay, RecipientDay } from "@/lib/admin-queries";
 
 import { Metric, Series, Why } from "../charts";
 
-// Every range the page offers, as a window of London days ending `back` days
-// ago. Yesterday is its own answer rather than a two-day window: "what happened
-// yesterday" and "what happened over the last two days" are different
-// questions and the second hides the first.
-const RANGES = [
-  { key: "today", label: "Today", days: 1, back: 0 },
-  { key: "yesterday", label: "Yesterday", days: 1, back: 1 },
-  { key: "2d", label: "2d", days: 2, back: 0 },
-  { key: "3d", label: "3d", days: 3, back: 0 },
-  { key: "4d", label: "4d", days: 4, back: 0 },
-  { key: "5d", label: "5d", days: 5, back: 0 },
-  { key: "6d", label: "6d", days: 6, back: 0 },
-  { key: "7d", label: "7d", days: 7, back: 0 },
-  { key: "2w", label: "2 weeks", days: 14, back: 0 },
-  { key: "month", label: "Month", days: 30, back: 0 },
-] as const;
-
-type RangeKey = (typeof RANGES)[number]["key"];
-
 const COLUMNS = [
   { key: "district", label: "District", numeric: false },
   { key: "name", label: "Area", numeric: false },
@@ -50,46 +31,29 @@ type Aggregate = {
   present: number;
 };
 
-// The days a range covers, newest first, as the YYYY-MM-DD strings the rows use.
-function daysIn(today: string, days: number, back: number): string[] {
-  const end = new Date(`${today}T00:00:00Z`);
-  end.setUTCDate(end.getUTCDate() - back);
-  return Array.from({ length: days }, (_, step) => {
-    const one = new Date(end);
-    one.setUTCDate(one.getUTCDate() - step);
-    return one.toISOString().slice(0, 10);
-  });
-}
-
 export function DistrictsView({
   days,
   recipients,
   names,
-  today,
+  label,
+  days_in_range,
 }: {
   days: DistrictDay[];
   recipients: RecipientDay[];
   names: Record<string, string>;
-  today: string;
+  label: string;
+  days_in_range: number;
 }) {
-  const [range, setRange] = useState<RangeKey>("7d");
   const [sort, setSort] = useState<{ column: ColumnKey; down: boolean }>({
     column: "total",
     down: true,
   });
   const [page, setPage] = useState(1);
 
-  const chosen = RANGES.find((one) => one.key === range) ?? RANGES[7];
-
-  const window = useMemo(
-    () => new Set(daysIn(today, chosen.days, chosen.back)),
-    [today, chosen.days, chosen.back],
-  );
-
+  // Every row handed over is already inside the range: the query asked for it.
   const rows = useMemo(() => {
     const held = new Map<string, number[]>();
     for (const one of days) {
-      if (!window.has(one.day)) continue;
       const kept = held.get(one.district) ?? [];
       kept.push(one.listings);
       held.set(one.district, kept);
@@ -105,16 +69,16 @@ export function DistrictsView({
         // Divided by the days in the range, not by the days this district
         // appeared on: a district silent for five of seven days produces less
         // per day, and saying otherwise flatters it.
-        average: total / chosen.days,
+        average: total / days_in_range,
         max: Math.max(...counts),
         // A row exists only for a day that produced something, so a district
         // that missed a day of the range truly had a zero.
-        min: counts.length < chosen.days ? 0 : Math.min(...counts),
+        min: counts.length < days_in_range ? 0 : Math.min(...counts),
         present: counts.length,
       });
     }
     return out;
-  }, [days, window, names, chosen.days]);
+  }, [days, names, days_in_range]);
 
   const sorted = useMemo(() => {
     const column = sort.column;
@@ -144,13 +108,12 @@ export function DistrictsView({
   const trend = useMemo(() => {
     const held = new Map<string, number>();
     for (const one of days) {
-      if (!window.has(one.day)) continue;
       held.set(one.day, (held.get(one.day) ?? 0) + one.listings);
     }
     return [...held.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([day, value]) => ({ label: day, value }));
-  }, [days, window]);
+  }, [days]);
 
   const people = useMemo(() => {
     const held = new Map<
@@ -158,7 +121,6 @@ export function DistrictsView({
       { sent: number; channel: string | null; plan: string | null; districts: string[] }
     >();
     for (const one of recipients) {
-      if (!window.has(one.day)) continue;
       const kept = held.get(one.user_id) ?? {
         sent: 0,
         channel: one.channel,
@@ -172,7 +134,7 @@ export function DistrictsView({
       .map(([user_id, rest]) => ({ user_id, ...rest }))
       .sort((a, b) => b.sent - a.sent || a.user_id - b.user_id)
       .slice(0, 5);
-  }, [recipients, window]);
+  }, [recipients]);
 
   const pick = (column: ColumnKey) => {
     setPage(1);
@@ -187,42 +149,35 @@ export function DistrictsView({
 
   return (
     <>
-      <div className="dash-head dash-head-stuck">
+      <div className="dash-head">
         <h1>Districts</h1>
-        <div className="window-picker" role="group" aria-label="Range">
-          {RANGES.map((one) => (
-            <button
-              key={one.key}
-              type="button"
-              onClick={() => {
-                setRange(one.key);
-                setPage(1);
-              }}
-              className={one.key === range ? "win win-on" : "win"}
-            >
-              {one.label}
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="dash-row">
         <Metric
           label="Listings"
           value={listings}
-          note={chosen.days === 1 ? chosen.label.toLowerCase() : `over ${chosen.days} days`}
+          tone={listings > 0 ? "good" : "warn"}
+          note={days_in_range === 1 ? label.toLowerCase() : `over ${days_in_range} days`}
           why="Сколько объявлений всего пришло по всем районам за период. Считается по максимальному фильтру — без критериев, только район. Это потолок, а не то, что получает конкретный подписчик."
         />
-        <Metric label="Districts" value={rows.length} note="with any listing" />
+        <Metric
+          label="Districts"
+          value={rows.length}
+          tone={rows.length > 0 ? "good" : "warn"}
+          note="with any listing"
+        />
         <Metric
           label="Per day"
-          value={chosen.days > 0 ? (listings / chosen.days).toFixed(0) : "—"}
-          note={`over ${chosen.days} day${chosen.days === 1 ? "" : "s"}`}
+          value={days_in_range > 0 ? (listings / days_in_range).toFixed(0) : "—"}
+          tone={listings > 0 ? "good" : "warn"}
+          note={`over ${days_in_range} day${days_in_range === 1 ? "" : "s"}`}
           why="Делится на число дней в выбранном периоде, а не на дни, в которые что-то было: район, молчавший пять дней из семи, в среднем даёт меньше, и считать иначе значило бы ему польстить."
         />
         <Metric
           label="Busiest"
           value={busiest?.district ?? "—"}
+          tone={busiest ? "good" : "warn"}
           note={busiest?.name || (busiest ? "" : "no data yet")}
         />
       </div>
@@ -266,7 +221,7 @@ export function DistrictsView({
                       {one.districts.length ? one.districts.join(", ") : "—"}
                     </td>
                     <td className="num">{one.sent.toLocaleString("en-GB")}</td>
-                    <td className="num">{(one.sent / chosen.days).toFixed(1)}</td>
+                    <td className="num">{(one.sent / days_in_range).toFixed(1)}</td>
                   </tr>
                 ))}
               </tbody>

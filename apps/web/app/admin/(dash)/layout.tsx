@@ -1,10 +1,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 
 import { Live } from "./live";
+import { SpanPicker } from "./span-picker";
 import { Tabs } from "./tabs";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,9 @@ export default async function DashLayout({ children }: { children: ReactNode }) 
 
   return (
     <div className="dash">
+      {/* The bar and the range stick together, as one block, so the range's
+          offset never has to be guessed from the bar's height. */}
+      <div className="dash-top">
       <header className="dash-bar">
         <span className="dash-name">Dashboard</span>
 
@@ -36,6 +40,15 @@ export default async function DashLayout({ children }: { children: ReactNode }) 
           </form>
         </div>
       </header>
+
+      {/* Under the tabs and above every page: one range for the whole
+          dashboard, so switching tabs keeps the question the same. */}
+      <div className="dash-span">
+        <Suspense fallback={<div className="span-picker" />}>
+          <SpanPicker />
+        </Suspense>
+      </div>
+      </div>
 
       <main className="dash-body">{children}</main>
     </div>

@@ -6,7 +6,7 @@ import {
 } from "@/lib/admin-queries";
 
 import { Metric, RunBars, Series, Why } from "./charts";
-import { DEFAULT_WINDOW, WindowPicker, bucketMinutes, windowFrom } from "./window";
+import { DEFAULT_SPAN, bucketMinutes, spanFrom, spanWords } from "./span";
 
 import { ago, at } from "@/lib/when";
 
@@ -127,7 +127,7 @@ export default async function SystemPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const win = windowFrom(params.w ?? DEFAULT_WINDOW);
+  const win = spanFrom(params.w ?? DEFAULT_SPAN);
   const page = Math.max(1, Number(params.p ?? 1) || 1);
   const filter = {
     job: params.job || undefined,
@@ -140,19 +140,19 @@ export default async function SystemPage({
     jobs, points, logs, jobNames, queue, read, made, unread, faults, runs, feeds,
     downloaded, copies,
   ] = await Promise.all([
-    jobStates(win.hours),
-    runPoints(win.hours, bucket),
-    logPage(win.hours, filter, page),
+    jobStates(win),
+    runPoints(win, bucket),
+    logPage(win, filter, page),
     knownJobs().catch(() => [...EXPECTED_JOBS]),
     delivery().catch(() => null),
-    messagePoints(win.hours, bucket),
-    intakePoints(win.hours, bucket),
-    unparseablePoints(win.hours, bucket),
+    messagePoints(win, bucket),
+    intakePoints(win, bucket),
+    unparseablePoints(win, bucket),
     problems().catch(() => []),
     recentRuns(12).catch(() => []),
     sourceFeeds(),
-    scrapeBytes(win.hours, "openrent"),
-    duplicates(win.hours),
+    scrapeBytes(win, "openrent"),
+    duplicates(win),
   ]);
 
   const messages = read.reduce((sum, d) => sum + d.value, 0);
@@ -187,7 +187,7 @@ export default async function SystemPage({
         <span>{healthy ? "Healthy" : "Degraded"}</span>
         <span className="verdict-note">
           {healthy
-            ? `all ${jobs.length} jobs ran clean · last ${win.label}`
+            ? `all ${jobs.length} jobs ran clean · ${spanWords(win)}`
             : [
                 broken.length > 0 && `${broken.map((j) => j.job).join(", ")} failing`,
                 silent.length > 0 && `${silent.map((j) => j.job).join(", ")} silent`,
@@ -228,7 +228,6 @@ export default async function SystemPage({
 
       <div className="dash-head">
         <h1>System</h1>
-        <WindowPicker here="/admin" chosen={win.key} extra={filter} />
       </div>
 
       <div className="dash-row">
@@ -248,7 +247,7 @@ export default async function SystemPage({
                 found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days",
                 // Only the scraper has a bill attached to it, and it follows
                 // the window above rather than a fixed day.
-                one.traffic ? `${weight(downloaded)} in ${win.label}` : null,
+                one.traffic ? `${weight(downloaded)} ${spanWords(win)}` : null,
               ]
                 .filter(Boolean)
                 .join(" · ")}
@@ -269,7 +268,7 @@ export default async function SystemPage({
 
           <div className="dupe-big">{copies.copies.toLocaleString("en-GB")}</div>
           <p className="hint">
-            copies suppressed in {win.label}
+            copies suppressed {spanWords(win)}
             {copies.listings > 0
               ? ` · ${Math.round((copies.copies / copies.listings) * 100)}% of ${copies.listings.toLocaleString("en-GB")} listings`
               : ""}
@@ -386,7 +385,7 @@ export default async function SystemPage({
           label="Unparseable"
           value={`${badShare}%`}
           tone={badShare > 20 ? "bad" : badShare > 5 ? "warn" : "good"}
-          note={`${missed} of ${messages} messages · last ${win.label}`}
+          note={`${missed} of ${messages} messages · ${spanWords(win)}`}
           why="Доля сообщений, которые парсер не смог прочитать. Выше 20% — источник почти наверняка сменил формат. Ноль при нулевом трафике ничего не значит."
         />
         <Metric
@@ -401,7 +400,19 @@ export default async function SystemPage({
           label="Median latency"
           value={queue?.median_latency_secs === null || queue === null
             ? "—" : `${queue.median_latency_secs}s`}
+          // Under a minute is the promise this service makes; over five and
+          // "instant alerts" is no longer true.
+          tone={
+            queue?.median_latency_secs == null
+              ? undefined
+              : queue.median_latency_secs > 300
+                ? "bad"
+                : queue.median_latency_secs > 60
+                  ? "warn"
+                  : "good"
+          }
           note="queued to delivered, 24h"
+          why="Медианное время от попадания в очередь до отправки. До минуты — норма. Больше пяти минут — обещание мгновенных уведомлений перестаёт быть правдой, и смотреть надо на джобу drain."
         />
         <Metric
           label="Errors logged"

@@ -5,13 +5,11 @@ import {
 } from "@/lib/admin-queries";
 
 import { Metric, Rank, Series, Why } from "../charts";
+import { DEFAULT_SPAN, spanFrom } from "../span";
 
 import { at } from "@/lib/when";
 
 export const dynamic = "force-dynamic";
-
-const RANGES = [1, 7, 30] as const;
-type Days = (typeof RANGES)[number];
 
 const pounds = (pence: number) =>
   "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 0 });
@@ -22,14 +20,13 @@ export default async function PaymentsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const asked = Number(params.d ?? 1);
-  const days: Days = (RANGES as readonly number[]).includes(asked) ? (asked as Days) : 1;
+  const win = spanFrom(params.w ?? DEFAULT_SPAN);
 
   const [summary, series, byPlan, byProvider, recent, comps] = await Promise.all([
-    paymentSummary(days),
-    paymentSeries(days),
-    paymentsByPlan(days),
-    paymentsByProvider(days),
+    paymentSummary(win),
+    paymentSeries(win),
+    paymentsByPlan(win),
+    paymentsByProvider(win),
     recentPayments(),
     recentComps().catch(() => []),
   ]);
@@ -40,36 +37,34 @@ export default async function PaymentsPage({
     <>
       <div className="dash-head">
         <h1>Payments</h1>
-        <div className="window-picker" role="group" aria-label="Range">
-          {RANGES.map((one) => (
-            <Link key={one}
-              href={`/admin/payments?d=${one}`}
-              className={one === days ? "win win-on" : "win"}
-            >
-              {one === 1 ? "Today" : `${one}d`}
-            </Link>
-          ))}
-        </div>
       </div>
 
       <div className="dash-row">
         <Metric
           label="Taken"
           value={pounds(summary.taken_pence)}
-          tone={summary.taken_pence > 0 ? "good" : undefined}
+          tone={summary.taken_pence > 0 ? "good" : "warn"}
           note={`${summary.payments} payment${summary.payments === 1 ? "" : "s"}`}
           why="Сумма всех платежей за период, в фунтах. Считается по payments.amount_pence — по тому, что реально прошло, а не по цене тарифа."
         />
-        <Metric label="Payers" value={summary.payers} note="distinct accounts" />
+        <Metric
+          label="Payers"
+          value={summary.payers}
+          // Green when somebody paid, amber when nobody did. Neutral would mean
+          // "not judged", and whether anyone paid is exactly the judgement.
+          tone={summary.payers > 0 ? "good" : "warn"}
+          note="distinct accounts"
+        />
         <Metric
           label="Average"
           value={summary.payments > 0 ? pounds(average) : "—"}
+          tone={summary.payments > 0 ? "good" : "warn"}
           note="per payment"
         />
         <Metric
           label="Refunds"
           value={summary.refunds}
-          tone={summary.refunds > 0 ? "bad" : undefined}
+          tone={summary.refunds > 0 ? "bad" : "good"}
           note="negative amounts"
           why="Возвраты пишутся отрицательной суммой в ту же таблицу, поэтому в «Taken» они не попадают, а здесь видно их число."
         />

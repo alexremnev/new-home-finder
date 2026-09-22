@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 // Dense, small, quiet. A dashboard chart is read in a glance beside five
 // others, so it carries no legend it can do without, no gradient, and no label
@@ -338,10 +338,61 @@ export function Metric({
 
 // Russian, because the person reading this dashboard is the one who asked for
 // the explanations — and the words being explained are English job names.
+//
+// Positioned in script rather than in CSS. As an absolutely positioned child it
+// was clipped by the card it lived in and ran off the side of the screen from
+// the cards at either edge — so the longest explanations were the least
+// readable. Fixed coordinates escape every ancestor, and the box is then
+// clamped to the viewport so it is always wholly on screen.
+const WHY_WIDTH = 272;
+const WHY_GAP = 8;
+const WHY_EDGE = 8;
+
+type WhyBox = { left: number; top?: number; bottom?: number };
+
+function whyBox(mark: DOMRect): WhyBox {
+  const middle = mark.left + mark.width / 2;
+  const left = Math.min(
+    Math.max(WHY_EDGE, middle - WHY_WIDTH / 2),
+    Math.max(WHY_EDGE, window.innerWidth - WHY_WIDTH - WHY_EDGE),
+  );
+
+  // Above when there is more room above. Anchored by the edge nearest the mark
+  // so the box grows away from it, into the space that was measured.
+  const above = mark.top > window.innerHeight - mark.bottom;
+  return above
+    ? { left, bottom: window.innerHeight - mark.top + WHY_GAP }
+    : { left, top: mark.bottom + WHY_GAP };
+}
+
 export function Why({ text }: { text: string }) {
+  const mark = useRef<HTMLButtonElement>(null);
+  const [box, setBox] = useState<WhyBox | null>(null);
+
+  const show = () => {
+    const here = mark.current?.getBoundingClientRect();
+    if (here) setBox(whyBox(here));
+  };
+  const hide = () => setBox(null);
+
   return (
-    <button type="button" className="why" aria-label={text}>
-      ?<span className="why-text">{text}</span>
+    <button
+      type="button"
+      ref={mark}
+      className="why"
+      aria-label={text}
+      onMouseEnter={show}
+      onMouseLeave={hide}
+      // Tap and keyboard, not only hover.
+      onFocus={show}
+      onBlur={hide}
+    >
+      ?
+      {box && (
+        <span className="why-text" style={{ ...box, width: WHY_WIDTH }}>
+          {text}
+        </span>
+      )}
     </button>
   );
 }

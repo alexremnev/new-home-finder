@@ -2,6 +2,27 @@ import { query } from "@/lib/db";
 
 export type Range = 1 | 7 | 30 | 90;
 
+/**
+ * The dashboard's chosen time range, in the two shapes the tables need.
+ *
+ * Built by `spanFrom` in app/admin/(dash)/span.ts and passed straight through,
+ * so every page and every query means the same thing by "1w".
+ *
+ *   * `mins` / `endMins` — minutes before now, for the timestamp columns.
+ *     `endMins` is 0 for every range that ends now, which is all of them except
+ *     Yesterday. Both bounds are needed because Yesterday ends at midnight.
+ *   * `fromDay` / `toDay` — inclusive London dates, for the tables keyed on a
+ *     DATE: `site_visits.day` and `district_days.day`.
+ */
+export type Win = {
+  mins: number;
+  endMins: number;
+  fromDay: string;
+  toDay: string;
+  days: number;
+  hours: number;
+};
+
 export type Overview = {
   subscribers: number;
   active_filters: number;
@@ -48,21 +69,22 @@ export async function planMix(): Promise<Slice[]> {
   );
 }
 
-export async function byDistrict(days: Range, limit = 12): Promise<Slice[]> {
+export async function byDistrict(win: Win, limit = 12): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(l.postcode_district, '—') AS label, count(*)::int AS value
        FROM notifications n
        JOIN listings l ON l.id = n.listing_id
       WHERE n.status = 'sent'
-        AND n.sent_at > now() - make_interval(days => $1::int)
+        AND n.sent_at >  now() - make_interval(mins => $1::int)
+        AND n.sent_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1
       ORDER BY 2 DESC
-      LIMIT $2`,
-    [days, limit],
+      LIMIT $3`,
+    [Math.round(win.mins), Math.round(win.endMins), limit],
   );
 }
 
-export async function byPrice(days: Range): Promise<Slice[]> {
+export async function byPrice(win: Win): Promise<Slice[]> {
   return query<Slice>(
 
     `WITH banded AS (
@@ -70,13 +92,14 @@ export async function byPrice(days: Range): Promise<Slice[]> {
          FROM notifications n
          JOIN listings l ON l.id = n.listing_id
         WHERE n.status = 'sent'
-          AND n.sent_at > now() - make_interval(days => $1::int)
+          AND n.sent_at >  now() - make_interval(mins => $1::int)
+          AND n.sent_at <= now() - make_interval(mins => $2::int)
      )
      SELECT band::text AS label, count(*)::int AS value
        FROM banded
       GROUP BY band
       ORDER BY band`,
-    [days],
+    [Math.round(win.mins), Math.round(win.endMins)],
   );
 }
 
@@ -463,19 +486,21 @@ export type JobState = {
 // name that stopped existing should not haunt the page forever.
 export const EXPECTED_JOBS = ["ingest", "scrape", "drain", "rollup", "report"] as const;
 
-export async function jobStates(hours: number): Promise<JobState[]> {
+export async function jobStates(win: Win): Promise<JobState[]> {
   return query<JobState>(
     `WITH expected AS (SELECT unnest($2::text[]) AS job),
      seen AS (
        SELECT DISTINCT job FROM job_runs
-        WHERE started_at > now() - make_interval(hours => $1::int)
+        WHERE started_at >  now() - make_interval(mins => $1::int)
+          AND started_at <= now() - make_interval(mins => $3::int)
      ),
      all_jobs AS (SELECT job FROM expected UNION SELECT job FROM seen),
      windowed AS (
        SELECT job, status, started_at, finished_at, error
          FROM job_runs
-        WHERE started_at > now() - make_interval(hours => $1::int)
-     ),
+        WHERE started_at >  now() - make_interval(mins => $1::int)
+          AND started_at <= now() - make_interval(mins => $3::int)
+     )
      SELECT a.job,
             -- Scalar subqueries rather than a CTE join: the cast has to be
             -- visible in the select list, and the index on started_at makes
@@ -499,7 +524,7 @@ export async function jobStates(hours: number): Promise<JobState[]> {
        LEFT JOIN windowed w ON w.job = a.job
       GROUP BY a.job
       ORDER BY a.job`,
-    [Math.round(hours), [...EXPECTED_JOBS]],
+    [Math.round(win.mins), [...EXPECTED_JOBS], Math.round(win.endMins)],
   ).catch(() => []);
 }
 
@@ -507,12 +532,12 @@ export type RunPoint = { label: string; ok: number; bad: number };
 
 // One column per bucket: green for clean runs, red for the rest. Reading a
 // timeline is how you tell "it broke once" from "it has been broken all day".
-export async function runPoints(hours: number, minutes: number): Promise<RunPoint[]> {
+export async function runPoints(win: Win, minutes: number): Promise<RunPoint[]> {
   return query<RunPoint>(
     `WITH span AS (
        SELECT generate_series(
-                date_trunc('hour', now() - make_interval(hours => $1::int)),
-                now(),
+                date_trunc('hour', now() - make_interval(mins => $1::int)),
+                now() - make_interval(mins => $3::int),
                 make_interval(mins => $2::int)
               ) AS bucket
      )
@@ -525,25 +550,27 @@ export async function runPoints(hours: number, minutes: number): Promise<RunPoin
              AND r.started_at <  span.bucket + make_interval(mins => $2::int)
       GROUP BY span.bucket
       ORDER BY span.bucket`,
-    [Math.round(hours), Math.round(minutes)],
+    [Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
   ).catch(() => []);
 }
 
 export type LogPage = { rows: Event[]; total: number };
 
 export async function logPage(
-  hours: number,
+  win: Win,
   filter: { job?: string; level?: string; q?: string },
   page: number,
   perPage = 10,
 ): Promise<LogPage> {
   const args = [
-    Math.round(hours),
+    Math.round(win.mins),
     filter.job ?? null,
     filter.level ?? null,
     filter.q ?? null,
+    Math.round(win.endMins),
   ];
-  const where = `e.ts > now() - make_interval(hours => $1::int)
+  const where = `e.ts >  now() - make_interval(mins => $1::int)
+        AND e.ts <= now() - make_interval(mins => $5::int)
         AND ($2::text IS NULL OR r.job = $2)
         AND ($3::text IS NULL OR e.level = $3)
         AND ($4::text IS NULL OR e.message ILIKE '%' || $4 || '%')`;
@@ -554,7 +581,7 @@ export async function logPage(
          FROM job_events e JOIN job_runs r ON r.id = e.run_id
         WHERE ${where}
         ORDER BY e.ts DESC
-        LIMIT $5 OFFSET $6`,
+        LIMIT $6 OFFSET $7`,
       [...args, perPage, Math.max(0, page - 1) * perPage],
     ).catch(() => []),
     query<{ total: number }>(
@@ -583,7 +610,7 @@ export type SubscriberRow = {
 };
 
 export async function subscriberPage(
-  hours: number,
+  win: Win,
   page: number,
   perPage = 20,
 ): Promise<{ rows: SubscriberRow[]; total: number }> {
@@ -596,12 +623,14 @@ export async function subscriberPage(
               s.label AS districts,
               (SELECT count(*)::int FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent'
-                  AND n.sent_at > now() - make_interval(hours => $1::int)) AS sent_window,
+                  AND n.sent_at >  now() - make_interval(mins => $1::int)
+                  AND n.sent_at <= now() - make_interval(mins => $2::int)) AS sent_window,
               (SELECT count(*)::int FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent') AS sent_total,
               (SELECT count(*)::int FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'failed'
-                  AND n.created_at > now() - make_interval(hours => $1::int)) AS failed_window,
+                  AND n.created_at >  now() - make_interval(mins => $1::int)
+                  AND n.created_at <= now() - make_interval(mins => $2::int)) AS failed_window,
               (SELECT max(n.sent_at)::text FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent') AS last_sent,
               u.created_at::text AS created_at
@@ -610,8 +639,13 @@ export async function subscriberPage(
          LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
         WHERE u.status <> 'erased'
         ORDER BY u.created_at DESC
-        LIMIT $2 OFFSET $3`,
-      [Math.round(hours), perPage, Math.max(0, page - 1) * perPage],
+        LIMIT $3 OFFSET $4`,
+      [
+        Math.round(win.mins),
+        Math.round(win.endMins),
+        perPage,
+        Math.max(0, page - 1) * perPage,
+      ],
     ).catch(() => []),
     query<{ total: number }>(
       `SELECT count(*)::int AS total FROM users WHERE status <> 'erased'`,
@@ -624,14 +658,14 @@ export async function subscriberPage(
 // arrive and coarse enough that a week still fits on one line.
 export async function alertBuckets(
   userId: number,
-  hours: number,
+  win: Win,
   minutes = 30,
 ): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
        SELECT generate_series(
-                date_trunc('hour', now() - make_interval(hours => $2::int)),
-                now(),
+                date_trunc('hour', now() - make_interval(mins => $2::int)),
+                now() - make_interval(mins => $4::int),
                 make_interval(mins => $3::int)
               ) AS bucket
      )
@@ -645,7 +679,7 @@ export async function alertBuckets(
              AND n.sent_at <  span.bucket + make_interval(mins => $3::int)
       GROUP BY span.bucket
       ORDER BY span.bucket`,
-    [userId, Math.round(hours), Math.round(minutes)],
+    [userId, Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
   ).catch(() => []);
 }
 
@@ -656,7 +690,7 @@ export type PaymentSummary = {
   refunds: number;
 };
 
-export async function paymentSummary(days: number): Promise<PaymentSummary> {
+export async function paymentSummary(win: Win): Promise<PaymentSummary> {
   const rows = await query<PaymentSummary>(
     `SELECT coalesce(sum(amount_pence) FILTER (WHERE amount_pence > 0), 0)::int
               AS taken_pence,
@@ -664,20 +698,17 @@ export async function paymentSummary(days: number): Promise<PaymentSummary> {
             count(DISTINCT user_id)::int                  AS payers,
             count(*) FILTER (WHERE amount_pence < 0)::int AS refunds
        FROM payments
-      WHERE created_at > now() - make_interval(days => $1::int)`,
-    [Math.round(days)],
+      WHERE created_at >  now() - make_interval(mins => $1::int)
+        AND created_at <= now() - make_interval(mins => $2::int)`,
+    [Math.round(win.mins), Math.round(win.endMins)],
   ).catch(() => []);
   return rows[0] ?? { taken_pence: 0, payments: 0, payers: 0, refunds: 0 };
 }
 
-export async function paymentSeries(days: number): Promise<Slice[]> {
+export async function paymentSeries(win: Win): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
-       SELECT generate_series(
-              (now() AT TIME ZONE 'Europe/London')::date - ($1::int - 1),
-              (now() AT TIME ZONE 'Europe/London')::date,
-              interval '1 day'
-            )::date AS day
+       SELECT generate_series($1::date, $2::date, interval '1 day')::date AS day
      )
      SELECT to_char(span.day, 'YYYY-MM-DD') AS label,
             coalesce(sum(p.amount_pence), 0)::int AS value
@@ -686,29 +717,31 @@ export async function paymentSeries(days: number): Promise<Slice[]> {
               ON (p.created_at AT TIME ZONE 'Europe/London')::date = span.day
       GROUP BY span.day
       ORDER BY span.day`,
-    [Math.round(days)],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
-export async function paymentsByPlan(days: number): Promise<Slice[]> {
+export async function paymentsByPlan(win: Win): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(pl.display_name, p.plan) AS label,
             sum(p.amount_pence)::int          AS value
        FROM payments p
        LEFT JOIN plans pl ON pl.key = p.plan
-      WHERE p.created_at > now() - make_interval(days => $1::int)
+      WHERE p.created_at >  now() - make_interval(mins => $1::int)
+        AND p.created_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1 ORDER BY 2 DESC`,
-    [Math.round(days)],
+    [Math.round(win.mins), Math.round(win.endMins)],
   ).catch(() => []);
 }
 
-export async function paymentsByProvider(days: number): Promise<Slice[]> {
+export async function paymentsByProvider(win: Win): Promise<Slice[]> {
   return query<Slice>(
     `SELECT provider AS label, count(*)::int AS value
        FROM payments
-      WHERE created_at > now() - make_interval(days => $1::int)
+      WHERE created_at >  now() - make_interval(mins => $1::int)
+        AND created_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1 ORDER BY 2 DESC`,
-    [Math.round(days)],
+    [Math.round(win.mins), Math.round(win.endMins)],
   ).catch(() => []);
 }
 
@@ -716,30 +749,30 @@ export async function paymentsByProvider(days: number): Promise<Slice[]> {
 // by rows that are one per day. `daily_stats` keeps its job — the hourly report
 // reads it, and it outlives the raw rows — but the dashboard asks the source.
 
-export async function alertPoints(hours: number, minutes: number): Promise<Slice[]> {
+export async function alertPoints(win: Win, minutes: number): Promise<Slice[]> {
   return bucketed(
     `notifications`,
     `sent_at`,
     `status = 'sent'`,
-    hours,
+    win,
     minutes,
   );
 }
 
-export async function intakePoints(hours: number, minutes: number): Promise<Slice[]> {
-  return bucketed(`listings`, `first_seen_at`, `true`, hours, minutes);
+export async function intakePoints(win: Win, minutes: number): Promise<Slice[]> {
+  return bucketed(`listings`, `first_seen_at`, `true`, win, minutes);
 }
 
-export async function messagePoints(hours: number, minutes: number): Promise<Slice[]> {
-  return bucketed(`source_messages`, `stored_at`, `true`, hours, minutes);
+export async function messagePoints(win: Win, minutes: number): Promise<Slice[]> {
+  return bucketed(`source_messages`, `stored_at`, `true`, win, minutes);
 }
 
-export async function unparseablePoints(hours: number, minutes: number): Promise<Slice[]> {
+export async function unparseablePoints(win: Win, minutes: number): Promise<Slice[]> {
   return bucketed(
     `source_messages`,
     `stored_at`,
     `status = 'unparseable'`,
-    hours,
+    win,
     minutes,
   );
 }
@@ -750,14 +783,14 @@ async function bucketed(
   table: "notifications" | "listings" | "source_messages" | "site_visits",
   column: "sent_at" | "first_seen_at" | "stored_at" | "first_at",
   predicate: string,
-  hours: number,
+  win: Win,
   minutes: number,
 ): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
        SELECT generate_series(
-                date_trunc('hour', now() - make_interval(hours => $1::int)),
-                now(),
+                date_trunc('hour', now() - make_interval(mins => $1::int)),
+                now() - make_interval(mins => $3::int),
                 make_interval(mins => $2::int)
               ) AS bucket
      )
@@ -770,7 +803,7 @@ async function bucketed(
              AND t.${column} <  span.bucket + make_interval(mins => $2::int)
       GROUP BY span.bucket
       ORDER BY span.bucket`,
-    [Math.round(hours), Math.round(minutes)],
+    [Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
   ).catch(() => []);
 }
 
@@ -783,40 +816,40 @@ async function bucketed(
 
 export type VisitDay = { day: string; visitors: number; hits: number };
 
-export async function visitorsByDay(days: number): Promise<VisitDay[]> {
+export async function visitorsByDay(win: Win): Promise<VisitDay[]> {
   return query<VisitDay>(
     `SELECT day::text AS day,
             count(*)::int      AS visitors,
             sum(hits)::int     AS hits
        FROM site_visits
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      WHERE day BETWEEN $1::date AND $2::date
       GROUP BY day
       ORDER BY day DESC`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
 export type VisitSlice = { name: string | null; visitors: number };
 
-export async function visitorsByCountry(days: number): Promise<VisitSlice[]> {
+export async function visitorsByCountry(win: Win): Promise<VisitSlice[]> {
   return query<VisitSlice>(
     `SELECT country AS name, count(*)::int AS visitors
        FROM site_visits
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      WHERE day BETWEEN $1::date AND $2::date
       GROUP BY country
       ORDER BY visitors DESC, name`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
-export async function visitorsByDevice(days: number): Promise<VisitSlice[]> {
+export async function visitorsByDevice(win: Win): Promise<VisitSlice[]> {
   return query<VisitSlice>(
     `SELECT device AS name, count(*)::int AS visitors
        FROM site_visits
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date - make_interval(days => $1::int)
+      WHERE day BETWEEN $1::date AND $2::date
       GROUP BY device
       ORDER BY visitors DESC, name`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
@@ -833,14 +866,13 @@ export async function visitorsByDevice(days: number): Promise<VisitSlice[]> {
 
 export type DistrictDay = { day: string; district: string; listings: number };
 
-export async function districtDaily(days: number): Promise<DistrictDay[]> {
+export async function districtDaily(win: Win): Promise<DistrictDay[]> {
   return query<DistrictDay>(
     `SELECT day::text AS day, district, listings
        FROM district_days
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date
-                  - make_interval(days => $1::int)
+      WHERE day BETWEEN $1::date AND $2::date
       ORDER BY day`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
@@ -853,7 +885,7 @@ export type RecipientDay = {
   districts: string[] | null;
 };
 
-export async function recipientDaily(days: number): Promise<RecipientDay[]> {
+export async function recipientDaily(win: Win): Promise<RecipientDay[]> {
   // Per day, like the districts, so the page can answer every range without
   // asking again. `districts` is what the person actually subscribed to — the
   // question asked of every name in this list.
@@ -877,10 +909,9 @@ export async function recipientDaily(days: number): Promise<RecipientDay[]> {
        LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
       WHERE n.status = 'sent'
         AND (n.sent_at AT TIME ZONE 'Europe/London')::date
-            > (now() AT TIME ZONE 'Europe/London')::date
-              - make_interval(days => $1::int)
+            BETWEEN $1::date AND $2::date
       GROUP BY day, n.user_id`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
@@ -943,14 +974,15 @@ export type Duplicates = {
  * same London day, from a different portal. See 0040 for why the rule is what
  * it is, and why two from one portal are not copies.
  */
-export async function duplicates(hours: number): Promise<Duplicates> {
+export async function duplicates(win: Win): Promise<Duplicates> {
   const [totals, pairs] = await Promise.all([
     query<{ copies: string | number; listings: string | number }>(
       `SELECT count(*) FILTER (WHERE duplicate_of IS NOT NULL) AS copies,
               count(*) AS listings
          FROM listings
-        WHERE first_seen_at > now() - make_interval(hours => $1::int)`,
-      [Math.round(hours)],
+        WHERE first_seen_at >  now() - make_interval(mins => $1::int)
+          AND first_seen_at <= now() - make_interval(mins => $2::int)`,
+      [Math.round(win.mins), Math.round(win.endMins)],
     ).catch(() => []),
     query<{ copy: string; kept: string; copies: string | number }>(
       `SELECT copy.source_key AS copy,
@@ -958,11 +990,12 @@ export async function duplicates(hours: number): Promise<Duplicates> {
               count(*) AS copies
          FROM listings copy
          JOIN listings kept ON kept.id = copy.duplicate_of
-        WHERE copy.first_seen_at > now() - make_interval(hours => $1::int)
+        WHERE copy.first_seen_at >  now() - make_interval(mins => $1::int)
+          AND copy.first_seen_at <= now() - make_interval(mins => $2::int)
         GROUP BY 1, 2
         ORDER BY count(*) DESC, 1, 2
         LIMIT 8`,
-      [Math.round(hours)],
+      [Math.round(win.mins), Math.round(win.endMins)],
     ).catch(() => []),
   ]);
 
@@ -981,19 +1014,18 @@ export async function duplicates(hours: number): Promise<Duplicates> {
 // today, and by day for a week. `first_at` is when somebody arrived, so one
 // visitor lands in exactly one bucket — the row itself is one per person per
 // day, which is why counting rows counts people.
-export async function visitorPoints(hours: number, minutes: number): Promise<Slice[]> {
-  return bucketed(`site_visits`, `first_at`, `true`, hours, minutes);
+export async function visitorPoints(win: Win, minutes: number): Promise<Slice[]> {
+  return bucketed(`site_visits`, `first_at`, `true`, win, minutes);
 }
 
-export async function visitorsByBrowser(days: number): Promise<VisitSlice[]> {
+export async function visitorsByBrowser(win: Win): Promise<VisitSlice[]> {
   return query<VisitSlice>(
     `SELECT browser AS name, count(*)::int AS visitors
        FROM site_visits
-      WHERE day > (now() AT TIME ZONE 'Europe/London')::date
-                  - make_interval(days => $1::int)
+      WHERE day BETWEEN $1::date AND $2::date
       GROUP BY browser
       ORDER BY visitors DESC, name`,
-    [days],
+    [win.fromDay, win.toDay],
   ).catch(() => []);
 }
 
@@ -1005,15 +1037,16 @@ export async function visitorsByBrowser(days: number): Promise<VisitSlice[]> {
 //
 // The guard on `jsonb_typeof` is there so a counter that is somehow not a
 // number cannot break the page with a cast error.
-export async function scrapeBytes(hours: number, source: string): Promise<number> {
+export async function scrapeBytes(win: Win, source: string): Promise<number> {
   const rows = await query<{ bytes: string | number | null }>(
     `SELECT coalesce(sum((counters->>'bytes')::bigint), 0) AS bytes
        FROM job_stages
       WHERE stage = 'scrape'
         AND source_key = $2
         AND jsonb_typeof(counters->'bytes') = 'number'
-        AND started_at > now() - make_interval(hours => $1::int)`,
-    [Math.round(hours), source],
+        AND started_at >  now() - make_interval(mins => $1::int)
+        AND started_at <= now() - make_interval(mins => $3::int)`,
+    [Math.round(win.mins), source, Math.round(win.endMins)],
   ).catch(() => []);
   return Number(rows[0]?.bytes ?? 0);
 }

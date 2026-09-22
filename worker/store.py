@@ -339,7 +339,36 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                        count(n.id) FILTER (
                            WHERE n.status = 'skipped' AND n.error = 'share'
                        ) AS withheld,
-                       round(avg(l.price_pcm))::int AS avg_price
+                       -- Rooms and whole homes are never averaged together: a
+                       -- £900 room beside a £2,100 flat produces a figure that
+                       -- describes neither, and the digest quoted it as though
+                       -- it described the market.
+                       --
+                       -- So a filter asking only for rooms gets the average of
+                       -- rooms, and every other filter gets the average with
+                       -- rooms left out. A mixed filter therefore reports on the
+                       -- homes it matched; that is a partial answer, but it is
+                       -- a true one.
+                       round(avg(l.price_pcm) FILTER (
+                           WHERE CASE
+                               WHEN jsonb_typeof(s.criteria->'property_types') = 'array'
+                                AND jsonb_array_length(s.criteria->'property_types') = 1
+                                AND s.criteria->'property_types'->>0 = 'room'
+                               THEN l.property_type = 'room'
+                               -- NULL is a home: the feed leaves the type unset
+                               -- for a plain bedroom count, and only ever writes
+                               -- 'room' when it means one.
+                               ELSE l.property_type IS DISTINCT FROM 'room'
+                           END
+                       ))::int AS avg_price,
+                       -- Which of the two the figure is, so the digest can say
+                       -- so rather than leaving it to be guessed.
+                       coalesce(
+                           jsonb_typeof(s.criteria->'property_types') = 'array'
+                           AND jsonb_array_length(s.criteria->'property_types') = 1
+                           AND s.criteria->'property_types'->>0 = 'room',
+                           false
+                       ) AS rooms_only
                   FROM subscriptions s
                   JOIN users u ON u.id = s.user_id AND u.status = 'active'
                   -- LEFT, because a day with no match is still a day worth
@@ -361,6 +390,7 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                 RETURNING user_id
             )
             SELECT d.user_id, d.matched, d.sent, d.withheld, d.avg_price,
+                   d.rooms_only,
                    uc.channel, uc.address, uc.last_inbound_at,
                    -- Paid means a plan that costs money and has not run out.
                    -- A live trial is not paid: it is the thing the button is

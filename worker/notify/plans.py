@@ -96,12 +96,23 @@ def notice_for(
     return expiring_notice(plan, plan_until, stage, share, link)
 
 def digest_notice(
-    matched: int, share: int, *, avg_price: int | None = None, paid: bool = False
+    matched: int,
+    share: int,
+    *,
+    avg_price: int | None = None,
+    paid: bool = False,
+    rooms_only: bool = False,
 ) -> str:
 
     listings = "listing" if matched == 1 else "listings"
+    # Says which average it is, because the two are not comparable and the old
+    # wording — "in what matched" — was untrue as soon as anything was left out.
+    # A filter for rooms alone averages rooms; every other filter averages the
+    # homes and leaves rooms out.
     price = (
-        f"💷 Average rent in what matched: £{avg_price:,}/month"
+        f"💷 Average room rent: £{avg_price:,}/month"
+        if avg_price and rooms_only
+        else f"💷 Average rent, rooms aside: £{avg_price:,}/month"
         if avg_price
         else None
     )

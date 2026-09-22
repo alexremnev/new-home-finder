@@ -1,26 +1,12 @@
-import Link from "next/link";
-
 import {
   visitorPoints, visitorsByBrowser, visitorsByCountry, visitorsByDay,
   visitorsByDevice,
 } from "@/lib/admin-queries";
 
 import { Metric, Rank, Series, Why } from "../charts";
+import { DEFAULT_SPAN, bucketMinutes, bucketWords, spanFrom } from "../span";
 
 export const dynamic = "force-dynamic";
-
-const RANGES = [1, 2, 7] as const;
-type Days = (typeof RANGES)[number];
-
-// How wide a bucket the chart uses, by range. A day of traffic has a shape
-// worth seeing by the hour; a week of it drawn hourly is 168 points of noise.
-const BUCKET_MINUTES: Record<Days, number> = { 1: 60, 2: 240, 7: 1440 };
-
-const BUCKET_WORDS: Record<Days, string> = {
-  1: "по часам",
-  2: "по четыре часа",
-  7: "по дням",
-};
 
 // Two letters is all that is stored, so the name is looked up here rather than
 // kept in a column that would need maintaining.
@@ -41,15 +27,15 @@ export default async function VisitorsPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const asked = Number(params.d ?? 1);
-  const days: Days = (RANGES as readonly number[]).includes(asked) ? (asked as Days) : 1;
+  const win = spanFrom(params.w ?? DEFAULT_SPAN);
+  const bucket = bucketMinutes(win.hours);
 
   const [byDay, byCountry, byDevice, byBrowser, points] = await Promise.all([
-    visitorsByDay(days),
-    visitorsByCountry(days),
-    visitorsByDevice(days),
-    visitorsByBrowser(days),
-    visitorPoints(days * 24, BUCKET_MINUTES[days]),
+    visitorsByDay(win),
+    visitorsByCountry(win),
+    visitorsByDevice(win),
+    visitorsByBrowser(win),
+    visitorPoints(win, bucket),
   ]);
 
   const visitors = byDay.reduce((sum, one) => sum + one.visitors, 0);
@@ -61,41 +47,42 @@ export default async function VisitorsPage({
     <>
       <div className="dash-head">
         <h1>Visitors</h1>
-        <div className="window-picker" role="group" aria-label="Range">
-          {RANGES.map((one) => (
-            <Link
-              key={one}
-              href={`/admin/visitors?d=${one}`}
-              className={one === days ? "win win-on" : "win"}
-            >
-              {one === 1 ? "Today" : `${one}d`}
-            </Link>
-          ))}
-        </div>
       </div>
 
       <div className="dash-row">
         <Metric
           label="Visitors"
           value={visitors}
-          note={days === 1 ? "today" : `over ${days} days`}
+          tone={visitors > 0 ? "good" : "warn"}
+          note={win.days === 1 ? win.label.toLowerCase() : `over ${win.days} days`}
           why="Уникальные посетители, посчитанные по дням и сложенные. Отпечаток посетителя солится датой, поэтому один и тот же человек в два разных дня — это две единицы: так можно считать людей, но нельзя следить за одним. Боты отсекаются дважды: списком тех, кто называет себя роботом, и — что важнее — тем, что визит без узнаваемого браузера не записывается вообще."
         />
-        <Metric label="Page views" value={hits} note="all visits" />
+        <Metric
+          label="Page views"
+          value={hits}
+          tone={hits > 0 ? "good" : "warn"}
+          note="all visits"
+        />
         <Metric
           label="Views each"
           value={visitors > 0 ? perVisitor.toFixed(1) : "—"}
+          tone={visitors > 0 ? "good" : "warn"}
           note="per visitor"
           why="Сколько раз в среднем один посетитель открывал страницу. Около единицы — пришли и ушли; заметно больше — возвращаются или перезагружают."
         />
-        <Metric label="Best day" value={best || "—"} note="most visitors" />
+        <Metric
+          label="Best day"
+          value={best || "—"}
+          tone={best > 0 ? "good" : "warn"}
+          note="most visitors"
+        />
       </div>
 
       <div className="dash-row dash-row-wide">
         <div className="card">
-          <h2>Visitors, {BUCKET_WORDS[days]}</h2>
+          <h2>Visitors, {bucketWords(bucket)}</h2>
           <Series data={points} />
-          <Why text="Бакет зависит от периода: сегодня — по часам, 2 дня — по четыре часа, неделя — по дням. Считается по first_at, то есть по времени прихода, поэтому один посетитель попадает ровно в один бакет. Неделя, нарисованная по часам, — это 168 точек шума, поэтому шаг растёт вместе с периодом." />
+          <Why text="Шаг бакета зависит от выбранного сверху периода и подписан в заголовке. Считается по first_at, то есть по времени прихода, поэтому один посетитель попадает ровно в один бакет. Неделя, нарисованная по часам, — это 168 точек шума, поэтому шаг растёт вместе с периодом. Таблицы ниже считаются по дням: строка в site_visits — одна на человека в день, поэтому часовой период читает сегодняшний день целиком." />
         </div>
       </div>
 

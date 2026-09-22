@@ -7,7 +7,7 @@ import {
 import { describeCriteria, type Criteria } from "@/lib/criteria";
 
 import { Metric, Series, Why } from "../../charts";
-import { DEFAULT_WINDOW, WindowPicker, windowFrom } from "../../window";
+import { DEFAULT_SPAN, spanFrom } from "../../span";
 
 import { AsyncForm } from "../../async-form";
 
@@ -31,10 +31,10 @@ export default async function UserPage({
   if (!Number.isInteger(userId) || userId <= 0) notFound();
 
   const { done, w } = await searchParams;
-  const win = windowFrom(w ?? DEFAULT_WINDOW);
+  const win = spanFrom(w ?? DEFAULT_SPAN);
   const [who, feed, paid, history, wants, plans, buckets] = await Promise.all([
     person(userId), deliveredTo(userId), paymentsBy(userId), historyOf(userId),
-    wantedBy(userId), sellablePlans(), alertBuckets(userId, win.hours, 30),
+    wantedBy(userId), sellablePlans(), alertBuckets(userId, win, 30),
   ]);
   if (!who) notFound();
 
@@ -63,7 +63,6 @@ export default async function UserPage({
       {done && <p className="note">{done}.</p>}
 
       <div className="dash-head">
-        <WindowPicker here={`/admin/subscribers/${who.user_id}`} chosen={win.key} />
       </div>
 
       <div className="card" style={{ marginBottom: "0.75rem" }}>

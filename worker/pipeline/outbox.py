@@ -477,6 +477,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                                 None if row["avg_price"] is None else int(row["avg_price"])
                             ),
                             paid=paid,
+                            rooms_only=bool(row.get("rooms_only")),
                         ),
                         actions=actions,
                     ),
