@@ -302,6 +302,7 @@ const NOT_COLUMNS = new Set(
    string_agg array_agg date_trunc age justify_hours width_bucket percentile_cont
    within ordinality current_setting format regexp_replace split_part
    jsonb_array_elements jsonb_array_elements_text jsonb_typeof jsonb_array_length
+   bool_or bool_and
    excluded`
     .split(/\s+/)
     .filter(Boolean),

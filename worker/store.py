@@ -363,12 +363,18 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                        ))::int AS avg_price,
                        -- Which of the two the figure is, so the digest can say
                        -- so rather than leaving it to be guessed.
-                       coalesce(
+                       --
+                       -- Aggregated, because the rows are grouped by user and
+                       -- `s.criteria` belongs to the subscription. `bool_or`
+                       -- rather than a bare expression: the group is one active
+                       -- subscription in practice — the newest wins and the rest
+                       -- stand down — so "any of them is rooms-only" is the same
+                       -- answer, and it is one Postgres will accept.
+                       coalesce(bool_or(
                            jsonb_typeof(s.criteria->'property_types') = 'array'
                            AND jsonb_array_length(s.criteria->'property_types') = 1
-                           AND s.criteria->'property_types'->>0 = 'room',
-                           false
-                       ) AS rooms_only
+                           AND s.criteria->'property_types'->>0 = 'room'
+                       ), false) AS rooms_only
                   FROM subscriptions s
                   JOIN users u ON u.id = s.user_id AND u.status = 'active'
                   -- LEFT, because a day with no match is still a day worth
