@@ -88,14 +88,29 @@ export async function paidPlans(channel?: Channel): Promise<Plan[]> {
   return rows.map(priced);
 }
 
+export type Price = { pence: number; unit: string };
+
+// "week" reads better than "7 days" and is what the price is actually thought
+// of as. Anything that is not a round period falls back to saying the days.
+function unitOf(days: number | null): string {
+  if (days === null) return "no end date";
+  if (days === 1) return "day";
+  if (days === 7) return "week";
+  if (days >= 28 && days <= 31) return "month";
+  return `${days} days`;
+}
+
 /**
- * The price to put on the sign-up button for one messenger: the cheapest way in
- * after the trial. Read rather than written into the copy, so the button cannot
- * promise a figure that `/pay` then contradicts.
+ * Every price a messenger is sold at, cheapest first — what the sign-up card
+ * shows. Read rather than written into the copy, so a card cannot advertise a
+ * figure that `/pay` then contradicts.
  */
-export async function entryPrice(channel: Channel): Promise<Plan | null> {
+export async function channelPrices(channel: Channel): Promise<Price[]> {
   const plans = await paidPlans(channel).catch(() => []);
-  return plans[0] ?? null;
+  return plans.map((plan) => ({
+    pence: plan.price_pence,
+    unit: unitOf(plan.duration_days),
+  }));
 }
 
 // What an ended plan drops back to, as a percentage. Read rather than written

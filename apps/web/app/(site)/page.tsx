@@ -2,7 +2,7 @@ import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import {
-  districtNames, enabledDistricts, entryPrice, signupPlan, trialDaysOn,
+  channelPrices, districtNames, enabledDistricts, signupPlan, trialDaysOn,
 } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
@@ -18,18 +18,18 @@ export default async function Page() {
 
   // What each card says. Both numbers come from `plans`, so the page cannot
   // offer a trial the bot will not grant or a price checkout will not charge.
-  const whatsappPrice = await entryPrice("whatsapp");
+  const [telegramPrices, whatsappPrices] = await Promise.all([
+    channelPrices("telegram"),
+    channelPrices("whatsapp"),
+  ]);
   const offers = {
     telegram: {
       trialDays: plan ? trialDaysOn(plan, "telegram") : null,
-      // No price on the Telegram card: the cheapest Telegram plan is a week, so
-      // "per month" would be the wrong unit, and a second unit on the other
-      // card is one more thing to compare while choosing a messenger.
-      pricePence: null as number | null,
+      prices: telegramPrices,
     },
     whatsapp: {
       trialDays: plan ? trialDaysOn(plan, "whatsapp") : null,
-      pricePence: whatsappPrice?.price_pence ?? null,
+      prices: whatsappPrices,
     },
   };
 

@@ -45,7 +45,7 @@ UPDATE plans SET channel = 'telegram' WHERE key IN ('week', 'month');
 INSERT INTO plans
        (key, display_name, max_districts, duration_days,
         price_pence, is_signup_default, enabled, channel)
-VALUES ('wa_month', '1 month', 5, 30, 2000, false, true, 'whatsapp')
+VALUES ('wa_month', '1 month', 5, 30, 1999, false, true, 'whatsapp')
 ON CONFLICT (key) DO UPDATE
    SET display_name  = EXCLUDED.display_name,
        max_districts = EXCLUDED.max_districts,

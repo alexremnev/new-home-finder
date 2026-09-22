@@ -23,7 +23,10 @@ type Props = {
 
 export type Offer = {
   trialDays: number | null;
-  pricePence: number | null;
+  // Every price this messenger is sold at, cheapest first. Telegram has two —
+  // a week and a month — and WhatsApp one, so the band is a list rather than a
+  // single figure.
+  prices: { pence: number; unit: string }[];
 };
 
 type Channel = "telegram" | "whatsapp";
@@ -441,9 +444,13 @@ export function SubscribeForm({
   );
 }
 
-// Pence to pounds, whole: a price list reads better without ".00" on it.
+// Pence shown only when there are pence: "£4.99", but "£5" rather than "£5.00".
+// A trailing ".00" on a price list reads as a rounding artefact.
 const pounds = (pence: number) =>
-  "£" + Math.round(pence / 100).toLocaleString("en-GB");
+  "£" +
+  (pence % 100 === 0
+    ? String(pence / 100)
+    : (pence / 100).toFixed(2));
 
 // One messenger's offer: what it costs to try, then the button that starts it.
 //
@@ -461,11 +468,26 @@ function Choice({
   ready: boolean;
   flag?: string;
 }) {
-  const { trialDays, pricePence } = offer;
+  const { trialDays, prices } = offer;
 
   return (
     <div className={flag ? "offer offer-best" : "offer"}>
       {flag && <span className="offer-flag">{flag}</span>}
+
+      {/* What it costs once the trial ends, on the messenger's own colour and
+          at the top of the card — the first thing worth knowing, and the thing
+          that differs most between the two. Absent until a plan is priced for
+          this channel, rather than invented. */}
+      {prices.length > 0 && (
+        <div className={`offer-prices offer-prices-${channel}`}>
+          {prices.map((price) => (
+            <span key={price.unit} className="offer-rate">
+              <strong>{pounds(price.pence)}</strong>
+              <span className="offer-unit">{price.unit}</span>
+            </span>
+          ))}
+        </div>
+      )}
 
       <ul className="offer-points">
         {/* Omitted rather than guessed at when no plan is configured: a trial
@@ -495,9 +517,6 @@ function Choice({
       >
         {mark}
         {busy === channel ? "One moment…" : label}
-        {pricePence !== null && (
-          <span className="offer-price">{pounds(pricePence)}/month</span>
-        )}
       </button>
     </div>
   );

@@ -1017,10 +1017,49 @@ form p.error {
   display: flex;
   flex-direction: column;
   position: relative;
-  padding: 1.1rem 1.1rem 1.1rem;
+  /* No padding at the top: the price band is flush to the card's edge, and its
+     own padding spaces the contents below it. */
+  padding: 0 1.1rem 1.1rem;
   border: 1px solid var(--line);
   border-radius: var(--radius-card, 12px);
   background: var(--surface, #fff);
+}
+
+/* What it costs, on the messenger's own colour, at the top of the card. Pulled
+   out to the card's edges with a negative margin so the colour reaches the
+   border rather than floating inside the padding. */
+.offer-prices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.35rem 1.25rem;
+  margin: 0 -1.1rem 0.9rem;
+  padding: 0.6rem 1rem;
+  /* Matches the card's own radius at the top, square where it meets the list. */
+  border-radius: calc(var(--radius-card, 12px) - 1px)
+                 calc(var(--radius-card, 12px) - 1px) 0 0;
+  color: #fff;
+}
+
+.offer-prices-telegram { background: #229ed9; }
+.offer-prices-whatsapp { background: var(--wa); }
+
+/* One price: the figure and what it buys, read as a unit. */
+.offer-rate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+  font-size: 1.125rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.offer-rate strong { font-weight: 700; }
+
+.offer-unit {
+  opacity: 0.85;
+  font-size: 0.8125rem;
+  font-weight: 500;
 }
 
 /* The one we would rather people use, said out loud. Accented rather than
@@ -1032,17 +1071,27 @@ form p.error {
 
 .offer-flag {
   position: absolute;
-  top: -0.6rem;
+  /* Above the card's edge, so it reads as a label on the card rather than a
+     word inside the coloured price band. */
+  top: -0.65rem;
   left: 1.1rem;
+  z-index: 1;
   padding: 0.15rem 0.5rem;
   border-radius: 999px;
-  background: #229ed9;
-  color: #fff;
+  /* White on the card's own colour, not the colour again: the band behind it is
+     now Telegram blue, and a blue pill on it was legible only by its text. */
+  background: #fff;
+  border: 1px solid #229ed9;
+  color: #1b87ba;
   font-size: 0.6875rem;
   font-weight: 700;
   letter-spacing: 0.02em;
   text-transform: uppercase;
 }
+
+/* Room for the pill that sits on this card's top edge, so it never lands on
+   top of the first price. */
+.offer-best .offer-prices { padding-top: 0.95rem; }
 
 /* One claim per line, so the trial length is read rather than scanned past. */
 .offer-points {
@@ -1094,19 +1143,6 @@ form p.error {
   color: #fff;
   cursor: not-allowed;
 }
-
-/* The price belongs to the button but not to its label: its own line, lighter
-   and smaller, so "Connect WhatsApp" stays the thing being pressed and the two
-   never compete for the same row. */
-.offer-price {
-  flex-basis: 100%;
-  text-align: center;
-  opacity: 0.85;
-  font-size: 0.8125rem;
-  font-weight: 500;
-}
-
-.offer > .cta:disabled .offer-price { opacity: 0.9; }
 
 .cta-telegram { background: #229ed9; color: #fff; }
 .cta-whatsapp { background: var(--wa); color: #fff; }
