@@ -28,19 +28,21 @@
 # About 190 runs a week against roughly 980 before — a fivefold cut, and none of
 # it during the hours that produced nothing.
 #
-# ── this needs the server clock set to London ────────────────────────────
+# ── the zone is stated here, not taken from the machine ──────────────────
 #
-# systemd reads OnCalendar in the machine's own timezone, and there is no
-# per-timer setting for it on every version. So the server must be on London
-# time:
+# Every line carries `Europe/London`. Without it systemd reads OnCalendar in
+# whatever zone the machine happens to be in: the server runs on UTC, so the
+# whole schedule sat an hour early through British Summer Time and would have
+# quietly corrected itself in October and broken again in March.
 #
-#     sudo timedatectl set-timezone Europe/London
-#     timedatectl | grep 'Time zone'
+# Saying the zone in the unit makes the schedule independent of the server's
+# clock, and self-explanatory to whoever reads it next. It needs systemd 252 or
+# later; check with
 #
-# Skip it and the whole schedule shifts by an hour through British Summer Time —
-# runs from 08:00 to 16:00 instead of 09:00 to 17:00. Nothing breaks, but it is
-# not what was asked for. Every other timer in this project is relative
-# (OnUnitInactiveSec), so changing the zone moves nothing else.
+#     systemd-analyze calendar 'Mon..Fri 08..16:00/20 Europe/London'
+#
+# which prints the next elapse in UTC — an hour behind the London time asked
+# for, while BST is in force, and equal to it in winter.
 [Unit]
 Description=Scrape OpenRent on London working hours
 
@@ -52,12 +54,12 @@ Unit=london-home-finder@scrape.service
 # Two lines rather than one because the day does not start on the hour: the
 # first covers 07:20 and 07:40, the second the whole hours after it. Written as
 # `07..16:00/20` it would have added a run at 07:00 that nobody asked for.
-OnCalendar=Mon..Fri 07:20,40
-OnCalendar=Mon..Fri 08..16:00/20
+OnCalendar=Mon..Fri 07:20,40 Europe/London
+OnCalendar=Mon..Fri 08..16:00/20 Europe/London
 # Weekday evenings: hourly.
-OnCalendar=Mon..Fri 17..21:00
+OnCalendar=Mon..Fri 17..21:00 Europe/London
 # Weekends, a shorter day: hourly.
-OnCalendar=Sat,Sun 10..19:00
+OnCalendar=Sat,Sun 10..19:00 Europe/London
 
 # A minute and a half of jitter, so we are not on the stroke of the hour with
 # everybody else's crontab.
