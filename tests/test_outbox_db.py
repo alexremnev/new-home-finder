@@ -46,7 +46,7 @@ def conn(schema: None) -> Iterator[Any]:
 
 @pytest.fixture
 def run(conn: Any) -> Run:
-    return Run(conn, job="hot", trigger="manual")
+    return Run(conn, job="drain", trigger="manual")
 
 def make_user(
     conn: Any, *, address: str = "555", status: str = "active",

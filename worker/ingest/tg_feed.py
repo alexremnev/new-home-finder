@@ -90,7 +90,11 @@ def bedrooms_of(value: str | None) -> tuple[int, str | None]:
     if not text or text in NOT_STATED:
         raise Unparseable("bedrooms not stated")
     if "studio" in text:
-        return 0, "studio"
+        # A studio is a flat with no separate bedroom, so that is what is
+        # stored: the type is "flat" and the bedroom count is nought. Storing
+        # "studio" as its own type made it invisible to a filter for flats,
+        # which is the filter anybody looking for a studio also ticks.
+        return 0, "flat"
     if "room in a share" in text or text.startswith("room"):
         return 1, "room"
     match = COUNT.match(text)

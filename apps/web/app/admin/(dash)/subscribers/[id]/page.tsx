@@ -1,12 +1,21 @@
+import { pounds } from "@/lib/money";
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 
 import {
-  alertBuckets, deliveredTo, historyOf, paymentsBy, person, sellablePlans, wantedBy,
+  person, sellablePlans, wantedBy,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
 
-import { Metric, Series, Why } from "../../charts";
+import { Metric, Why } from "../../charts";
+import { Panel, PanelWait } from "../../panel";
+import {
+  refreshBuckets, refreshHistory, refreshPayments, refreshSent,
+} from "./actions";
+import {
+  AccountHistory, AccountPayments, AccountSent, AlertBuckets,
+} from "./bodies";
 import { DEFAULT_SPAN, spanFrom } from "../../span";
 
 import { AsyncForm } from "../../async-form";
@@ -15,8 +24,6 @@ import { ago, at, dayOf } from "@/lib/when";
 
 export const dynamic = "force-dynamic";
 
-const pounds = (pence: number) =>
-  "£" + (pence / 100).toLocaleString("en-GB", { maximumFractionDigits: 2 });
 const comma = (n: number) => n.toLocaleString("en-GB");
 
 export default async function UserPage({
@@ -32,9 +39,8 @@ export default async function UserPage({
 
   const { done, w } = await searchParams;
   const win = spanFrom(w ?? DEFAULT_SPAN);
-  const [who, feed, paid, history, wants, plans, buckets] = await Promise.all([
-    person(userId), deliveredTo(userId), paymentsBy(userId), historyOf(userId),
-    wantedBy(userId), sellablePlans(), alertBuckets(userId, win, 30),
+  const [who, wants, plans] = await Promise.all([
+    person(userId), wantedBy(userId), sellablePlans(),
   ]);
   if (!who) notFound();
 
@@ -65,13 +71,16 @@ export default async function UserPage({
       <div className="dash-head">
       </div>
 
-      <div className="card" style={{ marginBottom: "0.75rem" }}>
-        <h2>
-          Alerts delivered, half-hour buckets
-          <Why text="Каждая точка — 30 минут. Видно не только сколько человек получил, но и когда: ровная линия у нуля с редкими всплесками — это норма для узкого фильтра, а пустота весь день при активном плане — повод посмотреть канал доставки." />
-        </h2>
-        <Series data={buckets} />
-      </div>
+      <Panel
+        wide
+        title="Alerts delivered, half-hour buckets"
+        why="Каждая точка — 30 минут. Видно не только сколько человек получил, но и когда: ровная линия у нуля с редкими всплесками — это норма для узкого фильтра, а пустота весь день при активном плане — повод посмотреть канал доставки."
+        refresh={refreshBuckets.bind(null, userId, win.key)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <AlertBuckets userId={userId} span={win.key} />
+        </Suspense>
+      </Panel>
 
       <section>
         <div className="stats">
@@ -89,31 +98,33 @@ export default async function UserPage({
 
       <section>
         <h2>Account</h2>
-        <table className="grid kv">
-          <tbody>
-            <tr><th>User id</th><td>{who.user_id}</td></tr>
-            <tr>
-              <th>Channel</th>
-              <td>
-                {who.channel ?? "none"}
-                {who.address ? ` · ${who.address}` : ""}
-                {who.verified_at ? ` · verified ${at(who.verified_at)}` : " · unverified"}
-              </td>
-            </tr>
-            <tr><th>Payment ref</th><td>{who.payment_ref ?? "—"}</td></tr>
-            <tr><th>Stopped at</th><td>{at(who.stopped_at)}</td></tr>
-            <tr>
-              <th>Queue</th>
-              <td>
-                {comma(who.queued)} waiting · {comma(who.failed)} failed
-              </td>
-            </tr>
-            <tr>
-              <th>Wants elsewhere</th>
-              <td>{wants.length ? wants.join(", ") : "—"}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div className="scroll-x">
+          <table className="grid kv">
+            <tbody>
+              <tr><th>User id</th><td>{who.user_id}</td></tr>
+              <tr>
+                <th>Channel</th>
+                <td>
+                  {who.channel ?? "none"}
+                  {who.address ? ` · ${who.address}` : ""}
+                  {who.verified_at ? ` · verified ${at(who.verified_at)}` : " · unverified"}
+                </td>
+              </tr>
+              <tr><th>Payment ref</th><td>{who.payment_ref ?? "—"}</td></tr>
+              <tr><th>Stopped at</th><td>{at(who.stopped_at)}</td></tr>
+              <tr>
+                <th>Queue</th>
+                <td>
+                  {comma(who.queued)} waiting · {comma(who.failed)} failed
+                </td>
+              </tr>
+              <tr>
+                <th>Wants elsewhere</th>
+                <td>{wants.length ? wants.join(", ") : "—"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section>
@@ -213,115 +224,38 @@ export default async function UserPage({
         </div>
       </section>
 
-      <section>
-        <h2>
-          Payments <span className="section-note">{who.paid_count}</span>
-        </h2>
-        {paid.length === 0 ? (
-          <p className="hint">Never paid.</p>
-        ) : (
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>When</th><th>Plan</th><th className="num">Amount</th>
-                <th className="num">Days</th><th>How</th><th>Reference</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paid.map((one) => (
-                <tr key={one.id}>
-                  <td className="muted">{at(one.created_at)}</td>
-                  <td>{one.plan}</td>
-                  <td className="num">{pounds(one.amount_pence)}</td>
-                  <td className="num muted">{one.granted_days ?? "—"}</td>
-                  <td>{one.provider}</td>
-                  <td className="muted wrap">{one.provider_ref ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <Panel
+        wide
+        title="Payments"
+        why="Каждый платёж по этому аккаунту: тариф, сумма, сколько дней он дал и чем оплачено. Reference — идентификатор на стороне провайдера, по нему платёж находится в дашборде Stripe."
+        refresh={refreshPayments.bind(null, userId)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <AccountPayments userId={userId} />
+        </Suspense>
+      </Panel>
 
-      <section>
-        <h2>
-          What was sent{" "}
-          <span className="section-note">
-            newest {feed.length} of {comma(who.sent + who.queued + who.failed + who.withheld)}
-          </span>
-        </h2>
-        {feed.length === 0 ? (
-          <p className="hint">Nothing yet.</p>
-        ) : (
-          <table className="grid">
-            <thead>
-              <tr>
-                <th>Queued</th><th>Sent</th><th>State</th>
-                <th className="num">Rent</th><th className="num">Beds</th>
-                <th>Where</th><th>Listing</th>
-              </tr>
-            </thead>
-            <tbody>
-              {feed.map((one) => (
-                <tr key={one.id}>
-                  <td className="muted">{at(one.created_at)}</td>
-                  <td className="muted">{at(one.sent_at)}</td>
-                  <td>
-                    <span
-                      className={`badge ${
-                        one.status === "sent"
-                          ? "good"
-                          : one.status === "failed"
-                            ? "critical"
-                            : "warning"
-                      }`}
-                    >
-                      {one.status}
-                      {one.error ? ` · ${one.error}` : ""}
-                    </span>
-                  </td>
-                  <td className="num">
-                    {one.price_pcm === null ? "—" : "£" + comma(one.price_pcm)}
-                  </td>
-                  <td className="num muted">{one.bedrooms ?? "—"}</td>
-                  <td className="muted">{one.district ?? "—"}</td>
-                  <td className="wrap">
-                    {one.url ? (
-                      <a href={one.url} target="_blank" rel="noreferrer">
-                        open
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <Panel
+        wide
+        title="What was sent"
+        why="Последние уведомления по этому аккаунту, свежие сверху. sent — ушло, failed — не удалось, skipped — задержано долей плана."
+        refresh={refreshSent.bind(null, userId)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <AccountSent userId={userId} />
+        </Suspense>
+      </Panel>
 
-      <section>
-        <h2>What we did to this account</h2>
-        {history.length === 0 ? (
-          <p className="hint">Nothing. Every action from this page is recorded here.</p>
-        ) : (
-          <table className="grid">
-            <thead>
-              <tr><th>When</th><th>What</th><th>Detail</th></tr>
-            </thead>
-            <tbody>
-              {history.map((one) => (
-                <tr key={one.id}>
-                  <td className="muted">{at(one.created_at)}</td>
-                  <td><strong>{one.action}</strong></td>
-                  <td className="wrap muted counters">{JSON.stringify(one.detail)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <Panel
+        wide
+        title="What we did to this account"
+        why="Каждое действие с этой страницы записывается здесь — смена плана, выданные дни, стирание данных."
+        refresh={refreshHistory.bind(null, userId)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <AccountHistory userId={userId} />
+        </Suspense>
+      </Panel>
     </>
   );
 }

@@ -156,7 +156,8 @@ def test_the_slug_gives_rooms_and_type() -> None:
     assert read_slug("4-bed-bungalow-lane-cv10") == ("CV10", 4, "house")
     # A room in somebody else's flat: the number is not a bedroom count.
     assert read_slug("room-in-a-shared-house-beresford-road-dn12") == ("DN12", 1, "room")
-    assert read_slug("studio-craven-street-wc2n") == ("WC2N", 0, "studio")
+    # A studio is a flat with nought bedrooms, not a fourth type.
+    assert read_slug("studio-craven-street-wc2n") == ("WC2N", 0, "flat")
 
 def test_a_slug_without_an_outward_code_is_refused() -> None:
     # Better to skip one listing than to file it under a district it is not in.

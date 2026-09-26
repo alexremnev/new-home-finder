@@ -24,7 +24,7 @@
 //     DATE: `site_visits.day` and `district_days.day`.
 
 export type SpanKey =
-  | "today" | "yesterday"
+  | "yesterday" | "today"
   | "1h" | "2h" | "3h" | "6h" | "12h"
   | "1d" | "2d" | "3d" | "4d" | "5d" | "6d"
   | "1w" | "2w" | "1m";
@@ -36,8 +36,10 @@ type Shape =
   | { kind: "rolling"; hours: number };
 
 const SHAPES: { key: SpanKey; label: string; shape: Shape }[] = [
-  { key: "today", label: "Today", shape: { kind: "day", back: 0 } },
+  // Yesterday first, then today, then the rolling windows: the row reads left
+  // to right as time does, oldest to newest.
   { key: "yesterday", label: "Yesterday", shape: { kind: "day", back: 1 } },
+  { key: "today", label: "Today", shape: { kind: "day", back: 0 } },
   { key: "1h", label: "1h", shape: { kind: "rolling", hours: 1 } },
   { key: "2h", label: "2h", shape: { kind: "rolling", hours: 2 } },
   { key: "3h", label: "3h", shape: { kind: "rolling", hours: 3 } },
@@ -110,7 +112,11 @@ function dayBack(at: Date, back: number): string {
 }
 
 export function spanFrom(value: string | undefined, now: Date = new Date()): Span {
-  const found = SHAPES.find((one) => one.key === value) ?? SHAPES[0]!;
+  // Named explicitly rather than "the first entry": the default is today, and
+  // the order of the row is a separate decision that has already changed once.
+  const found =
+    SHAPES.find((one) => one.key === value) ??
+    SHAPES.find((one) => one.key === DEFAULT_SPAN)!;
   const today = sinceMidnight(now);
 
   if (found.shape.kind === "day") {

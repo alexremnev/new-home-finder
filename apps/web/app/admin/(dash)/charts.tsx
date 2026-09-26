@@ -238,7 +238,7 @@ function RunHover({
     >
       {point && (
         <Tip at={at as number} count={data.length}>
-          <strong>{point.ok} clean</strong>
+          <strong>{point.ok} successful</strong>
           {point.bad > 0 && <span style={{ color: "#ff9d9f" }}> · {point.bad} failed</span>}
           <br />
           {spell(point.label)}

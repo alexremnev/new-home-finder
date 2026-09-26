@@ -79,9 +79,9 @@ uv run python -m worker drain                  # отправить очеред
 uv run python -m worker drain --dry-run        # посмотреть сколько ждёт, не отправляя
 ```
 
-`hot` отправляет сам, в том же прогоне — ждать отдельного `drain` не нужно. `drain`
-как отдельная джоба существует для двух случаев: повторить доставку без повторного
-скрапинга и выпустить очередь, задержанную тихими часами.
+`ingest` и `scrape` только складывают совпадения в очередь — отправляет их `drain`,
+отдельным прогоном раз в две минуты. Поэтому `drain` полезен сам по себе: повторить
+доставку, не перечитывая источники.
 
 ```sql
 -- очередь и её состояние
@@ -262,17 +262,17 @@ SELECT provider, count(*), sum(amount_pence)/100.0 AS pounds FROM payments GROUP
 
 Без деплоя и без коммита. Выполнять в Supabase → SQL Editor.
 
-```sql
--- как часто обращаемся к источнику
-UPDATE schedules SET interval_seconds = 300
- WHERE job = 'hot' AND source_key = 'openrent';
+Как часто обращаемся к источнику — это systemd-таймеры, не база: `OnUnitInactiveSec`
+в `deploy/systemd/london-home-finder-<job>.timer`. Таблицы `schedules` больше нет,
+её удалила миграция 0021.
 
+```sql
 -- как быстро внутри одного прогона (запросов в секунду)
 UPDATE sources SET config = jsonb_set(config, '{rate_limit_rps}', '0.15')
  WHERE key = 'openrent';
 
--- приостановить источник, сохранив настройки
-UPDATE schedules SET enabled = false WHERE source_key = 'rightmove';
+-- приостановить источник: таймер, а не база
+--   sudo systemctl disable --now london-home-finder-scrape.timer
 
 -- расширить охват
 UPDATE source_locations SET enabled = true
@@ -287,7 +287,6 @@ UPDATE source_locations SET enabled = true
 SELECT 'sources' AS t, count(*) FROM sources
 UNION ALL SELECT 'locations',        count(*) FROM locations
 UNION ALL SELECT 'source_locations', count(*) FROM source_locations
-UNION ALL SELECT 'schedules',        count(*) FROM schedules
 UNION ALL SELECT 'listings',         count(*) FROM listings
 UNION ALL SELECT 'notifications',    count(*) FROM notifications
 UNION ALL SELECT 'job_runs',         count(*) FROM job_runs;
@@ -365,7 +364,7 @@ uv run python scripts/seed_locations.py --enable SE16,SE8,E14
 | `failed to resolve host 'db.<ref>.supabase.co'` | прямой хост Supabase отдаёт только IPv6. Работает там, где IPv6 есть, и перестаёт, когда его не стало — без единого изменения у нас. Нужен **session pooler** |
 | `password authentication failed` | пароль не закодирован; `@ # / ? :` в пароле нужно кодировать процентами |
 | `permission denied for table ...` | подключение не под владельцем таблиц; нужна строка подключения, а не anon-ключ |
-| воркер пишет `nothing due` | это норма для `tick`; для принудительного запуска нужен `hot` |
+| джоба не запускалась сама | расписание держит systemd: `systemctl list-timers "london-home-finder*"` |
 | статус прогона `skipped_locked` | другой прогон держит advisory lock по этой задаче и источнику |
 | статус прогона `degraded` | стадия сообщила о проблеме, либо стадии ещё заглушки |
 | источник пропущен, `health=blocked` | размыкатель в паузе; срок в `sources.health_until` |

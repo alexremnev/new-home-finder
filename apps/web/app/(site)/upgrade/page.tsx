@@ -1,12 +1,8 @@
+import { pounds } from "@/lib/money";
 import { accountForToken, lapsedShare, paidPlans } from "@/lib/plans";
 
 export const dynamic = "force-dynamic";
 
-const money = (pence: number) =>
-  "£" + (pence / 100).toLocaleString("en-GB", { minimumFractionDigits: 0 });
-
-const perDay = (pence: number, days: number | null) =>
-  days && days > 0 ? `${money(Math.round(pence / days))} a day` : null;
 
 export default async function UpgradePage({
   searchParams,
@@ -58,7 +54,6 @@ export default async function UpgradePage({
 
       <div className="plans">
         {plans.map((plan) => {
-          const rate = perDay(plan.price_pence, plan.duration_days);
           return (
             <div
               key={plan.key}
@@ -66,14 +61,9 @@ export default async function UpgradePage({
             >
               {plan.key === best.key && <span className="plan-flag">Better value</span>}
               <h2>{plan.display_name}</h2>
-              <div className="plan-price">{money(plan.price_pence)}</div>
-              {rate && <p className="hint">{rate}</p>}
+              <div className="plan-price">{pounds(plan.price_pence)}</div>
               <ul className="plan-points">
-                <li>
-                  {share === null
-                    ? "Every matching listing, not a share"
-                    : `Every matching listing, not ${share}%`}
-                </li>
+                <li>24/7</li>
                 <li>
                   {plan.duration_days
                     ? `${plan.duration_days} days from today`

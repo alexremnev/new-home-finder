@@ -17,16 +17,20 @@ const WINTER = new Date("2026-01-14T09:15:00Z");
 
 describe("the list itself", () => {
   it("offers every range the dashboard asks for, in order", () => {
+    // Oldest first, so the row reads left to right the way time does.
     expect(SPAN_KEYS).toEqual([
-      "today", "yesterday",
+      "yesterday", "today",
       "1h", "2h", "3h", "6h", "12h",
       "1d", "2d", "3d", "4d", "5d", "6d",
       "1w", "2w", "1m",
     ]);
   });
 
-  it("opens on today", () => {
+  it("opens on today, which is not the first chip in the row", () => {
     expect(DEFAULT_SPAN).toBe("today");
+    // The guard that matters: the fallback names the default rather than
+    // taking whichever range happens to be listed first.
+    expect(SPAN_KEYS[0]).not.toBe(DEFAULT_SPAN);
     // An unknown or absent `?w=` is today too, not a crash and not a week.
     expect(spanFrom(undefined, SUMMER).key).toBe("today");
     expect(spanFrom("nonsense", SUMMER).key).toBe("today");

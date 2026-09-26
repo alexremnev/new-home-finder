@@ -192,11 +192,19 @@ export const START_TTL_MINUTES = 60;
 
 export const UPGRADE_TTL_MINUTES = 60;
 
+// An edit link is followed straight away, from a chat the person is already in.
+// Long enough to fill the form without rushing, short enough that one left in a
+// screenshot stops working.
+export const EDIT_TTL_MINUTES = 60;
+
 export function newToken(): string {
   return randomBytes(TOKEN_BYTES).toString("base64url");
 }
 
-export type TokenPurpose = "start" | "upgrade";
+// "edit" is for somebody who already has a filter and is changing it. The form
+// then knows who they are, so it can drop the sign-up offer — prices and a free
+// trial are not what a returning subscriber came to read.
+export type TokenPurpose = "start" | "upgrade" | "edit";
 
 export async function issueToken(
   userId: number,
@@ -265,6 +273,51 @@ export async function accountForToken(
     [token, purpose],
   );
   return rows[0] ?? null;
+}
+
+export type Returning = {
+  channel: Channel;
+  /** Whether every match is being delivered, rather than a lapsed share. */
+  full: boolean;
+  /**
+   * A checkout link, minted here, for somebody whose plan has run out. Null
+   * when they are on full delivery and there is nothing to offer — and also
+   * when issuing it failed, in which case the page simply says nothing rather
+   * than offering a link that cannot work.
+   */
+  upgradeUrl: string | null;
+};
+
+/**
+ * Who is changing their filter, for a token issued by /update.
+ *
+ * Only what the page needs: which messenger to send them back to, whether they
+ * are still getting everything, and — if not — a link that can actually take
+ * the payment. Anything more would be a sign-up page wearing a different hat.
+ */
+export async function returningFor(token: string): Promise<Returning | null> {
+  const account = await accountForToken(token, "edit").catch(() => null);
+  if (!account || !account.channel) return null;
+
+  const live = account.plan_until === null || account.plan_until.getTime() > Date.now();
+  const rows = await query<{ share: number | null }>(
+    `SELECT p.delivery_share AS share FROM plans p WHERE p.key = $1`,
+    [account.plan],
+  ).catch(() => []);
+  const share = Number(rows[0]?.share ?? 0);
+
+  const full = live && share >= 100;
+  if (full) return { channel: account.channel, full, upgradeUrl: null };
+
+  // Its own token, because /upgrade needs one to know whose plan is being
+  // bought — a bare /upgrade can only answer "that link has expired".
+  const paying = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES)
+    .catch(() => null);
+  return {
+    channel: account.channel,
+    full,
+    upgradeUrl: paying ? `${siteUrl()}/upgrade?t=${encodeURIComponent(paying)}` : null,
+  };
 }
 
 export async function paidPlan(key: string): Promise<Plan | null> {

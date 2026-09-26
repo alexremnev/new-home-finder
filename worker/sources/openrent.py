@@ -201,7 +201,9 @@ def read_slug(slug: str) -> tuple[str, int, str | None] | None:
         # is never shown for this type.
         return district, 1, "room"
     if words.startswith("studio"):
-        return district, 0, "studio"
+        # A flat with no separate bedroom — see tg_feed.bedrooms_of. The zero is
+        # what says "studio", and the bedroom slider reads it back as the word.
+        return district, 0, "flat"
 
     beds = re.match(r"(\d+)-bed", words)
     if not beds:

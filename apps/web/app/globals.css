@@ -909,12 +909,6 @@ form p.error {
 
 .live-choices button:hover { border-color: var(--accent); }
 
-.section-note {
-  color: var(--ink-soft);
-  font-size: 0.8125rem;
-  font-weight: 400;
-}
-
 @media (max-width: 52rem) {
   .filters { gap: 0.5rem 0.75rem; }
   .filter-search input[type="text"] { width: 100%; }
@@ -1039,6 +1033,15 @@ form p.error {
   border-radius: calc(var(--radius-card, 12px) - 1px)
                  calc(var(--radius-card, 12px) - 1px) 0 0;
   color: #fff;
+}
+
+/* Only for somebody whose plan ran out while they were editing their filter.
+   Quiet, not alarming: the alerts are still arriving, just not all of them. */
+.offer-lapsed {
+  margin: 0.75rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  line-height: 1.45;
 }
 
 .offer-prices-telegram { background: #229ed9; }
@@ -1396,6 +1399,123 @@ form p.error {
   border-radius: 6px;
   background: var(--d-card);
 }
+
+/* ── a card that refreshes itself ───────────────────────────────────────── */
+
+.panel { margin-bottom: 0.75rem; }
+
+/* Full width, for the tiles and the wide charts. */
+.panel-wide { display: block; }
+
+/* The title and the card's own refresh, on one line. The button sits at the
+   end rather than beside the title so that a row of cards has its buttons in a
+   column, easy to aim at. */
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.panel-head > h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+/* A head with no title still holds its button at the right. */
+.panel-head:not(:has(> h2)) { justify-content: flex-end; margin-bottom: 0.35rem; }
+
+.panel-refresh {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--d-line);
+  border-radius: 5px;
+  background: var(--d-card);
+  color: var(--d-soft);
+  cursor: pointer;
+}
+
+.panel-refresh:hover:not(:disabled) {
+  border-color: var(--d-accent);
+  color: var(--d-accent);
+}
+
+/* Not faded to nothing while it turns: the spinner is the feedback, and a
+   ghosted button reads as broken. */
+.panel-refresh:disabled { cursor: progress; color: var(--d-accent); }
+
+.panel-spin { width: 14px; height: 14px; }
+
+.panel-spin-on { animation: panel-turn 700ms linear infinite; }
+
+@keyframes panel-turn {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-spin-on { animation-duration: 2s; }
+}
+
+/* A refresh that failed leaves the old numbers and says so here, rather than
+   replacing a card that was working with an error. */
+.panel-warn {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--d-bad);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 11px;
+  text-align: center;
+}
+
+/* While a card's first query runs. Sized so the page does not jump when the
+   contents arrive. */
+.panel-wait {
+  height: 3.5rem;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #f2f4f7 25%, #e9ecf1 37%, #f2f4f7 63%);
+  background-size: 400% 100%;
+  animation: panel-shift 1.3s ease infinite;
+}
+
+@keyframes panel-shift {
+  from { background-position: 100% 50%; }
+  to   { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-wait { animation: none; }
+}
+
+/* What a chart's bucket is, under its title. */
+.panel-note {
+  margin: -0.35rem 0 0.5rem;
+  color: var(--d-faint);
+  font-size: 11px;
+}
+
+/* The metric tiles, now inside one panel so they share its refresh. */
+.tiles {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+}
+
+/* Inside a panel the tiles are already on a card, so they carry the tone and
+   the border rather than a second layer of padding. */
+.tiles > .card { margin: 0; }
 
 .card > h2,
 .card > h3 {
@@ -2322,20 +2442,22 @@ form p.error {
 
 .pager button:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* The problems panel folds away. Open by default — a problem nobody sees is a
-   problem nobody fixes — but foldable, because it sits above everything else. */
-.faults { margin-bottom: 0.75rem; }
-
-.faults > summary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+/* A panel that folds away. Open by default — a problem nobody sees is a problem
+   nobody fixes — but foldable, because it sits above everything else. */
+.panel-fold > summary {
   cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
+  list-style-position: inside;
 }
 
-.faults > summary::marker { color: var(--d-faint); }
-.faults > summary strong { color: #a12126; }
-.faults > summary + .log-line { margin-top: 0.5rem; }
+.panel-fold > summary::marker { color: var(--d-faint); }
+
+/* The head is a flex row inside the summary, so the marker and the row sit on
+   one line rather than the row starting under the triangle. */
+.panel-fold > summary > .panel-head {
+  display: inline-flex;
+  width: calc(100% - 1.2rem);
+  vertical-align: middle;
+  margin-bottom: 0;
+}
+
+.panel-fold[open] > summary { margin-bottom: 0.6rem; }

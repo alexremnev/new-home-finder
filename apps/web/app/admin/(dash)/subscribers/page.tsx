@@ -1,38 +1,17 @@
-import Link from "next/link";
+import { Suspense } from "react";
 
+import { Panel, PanelWait } from "../panel";
+import { DEFAULT_SPAN, spanFrom } from "../span";
 import {
-  alertPoints, byDistrict, byPrice, planMix, subscriberPage,
-} from "@/lib/admin-queries";
-
-import { Metric, Rank, Series, Why } from "../charts";
-import { DEFAULT_SPAN, bucketMinutes, spanFrom, spanWords } from "../span";
-
-import { dayOf, since, windowLeft } from "@/lib/when";
+  refreshDelivered, refreshDistricts, refreshEveryone, refreshPlans,
+  refreshPrices, refreshTiles,
+} from "./actions";
+import {
+  AlertDistricts, AlertPrices, AlertsDelivered, EveryoneTable, PlanMix,
+  SubscriberTiles,
+} from "./bodies";
 
 export const dynamic = "force-dynamic";
-
-const PER_PAGE = 20;
-
-
-
-// Green means alerts are reaching them. Anything else is a reason, not a
-// colour: a paused filter and a dead channel look the same in a list of dots.
-function state(row: {
-  status: string;
-  sent_window: number;
-  failed_window: number;
-  channel: string | null;
-  plan_until: string | null;
-}): { dot: string; why: string } {
-  if (row.status !== "active") return { dot: "idle", why: row.status };
-  if (!row.channel) return { dot: "bad", why: "not connected" };
-  if (row.failed_window > 0) return { dot: "bad", why: `${row.failed_window} failed` };
-  if (row.plan_until && new Date(row.plan_until.replace(" ", "T")) < new Date()) {
-    return { dot: "idle", why: "plan ended" };
-  }
-  if (row.sent_window > 0) return { dot: "ok", why: "delivering" };
-  return { dot: "idle", why: "nothing matched" };
-}
 
 export default async function SubscribersPage({
   searchParams,
@@ -40,21 +19,8 @@ export default async function SubscribersPage({
   searchParams: Promise<Record<string, string | undefined>>;
 }) {
   const params = await searchParams;
-  const win = spanFrom(params.w ?? DEFAULT_SPAN);
+  const span = spanFrom(params.w ?? DEFAULT_SPAN).key;
   const page = Math.max(1, Number(params.p ?? 1) || 1);
-
-  const [{ rows, total }, plans, sent, districts, prices] = await Promise.all([
-    subscriberPage(win, page, PER_PAGE),
-    planMix(),
-    alertPoints(win, bucketMinutes(win.hours)),
-    byDistrict(win),
-    byPrice(win),
-  ]);
-
-  const totalPages = Math.max(1, Math.ceil(total / PER_PAGE));
-  const link = (p: number) => `/admin/subscribers?w=${win.key}&p=${p}`;
-  const reaching = rows.filter((row) => state(row).dot === "ok").length;
-  const delivered = rows.reduce((sum, row) => sum + row.sent_window, 0);
 
   return (
     <>
@@ -62,138 +28,66 @@ export default async function SubscribersPage({
         <h1>Subscribers</h1>
       </div>
 
-      <div className="dash-row">
-        <Metric
-          label="Accounts"
-          value={total}
-          tone={total > 0 ? "good" : "warn"}
-          note="everyone not erased"
-        />
-        <Metric
-          label="Delivering"
-          value={`${reaching}/${rows.length}`}
-          tone={
-            reaching === rows.length ? "good" : reaching === 0 ? "bad" : "warn"
-          }
-          note={`of the ${rows.length} on this page`}
-          why="Сколько человек на этой странице действительно получают алерты: за выбранный период ушёл хотя бы один и ни один не упал. Серая точка в списке — подписка есть, но ничего не подошло или план закончился. Красная — канал не привязан или отправка падает."
-        />
-        <Metric
-          label="Alerts sent"
-          value={delivered}
-          // Nothing sent over the window is the thing worth noticing, and it is
-          // not visible from a neutral card.
-          tone={delivered > 0 ? "good" : "warn"}
-          note={`on this page · ${spanWords(win)}`}
-        />
-        <div className="card">
-          <h3>
-            Plans
-            <Why text="Сколько аккаунтов на каком тарифе. trial — пробный период, free — то, куда падает закончившийся план, week и month — платные." />
-          </h3>
-          <Rank data={plans} />
-        </div>
+      <Panel wide refresh={refreshTiles.bind(null, span, page)}>
+        <Suspense fallback={<PanelWait />}>
+          <SubscriberTiles span={span} page={page} />
+        </Suspense>
+      </Panel>
+
+      <div className="dash-row dash-row-wide">
+        <Panel
+          title="Alerts delivered"
+          why="Сколько уведомлений ушло за период, по времени. Всплески вечером — нормально: объявления публикуют неравномерно."
+          refresh={refreshDelivered.bind(null, span)}
+        >
+          <Suspense fallback={<PanelWait />}>
+            <AlertsDelivered span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="Where the alerts went"
+          why="Районы, по которым чаще всего совпадают фильтры подписчиков."
+          refresh={refreshDistricts.bind(null, span)}
+        >
+          <Suspense fallback={<PanelWait />}>
+            <AlertDistricts span={span} />
+          </Suspense>
+        </Panel>
       </div>
 
       <div className="dash-row dash-row-wide">
-        <div className="card">
-          <h2>
-            Alerts delivered
-            <Why text="Сколько уведомлений ушло за период, по времени. Всплески вечером — нормально: объявления публикуют неравномерно." />
-          </h2>
-          <Series data={sent} />
-        </div>
-        <div className="card">
-          <h2>
-            Where the alerts went
-            <Why text="Районы, по которым чаще всего совпадают фильтры подписчиков. Считается по целым дням, поэтому для окон короче суток показывает сутки." />
-          </h2>
-          <Rank data={districts} />
-        </div>
+        <Panel
+          title="By rent"
+          why="Разбивка отправленных объявлений по арендной плате, полосами по £250. Показывает, в каком бюджете люди действительно ищут."
+          refresh={refreshPrices.bind(null, span)}
+        >
+          <Suspense fallback={<PanelWait />}>
+            <AlertPrices span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="Plans"
+          why="Сколько аккаунтов на каком тарифе. trial — пробный период, free — то, куда падает закончившийся план, week и month — платные."
+          refresh={refreshPlans}
+        >
+          <Suspense fallback={<PanelWait />}>
+            <PlanMix />
+          </Suspense>
+        </Panel>
       </div>
 
-      <div className="dash-row dash-row-wide">
-        <div className="card">
-          <h2>
-            By rent
-            <Why text="Разбивка отправленных объявлений по арендной плате, полосами по £250. Показывает, в каком бюджете люди действительно ищут." />
-          </h2>
-          <Rank data={prices} />
-        </div>
-      </div>
-
-      <div className="card">
-        <h2>
-          Everyone
-          <Why text="По 20 на страницу, новые сверху. Нажмите на номер — вся аналитика по человеку, смена плана, его платежи и история фильтров. «Free window» — сколько осталось от 24 часов, в которые WhatsApp разрешает писать свободным текстом с фотографией и не берёт денег. Окно открывает только входящее сообщение от человека; нажатие кнопки-ссылки его не продлевает." />
-        </h2>
-
-        <div className="scroll-x">
-          <table>
-            <thead>
-              <tr>
-                <th />
-                <th>Account</th>
-                <th>Plan</th>
-                <th>Channel</th>
-                <th>Free window</th>
-                <th>Areas</th>
-                <th className="num">{win.key === "today" || win.key === "yesterday"
-                  ? win.label
-                  : `Last ${win.label}`}</th>
-                <th className="num">All time</th>
-                <th className="num">Last alert</th>
-                <th>Joined</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const how = state(row);
-                return (
-                  <tr key={row.user_id}>
-                    <td>
-                      <span className={`dot dot-${how.dot}`} title={how.why} />
-                    </td>
-                    <td>
-                      <Link href={`/admin/subscribers/${row.user_id}`}>
-                        {row.user_id}
-                      </Link>
-                      <div className="metric-note">{how.why}</div>
-                    </td>
-                    <td>
-                      {row.plan}
-                      {row.plan_until && (
-                        <div className="metric-note">until {dayOf(row.plan_until)}</div>
-                      )}
-                    </td>
-                    <td>{row.channel ?? "—"}</td>
-                    <td>
-                      {row.channel !== "whatsapp" ? (
-                        "—"
-                      ) : windowLeft(row.last_inbound_at) ? (
-                        <span className="good">{windowLeft(row.last_inbound_at)}</span>
-                      ) : (
-                        <span className="metric-note">closed</span>
-                      )}
-                    </td>
-                    <td style={{ maxWidth: "12rem" }}>{row.districts ?? "—"}</td>
-                    <td className="num">{row.sent_window}</td>
-                    <td className="num">{row.sent_total}</td>
-                    <td className="num">{since(row.last_sent)}</td>
-                    <td>{dayOf(row.created_at)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="pager">
-          <Link className={page <= 1 ? "off" : ""} href={link(page - 1)}>← newer</Link>
-          <span>page {page} of {totalPages} · {total} accounts</span>
-          <Link className={page >= totalPages ? "off" : ""} href={link(page + 1)}>older →</Link>
-        </div>
-      </div>
+      <Panel
+        wide
+        title="Everyone"
+        why="По 20 на страницу, новые сверху. Нажмите на номер — вся аналитика по человеку, смена плана, его платежи и история фильтров. «Free window» — сколько осталось от 24 часов, в которые WhatsApp разрешает писать свободным текстом с фотографией и не берёт денег. Окно открывает только входящее сообщение от человека; нажатие кнопки-ссылки его не продлевает."
+        refresh={refreshEveryone.bind(null, span, page)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <EveryoneTable span={span} page={page} />
+        </Suspense>
+      </Panel>
     </>
   );
 }

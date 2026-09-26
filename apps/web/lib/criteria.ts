@@ -17,16 +17,20 @@ export type Criteria = {
 
 export const FURNISHED = ["furnished", "unfurnished", "part"] as const;
 
-// Four words, matching what the parsers store. The matcher compares the stored
+// Three words, matching what the parsers store. The matcher compares the stored
 // type against this as an exact string, so the two lists have to be the same
 // list — anything finer ("terraced house") would answer no filter at all.
 //
+// No "studio": a studio is a flat with no separate bedroom, so it is stored as
+// a flat with nought bedrooms and is asked for with the bedroom slider. As its
+// own type it was worse than redundant — a studio hunter ticking Flat was shown
+// no studios, because the stored type did not say "flat".
+//
 // Worth knowing what this can and cannot do: the Telegram feed only states a
 // type for studios and rooms, and an unstated type matches everything. So
-// choosing flat and house excludes rooms and studios, which is the useful
-// direction; choosing flat alone does not exclude a house that never said it
-// was one.
-export const PROPERTY_TYPES = ["flat", "house", "studio", "room"] as const;
+// choosing flat and house excludes rooms, which is the useful direction;
+// choosing flat alone does not exclude a house that never said it was one.
+export const PROPERTY_TYPES = ["flat", "house", "room"] as const;
 
 const PRICE_LIMIT = 20_000;
 const BEDROOM_LIMIT = 10;

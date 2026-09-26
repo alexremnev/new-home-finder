@@ -1,3 +1,4 @@
+import { pounds as price } from "@/lib/money";
 import type { Criteria } from "./criteria";
 import type { Account } from "./plans";
 import { lapsedShare, paidPlans, siteUrl } from "./plans";
@@ -161,6 +162,37 @@ export function paymentReceived(planName: string, until: Date | null): string {
   return lines.join("\n");
 }
 
+/**
+ * What somebody is told when a refund goes through.
+ *
+ * Says the amount, then what it means for the alerts, then how to come back —
+ * a refund is not a complaint, and a message that only confirms the money
+ * leaves the person wondering whether their filter still exists.
+ */
+export function refundIssued(pence: number, until: Date | null): string {
+  const live = until !== null && until.getTime() > Date.now();
+  const lines = [
+    `↩️ ${price(pence)} has been refunded.`,
+    "",
+  ];
+  if (live) {
+    lines.push(
+      `Full access runs until ${until.toISOString().slice(0, 10)}, then the alerts`,
+      "drop back to the free share.",
+    );
+  } else {
+    lines.push("Full access has ended, and the alerts drop back to the free share.");
+  }
+  lines.push(
+    "",
+    "Your filter is kept exactly as it is.",
+    "",
+    "/pay — full access again",
+    "/update — change what you are looking for",
+  );
+  return lines.join("\n");
+}
+
 export const FOUND_A_PLACE = [
   "🎉 That is the whole point — congratulations.",
   "",
@@ -190,10 +222,6 @@ export function planLine(name: string, until: Date | null, live: boolean): strin
   return live ? `Plan: ${name}, until ${date}` : `Plan: ${name} — ended ${date}, alerts are off`;
 }
 
-function money(pence: number): string {
-  return pence % 100 === 0 ? `£${pence / 100}` : `£${(pence / 100).toFixed(2)}`;
-}
-
 export async function upgradeInvitation(account: Account, token?: string): Promise<string> {
   // Only what their messenger is priced at. Listing the Telegram week to a
   // WhatsApp subscriber offers a price checkout will then refuse.
@@ -214,7 +242,7 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   }
   for (const plan of plans) {
     const span = plan.duration_days ? `${plan.duration_days} days` : "no time limit";
-    lines.push(`${plan.display_name} — ${money(plan.price_pence)} for ${span}`);
+    lines.push(`${plan.display_name} — ${price(plan.price_pence)} for ${span}`);
   }
   lines.push("", token ? `${siteUrl()}/upgrade?t=${token}` : `${siteUrl()}/upgrade`);
   if (account.payment_ref) {

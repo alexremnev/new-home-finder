@@ -151,10 +151,20 @@ describe("enforceLimits", () => {
 });
 
 describe("property type", () => {
-  it("keeps the four words the parsers store", () => {
+  it("is not a place to ask for a studio", () => {
+    // A studio is a flat with nought bedrooms, and that is how it is stored.
+    // Accepting "studio" here would write a filter that matches nothing.
+    expect(parseForm({ property_types: ["studio"] }, ENABLED).property_types)
+      .toBeUndefined();
     expect(
-      parseForm({ property_types: ["flat", "house"] }, ENABLED).property_types,
-    ).toEqual(["flat", "house"]);
+      parseForm({ property_types: ["flat", "studio"] }, ENABLED).property_types,
+    ).toEqual(["flat"]);
+  });
+
+  it("keeps the three words the parsers store", () => {
+    expect(
+      parseForm({ property_types: ["flat", "house", "room"] }, ENABLED).property_types,
+    ).toEqual(["flat", "house", "room"]);
   });
 
   it("throws away anything the matcher could not answer", () => {

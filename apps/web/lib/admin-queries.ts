@@ -251,9 +251,15 @@ export type Event = {
 };
 
 
+// What the log filter offers. Bounded to a month, because a retired job name
+// otherwise haunts the dropdown forever: `hot` was removed with the in-worker
+// scheduler in migration 0021 and cannot run, but its old `job_runs` rows kept
+// listing it as though it could.
 export async function knownJobs(): Promise<string[]> {
   const rows = await query<{ job: string }>(
-    `SELECT DISTINCT job FROM job_runs ORDER BY job`,
+    `SELECT DISTINCT job FROM job_runs
+      WHERE started_at > now() - interval '30 days'
+      ORDER BY job`,
   );
   return rows.map((r) => r.job);
 }
@@ -831,28 +837,6 @@ export async function visitorsByDay(win: Win): Promise<VisitDay[]> {
 
 export type VisitSlice = { name: string | null; visitors: number };
 
-export async function visitorsByCountry(win: Win): Promise<VisitSlice[]> {
-  return query<VisitSlice>(
-    `SELECT country AS name, count(*)::int AS visitors
-       FROM site_visits
-      WHERE day BETWEEN $1::date AND $2::date
-      GROUP BY country
-      ORDER BY visitors DESC, name`,
-    [win.fromDay, win.toDay],
-  ).catch(() => []);
-}
-
-export async function visitorsByDevice(win: Win): Promise<VisitSlice[]> {
-  return query<VisitSlice>(
-    `SELECT device AS name, count(*)::int AS visitors
-       FROM site_visits
-      WHERE day BETWEEN $1::date AND $2::date
-      GROUP BY device
-      ORDER BY visitors DESC, name`,
-    [win.fromDay, win.toDay],
-  ).catch(() => []);
-}
-
 // ── what each district produces ───────────────────────────────────────────
 //
 // The rows come back per day and unaggregated, and the page does the windowing,
@@ -1018,14 +1002,34 @@ export async function visitorPoints(win: Win, minutes: number): Promise<Slice[]>
   return bucketed(`site_visits`, `first_at`, `true`, win, minutes);
 }
 
-export async function visitorsByBrowser(win: Win): Promise<VisitSlice[]> {
+// One shape for every "break the visits down by this column" panel. The column
+// name is chosen from a fixed list here and never comes from a request, so
+// there is nothing for a caller to inject.
+type VisitFacet =
+  | "source" | "referrer" | "campaign" | "city" | "region"
+  | "os" | "language" | "country" | "device" | "browser";
+
+export async function visitorsBy(
+  win: Win,
+  facet: VisitFacet,
+  limit = 12,
+): Promise<VisitSlice[]> {
+  const columns: Record<VisitFacet, string> = {
+    source: "source", referrer: "referrer", campaign: "campaign",
+    city: "city", region: "region", os: "os", language: "language",
+    country: "country", device: "device", browser: "browser",
+  };
+  const column = columns[facet];
+  if (!column) return [];
+
   return query<VisitSlice>(
-    `SELECT browser AS name, count(*)::int AS visitors
+    `SELECT ${column} AS name, count(*)::int AS visitors
        FROM site_visits
       WHERE day BETWEEN $1::date AND $2::date
-      GROUP BY browser
-      ORDER BY visitors DESC, name`,
-    [win.fromDay, win.toDay],
+      GROUP BY ${column}
+      ORDER BY visitors DESC, name
+      LIMIT $3`,
+    [win.fromDay, win.toDay, limit],
   ).catch(() => []);
 }
 

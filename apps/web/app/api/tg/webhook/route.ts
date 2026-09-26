@@ -32,6 +32,7 @@ import {
   type Account,
   accountForChat,
   enabledDistricts,
+  EDIT_TTL_MINUTES,
   issueToken,
   limitsOf,
   planIsLive,
@@ -109,6 +110,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   if (command.kind === "menu") return pushMenu(chatId);
 
   if (command.kind === "update") return sendToForm(chatId, true);
+
   if (command.kind === "resume") return resume(chatId);
 
   const account = await accountForChat(chatId);
@@ -263,7 +265,18 @@ async function offerUpgrade(chatId: string, account: Account): Promise<void> {
 }
 
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {
-  const where = `${siteUrl()}/`;
+  // A returning subscriber gets a token on the link, so the form knows who
+  // they are and shows "back to Telegram" rather than a price list. Without
+  // one — or if issuing it fails — the plain form is still the right page.
+  let where = `${siteUrl()}/`;
+  if (existing) {
+    const account = await accountForChat(chatId).catch(() => null);
+    if (account) {
+      const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES)
+        .catch(() => null);
+      if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
+    }
+  }
   await sendMessage(chatId, existing ? CHANGE_FILTER : SET_FILTERS, [
     [{ text: FILTERS_BUTTON, url: where }],
   ]);

@@ -20,7 +20,8 @@ import {
   upgradeInvitation,
 } from "@/lib/messages";
 import {
-  accountForChat, issueToken, planIsLive, siteUrl, UPGRADE_TTL_MINUTES,
+  accountForChat, EDIT_TTL_MINUTES, issueToken, planIsLive, siteUrl,
+  UPGRADE_TTL_MINUTES,
 } from "@/lib/plans";
 import { dismiss } from "@/lib/dismiss";
 import { deleteFilter, resumeFilter, stopFilter } from "@/lib/stopping";
@@ -208,14 +209,25 @@ async function commanded(
     }
 
     case "start":
-    case "update":
+    case "update": {
+      // A token on the link, so the form knows who is editing and shows "back
+      // to WhatsApp" rather than the sign-up offer. Without an account — or if
+      // issuing it fails — the plain form is still the right page.
+      let where = `${siteUrl()}/`;
+      const account = await accountForChat(number, "whatsapp").catch(() => null);
+      if (account) {
+        const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES)
+          .catch(() => null);
+        if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
+      }
       return [
         "Change your search here — it takes a minute:",
         "",
-        `${siteUrl()}/`,
+        where,
         "",
         "Saving replaces this filter. Until you do, it carries on as it is.",
       ].join("\n");
+    }
 
     default:
       return COMMAND_HELP;

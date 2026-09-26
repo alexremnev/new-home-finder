@@ -256,11 +256,26 @@ def test_an_ended_plan_carries_a_link_that_actually_opens_checkout() -> None:
     # The notice used to print a bare /upgrade with no token, and that page can
     # only answer "that link has expired".
     text = notice_for("month", None, "expired", 20, "https://x.test/upgrade?t=abc")
-    assert "Full access: https://x.test/upgrade?t=abc" in text
+    assert "https://x.test/upgrade?t=abc" in text
     assert "/upgrade\n" not in text
 
 def test_without_a_link_the_notice_falls_back_to_the_command() -> None:
-    assert "/pay — full access" in notice_for("month", None, "expired", 20)
+    assert "Send /pay for a payment link." in notice_for("month", None, "expired", 20)
+
+def test_an_ended_plan_says_what_to_do_and_where_to_read_about_it() -> None:
+    from worker.notify.plans import SITE
+
+    # The moment a plan runs out is the moment somebody decides whether to pay.
+    # A statement that it ended, with no instruction, left people asking how.
+    text = notice_for("month", None, "expired", 20, "https://x.test/upgrade?t=abc")
+    assert "To carry on:" in text
+    assert "1. Open https://x.test/upgrade?t=abc and pay by card." in text
+    assert "2. The alerts start again straight away" in text
+    # Somewhere to read about it rather than deciding inside a chat window.
+    assert f"More about the service: {SITE}" in text
+    # And the two ways out, so neither is a thing you have to remember.
+    assert "/update" in text
+    assert "/stop" in text
 
 def test_a_price_drop_reuses_the_listing_shape() -> None:
 

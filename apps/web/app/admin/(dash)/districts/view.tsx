@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useTransition } from "react";
 
 import type { DistrictDay, RecipientDay } from "@/lib/admin-queries";
 
 import { Metric, Series, Why } from "../charts";
+import { refreshDays, refreshRecipients } from "./actions";
 
 const COLUMNS = [
   { key: "district", label: "District", numeric: false },
@@ -21,6 +22,37 @@ type ColumnKey = (typeof COLUMNS)[number]["key"];
 
 const PER_PAGE = 25;
 
+// The same control Panel draws on every other page. Written out here because
+// this page's cards live inside a client component that owns their rows.
+function Again({ onClick, busy }: { onClick: () => void; busy: boolean }) {
+  return (
+    <button
+      type="button"
+      className="panel-refresh"
+      onClick={onClick}
+      disabled={busy}
+      aria-label="Refresh just this"
+      title="Refresh just this"
+    >
+      <svg
+        className={busy ? "panel-spin panel-spin-on" : "panel-spin"}
+        viewBox="0 0 16 16"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <path
+          d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3.2h-3.2"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  );
+}
+
 type Aggregate = {
   district: string;
   name: string;
@@ -32,23 +64,49 @@ type Aggregate = {
 };
 
 export function DistrictsView({
-  days,
-  recipients,
+  days: initialDays,
+  recipients: initialRecipients,
   names,
   label,
   days_in_range,
+  span,
 }: {
   days: DistrictDay[];
   recipients: RecipientDay[];
   names: Record<string, string>;
   label: string;
   days_in_range: number;
+  span: string;
 }) {
+  // Held in state so a card can replace its own rows without the page being
+  // re-rendered. The sorting and paging below are the reason this page keeps
+  // its rows rather than its markup: a refresh must not lose your column.
+  const [days, setDays] = useState(initialDays);
+  const [recipients, setRecipients] = useState(initialRecipients);
+  const [busy, start] = useTransition();
   const [sort, setSort] = useState<{ column: ColumnKey; down: boolean }>({
     column: "total",
     down: true,
   });
   const [page, setPage] = useState(1);
+
+  const againDays = () =>
+    start(async () => {
+      try {
+        setDays(await refreshDays(span));
+      } catch {
+        // The rows already shown stay: an empty table is worse than a stale one.
+      }
+    });
+
+  const againPeople = () =>
+    start(async () => {
+      try {
+        setRecipients(await refreshRecipients(span));
+      } catch {
+        /* as above */
+      }
+    });
 
   // Every row handed over is already inside the range: the query asked for it.
   const rows = useMemo(() => {
@@ -153,6 +211,10 @@ export function DistrictsView({
         <h1>Districts</h1>
       </div>
 
+      <div className="panel-head">
+        <Again onClick={againDays} busy={busy} />
+      </div>
+
       <div className="dash-row">
         <Metric
           label="Listings"
@@ -183,57 +245,68 @@ export function DistrictsView({
       </div>
 
       <div className="dash-row dash-row-wide">
-        <div className="card">
-          <h2>Listings per day, all districts</h2>
+        <div className="card panel">
+          <div className="panel-head">
+            <h2>Listings per day, all districts</h2>
+            <Again onClick={againDays} busy={busy} />
+          </div>
           <Series data={trend} />
           <Why text="По одной точке на день, в лондонском времени. Данные ведутся с 18 сентября — раньше этой даты точек нет." />
         </div>
       </div>
 
       <div className="dash-row dash-row-wide">
-        <div className="card">
-          <h2>Top 5 — busiest subscribers</h2>
+        <div className="card panel">
+          <div className="panel-head">
+            <h2>Top 5 — busiest subscribers</h2>
+            <Again onClick={againPeople} busy={busy} />
+          </div>
           {people.length === 0 ? (
             <p className="hint">Nothing was sent in this range.</p>
           ) : (
-            <table className="grid">
-              <thead>
-                <tr>
-                  <th>Subscriber</th>
-                  <th>Channel</th>
-                  <th>Plan</th>
-                  <th>Districts</th>
-                  <th className="num">Received</th>
-                  <th className="num">Per day</th>
-                </tr>
-              </thead>
-              <tbody>
-                {people.map((one) => (
-                  <tr key={one.user_id}>
-                    <td>
-                      <Link href={`/admin/subscribers/${one.user_id}`}>
-                        #{one.user_id}
-                      </Link>
-                    </td>
-                    <td>{one.channel ?? "—"}</td>
-                    <td>{one.plan ?? "—"}</td>
-                    <td>
-                      {one.districts.length ? one.districts.join(", ") : "—"}
-                    </td>
-                    <td className="num">{one.sent.toLocaleString("en-GB")}</td>
-                    <td className="num">{(one.sent / days_in_range).toFixed(1)}</td>
+            <div className="scroll-x">
+              <table className="grid">
+                <thead>
+                  <tr>
+                    <th>Subscriber</th>
+                    <th>Channel</th>
+                    <th>Plan</th>
+                    <th>Districts</th>
+                    <th className="num">Received</th>
+                    <th className="num">Per day</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {people.map((one) => (
+                    <tr key={one.user_id}>
+                      <td>
+                        <Link href={`/admin/subscribers/${one.user_id}`}>
+                          #{one.user_id}
+                        </Link>
+                      </td>
+                      <td>{one.channel ?? "—"}</td>
+                      <td>{one.plan ?? "—"}</td>
+                      <td>
+                        {one.districts.length ? one.districts.join(", ") : "—"}
+                      </td>
+                      <td className="num">{one.sent.toLocaleString("en-GB")}</td>
+                      <td className="num">{(one.sent / days_in_range).toFixed(1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
           <Why text="Кто получил больше всего уведомлений за период, по sent_at — то есть по тому, что реально ушло. Districts — районы из его активной подписки. Для WhatsApp этот же список с октября является списком самых дорогих подписчиков." />
         </div>
       </div>
 
       <div className="dash-row dash-row-wide">
-        <div className="card">
-          <h2>By district</h2>
+        <div className="card panel">
+          <div className="panel-head">
+            <h2>By district</h2>
+            <Again onClick={againDays} busy={busy} />
+          </div>
 
           {shown.length === 0 ? (
             <p className="hint">
@@ -241,45 +314,47 @@ export function DistrictsView({
               minutes, so this fills in on its own.
             </p>
           ) : (
-            <table className="grid">
-              <thead>
-                <tr>
-                  {COLUMNS.map((one) => (
-                    <th
-                      key={one.key}
-                      className={one.numeric ? "num sortable" : "sortable"}
-                      aria-sort={
-                        sort.column === one.key
-                          ? sort.down
-                            ? "descending"
-                            : "ascending"
-                          : "none"
-                      }
-                    >
-                      <button type="button" onClick={() => pick(one.key)}>
-                        {one.label}
-                        {sort.column === one.key ? (sort.down ? " ↓" : " ↑") : ""}
-                      </button>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((one) => (
-                  <tr key={one.district}>
-                    <td>
-                      <strong>{one.district}</strong>
-                    </td>
-                    <td className="muted">{one.name || "—"}</td>
-                    <td className="num">{one.total.toLocaleString("en-GB")}</td>
-                    <td className="num">{one.average.toFixed(1)}</td>
-                    <td className="num">{one.max}</td>
-                    <td className="num">{one.min}</td>
-                    <td className="num">{one.present}</td>
+            <div className="scroll-x">
+              <table className="grid">
+                <thead>
+                  <tr>
+                    {COLUMNS.map((one) => (
+                      <th
+                        key={one.key}
+                        className={one.numeric ? "num sortable" : "sortable"}
+                        aria-sort={
+                          sort.column === one.key
+                            ? sort.down
+                              ? "descending"
+                              : "ascending"
+                            : "none"
+                        }
+                      >
+                        <button type="button" onClick={() => pick(one.key)}>
+                          {one.label}
+                          {sort.column === one.key ? (sort.down ? " ↓" : " ↑") : ""}
+                        </button>
+                      </th>
+                    ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {shown.map((one) => (
+                    <tr key={one.district}>
+                      <td>
+                        <strong>{one.district}</strong>
+                      </td>
+                      <td className="muted">{one.name || "—"}</td>
+                      <td className="num">{one.total.toLocaleString("en-GB")}</td>
+                      <td className="num">{one.average.toFixed(1)}</td>
+                      <td className="num">{one.max}</td>
+                      <td className="num">{one.min}</td>
+                      <td className="num">{one.present}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
           {pages > 1 && (

@@ -65,6 +65,13 @@ def expiring_notice(
     )
 
 def expiry_notice(plan: str, share: int | None = None, link: str | None = None) -> str:
+    """What somebody is told the moment their trial or their plan runs out.
+
+    Says what happened, then what to do about it, in that order. The last thing
+    anybody needs at this point is a price list: they need the one tap that
+    turns the alerts back on, and somewhere to read about it if they would
+    rather not decide inside a chat window.
+    """
 
     what = "free trial" if plan == "trial" else "subscription"
     if share is None or share >= 100:
@@ -80,8 +87,16 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
             "",
             KEPT,
             "",
-            f"Full access: {link}" if link else "/pay — full access",
+            "To carry on:",
+            # Numbered, because it is a two-step instruction and "tap the link"
+            # on its own left people asking what happens after they pay.
+            f"1. Open {link} and pay by card." if link
+            else "1. Send /pay for a payment link.",
+            "2. The alerts start again straight away — nothing to set up.",
             "",
+            f"More about the service: {SITE}",
+            "",
+            "/update — change what you are looking for",
             "/stop — delete my filter for good",
         ]
     )

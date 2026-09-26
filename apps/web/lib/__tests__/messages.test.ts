@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Criteria } from "../criteria";
-import { criteriaCard, criteriaSet } from "../messages";
+import { criteriaCard, criteriaSet, refundIssued } from "../messages";
 
 // Every field the form can send, and nothing else: see parseForm.
 const full: Criteria = {
@@ -116,5 +116,36 @@ describe("property type in the card", () => {
     expect(criteriaCard({ areas: { postcode_districts: ["SE16"] } })).not.toContain(
       "Type:",
     );
+  });
+});
+
+describe("a refund", () => {
+  it("names the amount with its pence", () => {
+    // The same rounding bug that made £19.99 read as £20 in the admin would be
+    // worse here: this message is a receipt.
+    expect(refundIssued(1999, null)).toContain("£19.99 has been refunded");
+  });
+
+  it("says the alerts have dropped back when the plan is over", () => {
+    expect(refundIssued(1999, null)).toContain("Full access has ended");
+    expect(refundIssued(1999, new Date(Date.now() - 86_400_000))).toContain(
+      "Full access has ended",
+    );
+  });
+
+  it("says when access still runs, for a partial refund", () => {
+    const later = new Date(Date.now() + 5 * 86_400_000);
+    const text = refundIssued(500, later);
+    expect(text).toContain("Full access runs until");
+    expect(text).toContain(later.toISOString().slice(0, 10));
+  });
+
+  it("says the filter is kept and how to come back", () => {
+    // A message that only confirms the money leaves somebody wondering whether
+    // their search still exists.
+    const text = refundIssued(1999, null);
+    expect(text).toContain("Your filter is kept");
+    expect(text).toContain("/pay");
+    expect(text).toContain("/update");
   });
 });

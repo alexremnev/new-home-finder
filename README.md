@@ -63,15 +63,13 @@ gh run watch
 
 ### Frequency is data, not cron
 
-The cron trigger only ticks. The `schedules` table decides what is due, per job
-and per source, so a frequency change needs no commit and no deploy:
+How often a job runs is a systemd timer — `OnUnitInactiveSec` in
+`deploy/systemd/london-home-finder-<job>.timer`. The `schedules` table that used
+to decide this was dropped in migration 0021, along with the `tick` command and
+the `hot` job that went with it.
 
-```sql
-UPDATE schedules SET interval_seconds = 300
- WHERE job = 'hot' AND source_key = 'openrent';
-```
-
-Request pacing within a single run is a separate knob, also per source:
+Request pacing within a single run is a separate knob, per source, and does live
+in the database:
 
 ```sql
 UPDATE sources

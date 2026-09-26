@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { pounds } from "@/lib/money";
 import { neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
 
 import { TelegramMark, WhatsAppMark } from "./logos";
@@ -17,6 +18,18 @@ type Props = {
   // bot then contradicts. The trial differs by messenger because a WhatsApp
   // alert is billed per message; the price differs for the same reason.
   offers: Record<Channel, Offer>;
+
+  /**
+   * Set when somebody who already has a filter is changing it, from a /update
+   * link. Then there is nothing to sell: they are on a messenger already and
+   * the only question is whether to save. Prices and a free trial on this page
+   * would be answering a question they did not ask.
+   */
+  returning?: {
+    channel: Channel;
+    full: boolean;
+    upgradeUrl: string | null;
+  } | null;
 
   names?: Record<string, string>;
 };
@@ -48,7 +61,6 @@ const rooms = (value: number) => String(value);
 const TYPE_LABELS: Record<string, string> = {
   flat: "Flat",
   house: "House",
-  studio: "Studio",
   room: "Room in a shared flat",
 };
 const beds = (value: number) => (value === 0 ? "Studio" : String(value));
@@ -58,7 +70,8 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
-  districts, maxDistricts, furnished, types, whatsappReady, offers, names = {},
+  districts, maxDistricts, furnished, types, whatsappReady, offers,
+  returning = null, names = {},
 }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
@@ -375,7 +388,8 @@ export function SubscribeForm({
           ))}
         </div>
         <small className="note">
-          Ticking Flat and House is how you stop hearing about rooms and studios.
+          Ticking Flat and House is how you stop hearing about rooms. A studio is
+          a flat — ask for one with the bedroom slider at Studio.
           A listing that does not say what it is still comes through.
         </small>
       </fieldset>
@@ -413,44 +427,111 @@ export function SubscribeForm({
       <div className="hero-actions">
       {error && <p className="error">{error}</p>}
 
-      <p className="offers-lead">Start with a free trial. Cancel anytime.</p>
-
-      <div className={whatsappReady ? "offers" : "offers offers-one"}>
-        <Choice
-          channel="telegram"
-          label="Connect Telegram"
-          mark={<TelegramMark />}
-          offer={offers.telegram}
+      {returning ? (
+        <Save
+          channel={returning.channel}
+          full={returning.full}
+          upgradeUrl={returning.upgradeUrl}
           busy={busy}
           ready={chosen.length > 0}
-          // Free to deliver on, so it is the one we would rather people use —
-          // and saying so is more honest than pricing them towards it quietly.
-          flag="Highly recommended"
         />
+      ) : (
+        <>
+          <p className="offers-lead">Start with a free trial. Cancel anytime.</p>
 
-        {whatsappReady && (
-          <Choice
-            channel="whatsapp"
-            label="Connect WhatsApp"
-            mark={<WhatsAppMark />}
-            offer={offers.whatsapp}
-            busy={busy}
-            ready={chosen.length > 0}
-          />
-        )}
-      </div>
+          <div className={whatsappReady ? "offers" : "offers offers-one"}>
+            <Choice
+              channel="telegram"
+              label="Connect Telegram"
+              mark={<TelegramMark />}
+              offer={offers.telegram}
+              busy={busy}
+              ready={chosen.length > 0}
+              // Free to deliver on, so it is the one we would rather people use
+              // — and saying so is more honest than pricing them towards it
+              // quietly.
+              flag="Highly recommended"
+            />
+
+            {whatsappReady && (
+              <Choice
+                channel="whatsapp"
+                label="Connect WhatsApp"
+                mark={<WhatsAppMark />}
+                offer={offers.whatsapp}
+                busy={busy}
+                ready={chosen.length > 0}
+              />
+            )}
+          </div>
+        </>
+      )}
       </div>
     </form>
   );
 }
 
-// Pence shown only when there are pence: "£4.99", but "£5" rather than "£5.00".
-// A trailing ".00" on a price list reads as a rounding artefact.
-const pounds = (pence: number) =>
-  "£" +
-  (pence % 100 === 0
-    ? String(pence / 100)
-    : (pence / 100).toFixed(2));
+// Saving a changed filter. One button, back to the messenger they are already
+// on — no price, no trial, nothing to choose between.
+//
+// The exception is somebody whose plan has run out: they are about to save a
+// filter that will only be delivered in part, and not saying so would be the
+// unpleasant surprise. So the offer appears here, and only here.
+function Save({
+  channel,
+  full,
+  upgradeUrl,
+  busy,
+  ready,
+}: {
+  channel: Channel;
+  full: boolean;
+  upgradeUrl: string | null;
+  busy: Channel | null;
+  ready: boolean;
+}) {
+  const where = channel === "whatsapp" ? "WhatsApp" : "Telegram";
+
+  return (
+    <div className="offers offers-one">
+      <div className="offer">
+        <ul className="offer-points">
+          <li>
+            <Tick /> Your new filter replaces the old one
+          </li>
+          <li>
+            <Tick /> Only listings from now on
+          </li>
+        </ul>
+
+        <button
+          type="submit"
+          name="channel"
+          value={channel}
+          className={`cta cta-${channel}`}
+          disabled={busy !== null || !ready}
+        >
+          {channel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}
+          {busy === channel ? "One moment…" : `Save and back to ${where}`}
+        </button>
+
+        {!full && (
+          <p className="offer-lapsed">
+            Your plan has ended, so only part of what matches is being sent.
+            {upgradeUrl ? (
+              <>
+                {" "}
+                <a href={upgradeUrl}>Get full access</a>
+              </>
+            ) : (
+              " Send /pay to the bot for full access."
+            )}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // One messenger's offer: what it costs to try, then the button that starts it.
 //

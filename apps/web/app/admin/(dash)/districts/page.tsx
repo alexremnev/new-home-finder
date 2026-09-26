@@ -33,6 +33,7 @@ export default async function DistrictsPage({
       recipients={recipients}
       names={names}
       label={win.label}
+      span={win.key}
       // How many London days the range covers, for the per-day averages. Taken
       // from the range rather than counted from the rows: a district silent for
       // five days of seven produces less per day, and dividing by the days that

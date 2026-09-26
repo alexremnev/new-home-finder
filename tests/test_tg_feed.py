@@ -97,9 +97,12 @@ def test_the_label_is_matched_however_the_source_decorates_it() -> None:
         assert parse(text, BUTTONS, received_at=SENT).price_pcm == 1700, variant
 
 class TestValues:
-    def test_a_studio_is_no_bedrooms_and_a_property_type(self) -> None:
+    def test_a_studio_is_a_flat_with_no_bedrooms(self) -> None:
 
-        assert bedrooms_of("Studio") == (0, "studio")
+        # Not a type of its own. Stored as "studio" it was invisible to a filter
+        # for flats — which is the filter a studio hunter also ticks — and the
+        # nought already carries the meaning.
+        assert bedrooms_of("Studio") == (0, "flat")
 
     def test_a_room_in_a_share_is_named_as_one(self) -> None:
         assert bedrooms_of("Room in a share") == (1, "room")
