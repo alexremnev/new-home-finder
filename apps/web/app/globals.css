@@ -648,8 +648,8 @@ form p.error {
   border: 0;
 }
 
-/* The date and how many days either side of it, on one line. The number is
-   first because it reads as "± 10 days of —" left to right. */
+/* The date, then how many days either side of it, on one line: the date is the
+   decision and the window qualifies it. */
 .date-row {
   display: flex;
   align-items: flex-end;

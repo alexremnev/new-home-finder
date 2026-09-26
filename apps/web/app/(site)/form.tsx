@@ -70,18 +70,33 @@ const beds = (value: number) => (value === 0 ? "Studio" : String(value));
 const DAY_WINDOW = 10;
 const DAY_WINDOW_MAX = 90;
 
-// Internal floor area, in square feet because that is what British listings
-// quote. 100 is a small single room; 3000 is a large house, and the top handle
-// parked there means "and above".
-const AREA_MIN = 100;
-const AREA_MAX = 3000;
-const AREA_STEP = 50;
+// The slider is in square metres, and so is everything the person reads. The
+// database keeps square feet, because that is the unit British listings quote
+// and one of the two sources states it that way — so the conversion happens
+// once, where the form is submitted. See `submit`.
+//
+// ── why the steps are uneven ─────────────────────────────────────────────
+//
+// The interesting part of this scale is the bottom. A studio is about 30 m² and
+// a two-bed about 70; the difference between 240 and 260 decides nothing. An
+// even step fine enough for the bottom would make the handle crawl across the
+// top, and one coarse enough for the top cannot tell a studio from a one-bed.
+//
+// So: 5 m² up to 100, then 10 to 200, then 20 to 300. Each stop gets the same
+// travel, which puts the precision where the pointing is hard.
+const AREA_STOPS = [
+  ...Array.from({ length: 21 }, (_, i) => i * 5),        // 0 … 100
+  ...Array.from({ length: 10 }, (_, i) => 110 + i * 10), // 110 … 200
+  ...Array.from({ length: 5 }, (_, i) => 220 + i * 20),  // 220 … 300
+];
+const AREA_MIN = AREA_STOPS[0]!;
+const AREA_MAX = AREA_STOPS[AREA_STOPS.length - 1]!;
 
-// 10.7639 square feet to the square metre. Shown beside the feet because most
-// people outside the lettings trade think in metres.
+// 10.7639 square feet to the square metre.
 const SQFT_PER_SQM = 10.7639;
-const sqft = (value: number) => value.toLocaleString("en-GB") + " ft²";
-const sqm = (value: number) => Math.round(value / SQFT_PER_SQM) + " m²";
+const asSqft = (sqm: number) => Math.round(sqm * SQFT_PER_SQM);
+const sqm = (value: number) => value.toLocaleString("en-GB") + " m²";
+const sqft = (value: number) => asSqft(value).toLocaleString("en-GB") + " ft²";
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
 const percent = (value: number, min: number, max: number) =>
@@ -205,9 +220,10 @@ export function SubscribeForm({
     }
     if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
     if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
-    // The top handle at its ceiling means "and above", so no maximum is sent.
-    if (area[0] > AREA_MIN) payload.area_min = String(area[0]);
-    if (area[1] < AREA_MAX) payload.area_max = String(area[1]);
+    // Metres on the slider, feet in the database — converted here, once. The
+    // top handle at its ceiling means "and above", so no maximum is sent.
+    if (area[0] > AREA_MIN) payload.area_min = String(asSqft(area[0]));
+    if (area[1] < AREA_MAX) payload.area_max = String(asSqft(area[1]));
 
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
@@ -441,22 +457,23 @@ export function SubscribeForm({
       </div>
 
       <div>
-        <span className="field-label">Floor area</span>
+        <span className="field-label">Desired property size</span>
         <RangeSlider
           min={AREA_MIN}
           max={AREA_MAX}
-          step={AREA_STEP}
+          step={1}
+          stops={AREA_STOPS}
           value={area}
           onChange={setArea}
-          format={sqft}
+          format={sqm}
           openTop="+"
         />
-        {/* The same numbers in metres, under the feet. Not a second control:
+        {/* The same numbers in feet, under the metres. Not a second control:
             one slider, read twice. */}
         <p className="range2-metric">
           {area[0] === AREA_MIN && area[1] === AREA_MAX
             ? "Any size"
-            : `${sqm(area[0])} — ${sqm(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
+            : `${sqft(area[0])} — ${sqft(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
         </p>
         <small className="note">
           Most listings never say how big they are, and those still come through —
@@ -467,6 +484,17 @@ export function SubscribeForm({
       <div>
         <span className="field-label">Desired let available date</span>
         <div className="date-row">
+          <label className="date-on">
+            <span className="sr-only">Date</span>
+            <input
+              type="date"
+              name="available_on"
+              value={availableOn}
+              onChange={(event) => setAvailableOn(event.target.value)}
+            />
+          </label>
+          {/* Second in the markup as well as on the screen, so tabbing goes
+              date then window — the order they are decided in. */}
           <label className="date-days">
             <span>± days</span>
             <input
@@ -486,15 +514,6 @@ export function SubscribeForm({
                     : 0,
                 );
               }}
-            />
-          </label>
-          <label className="date-on">
-            <span className="sr-only">Date</span>
-            <input
-              type="date"
-              name="available_on"
-              value={availableOn}
-              onChange={(event) => setAvailableOn(event.target.value)}
             />
           </label>
         </div>
@@ -756,6 +775,7 @@ function Tick() {
 
 function RangeSlider({
   min, max, step, value, onChange, format, openTop = "", disabled = false,
+  stops,
 }: {
   min: number;
   max: number;
@@ -765,10 +785,43 @@ function RangeSlider({
   format: (n: number) => string;
   openTop?: string;
   disabled?: boolean;
+  /**
+   * The values the handles may take, when they should not be evenly spaced.
+   *
+   * A native range input has one step, so a scale that is fine at the bottom
+   * and coarse at the top cannot be expressed with `step` alone. Given stops,
+   * the input runs over their indices instead and each stop gets the same
+   * amount of travel — which is the point: the crowded end of the scale is
+   * where the pointing is hard.
+   *
+   * `value` and `onChange` still speak in real values either way, so no caller
+   * has to know about indices.
+   */
+  stops?: number[];
 }) {
   const [low, high] = value;
-  const atFloor = low === min;
-  const atCeiling = high === max;
+
+  // An index, or the value itself when the scale is even. `min`/`max`/`step`
+  // are what the input is given in both cases, so the rest of the component
+  // does not branch.
+  const at = (one: number) => {
+    if (!stops) return one;
+    let best = 0;
+    for (let i = 1; i < stops.length; i += 1) {
+      if (Math.abs(stops[i]! - one) < Math.abs(stops[best]! - one)) best = i;
+    }
+    return best;
+  };
+  const from = (position: number) =>
+    stops ? stops[Math.min(stops.length - 1, Math.max(0, Math.round(position)))]! : position;
+
+  const floor = stops ? 0 : min;
+  const ceiling = stops ? stops.length - 1 : max;
+  const tick = stops ? 1 : step;
+  const lowAt = at(low);
+  const highAt = at(high);
+  const atFloor = lowAt === floor;
+  const atCeiling = highAt === ceiling;
 
   return (
     <div className={disabled ? "range2 range2-off" : "range2"}>
@@ -782,40 +835,44 @@ function RangeSlider({
         <div
           className="range2-fill"
           style={{
-            left: `${percent(low, min, max)}%`,
-            right: `${100 - percent(high, min, max)}%`,
+            left: `${percent(lowAt, floor, ceiling)}%`,
+            right: `${100 - percent(highAt, floor, ceiling)}%`,
           }}
         />
         <input
           type="range"
           className="range2-input"
-          style={{ zIndex: low >= (min + max) / 2 ? 3 : 2 }}
-          min={min}
-          max={max}
-          step={step}
-          value={low}
+          style={{ zIndex: lowAt >= (floor + ceiling) / 2 ? 3 : 2 }}
+          min={floor}
+          max={ceiling}
+          step={tick}
+          value={lowAt}
           aria-label="Lowest"
           disabled={disabled}
-          onChange={(event) => onChange([Math.min(Number(event.target.value), high), high])}
+          onChange={(event) =>
+            onChange([Math.min(from(Number(event.target.value)), high), high])
+          }
         />
         <input
           type="range"
           className="range2-input"
-          style={{ zIndex: low >= (min + max) / 2 ? 2 : 3 }}
-          min={min}
-          max={max}
-          step={step}
-          value={high}
+          style={{ zIndex: lowAt >= (floor + ceiling) / 2 ? 2 : 3 }}
+          min={floor}
+          max={ceiling}
+          step={tick}
+          value={highAt}
           aria-label="Highest"
           disabled={disabled}
-          onChange={(event) => onChange([low, Math.max(Number(event.target.value), low)])}
+          onChange={(event) =>
+            onChange([low, Math.max(from(Number(event.target.value)), low)])
+          }
         />
       </div>
 
       <div className="range2-ends">
-        <span>{format(min)}</span>
+        <span>{format(from(floor))}</span>
         <span>
-          {format(max)}
+          {format(from(ceiling))}
           {openTop}
         </span>
       </div>
