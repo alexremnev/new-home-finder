@@ -260,6 +260,31 @@ def known_external_ids(
         ).fetchall()
     }
 
+def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None:
+    """The largest sitemap this source has served us lately, in listings.
+
+    OpenRent sometimes answers the same sitemap url with a complete but stunted
+    file — 123 listings where there are normally 25,000, closing tag and all, so
+    nothing about the response says it is short. Only its size does, and only
+    compared against what the same url usually gives.
+
+    None when there is no history to compare against, which is the first run and
+    is not a reason to distrust anything.
+    """
+
+    row = conn.execute(
+        """
+        SELECT max((counters->>'in_sitemap')::int) AS most
+          FROM job_stages
+         WHERE stage = 'scrape' AND source_key = %s
+           AND jsonb_typeof(counters->'in_sitemap') = 'number'
+           AND started_at > now() - make_interval(days => %s)
+        """,
+        (source_key, days),
+    ).fetchone()
+    most = None if row is None else row["most"]
+    return None if most is None else int(most)
+
 def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
 
     return list(

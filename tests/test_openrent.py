@@ -82,7 +82,15 @@ class FakeRun:
 class FakeConn:
     """A connection that answers the two queries the scraper makes."""
 
-    def __init__(self, districts: list[str], settled: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        districts: list[str],
+        settled: list[str] | None = None,
+        biggest: int | None = None,
+    ) -> None:
+        # The largest sitemap seen lately, as store.biggest_sitemap reports it.
+        # None means no history, which is a first run.
+        self.biggest = biggest
         self.districts = districts
         self.settled = list(settled or [])
         self.inserted: list[object] = []
@@ -98,6 +106,9 @@ class FakeConn:
             # The districts live subscriptions name — what the scraper now
             # follows instead of an operator's list of coverage.
             self.rows = [{"code": code} for code in self.districts]
+        elif "max((counters->>'in_sitemap')::int)" in sql:
+            self.one = {"most": self.biggest}
+            self.rows = []
         elif "FROM source_sweeps" in sql:
             self.rows = [{"district": code} for code in self.settled]
         elif "INSERT INTO source_sweeps" in sql:
@@ -405,3 +416,36 @@ def test_a_page_without_a_picture_is_recorded_as_looked_at() -> None:
     conn = FakeConn(districts=["SE16"], settled=["SE16"])
     collect(conn, FakeRun(), get=serving([7]), pause=0)
     assert conn.images == [None]
+
+def test_a_stunted_sitemap_settles_nothing() -> None:
+    from worker.sources.openrent import collect
+
+    # OpenRent answers the same url with a complete but tiny file now and
+    # again — 123 listings where there are normally 25,000, closing tag and all.
+    # Settling a district on that says "we have read this through" on the
+    # strength of half a percent of the list, and from the next run its whole
+    # standing backlog is announced as new.
+    conn = FakeConn(districts=["SE16"], biggest=25_000)
+    swept = collect(conn, FakeRun(), get=serving([]), pause=0)
+
+    assert conn.settled == []
+    assert swept.announce == []
+
+def test_a_full_sitemap_still_settles_a_quiet_district() -> None:
+    from worker.sources.openrent import collect
+
+    # A whole sitemap that happens to hold nothing in our district. That is the
+    # case settling is for: we have read the list, SE16 is not in it, so from
+    # now on anything appearing there appeared after we looked.
+    conn = FakeConn(districts=["SE16"], biggest=3)
+    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
+    assert conn.settled == ["SE16"]
+
+def test_with_no_history_nothing_is_distrusted() -> None:
+    from worker.sources.openrent import collect
+
+    # The first run has nothing to compare against. Refusing to settle then
+    # would mean never settling at all.
+    conn = FakeConn(districts=["SE16"], biggest=None)
+    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
+    assert conn.settled == ["SE16"]

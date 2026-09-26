@@ -1,17 +1,24 @@
 # OpenRent, read from the site rather than from the Telegram feed.
 #
-# Slower than ingest on purpose. The sitemap carries no lastmod, so every run
-# fetches it whole to find what is new — doing that every two minutes would be
-# rude to a site that allowed us in, and there is nothing to gain: a listing
-# discovered fifteen minutes later is still discovered the same day it appeared.
+# Slower than ingest on purpose, and slower than it was. The sitemap carries no
+# lastmod, so every run fetches the whole nationwide file — about 5MB per child
+# sitemap — to find what is new. There is no way to ask for less: OpenRent sends
+# no Last-Modified, no ETag and no Content-Length, answers Cache-Control
+# no-store, ignores Range, and serves the file uncompressed whatever
+# Accept-Encoding asks for. So the only lever on the bill is how often we ask.
+#
+# Measured over four days at fifteen minutes: about 950MB a day to discover two
+# or three new listings. Half an hour halves that, and costs a listing at most
+# another fifteen minutes — which the sitemap's own refresh already costs us
+# without telling anybody.
 [Unit]
-Description=Scrape OpenRent every fifteen minutes
+Description=Scrape OpenRent every half hour
 
 [Timer]
 Unit=london-home-finder@scrape.service
 OnBootSec=3min
-OnUnitInactiveSec=15min
-RandomizedDelaySec=60s
+OnUnitInactiveSec=30min
+RandomizedDelaySec=90s
 AccuracySec=30s
 Persistent=true
 

@@ -359,6 +359,29 @@ def collect(
             found.extend(listings_in(sitemap))
         stage.set("in_sitemap", len(found))
 
+        # OpenRent sometimes answers the same sitemap url with a complete but
+        # stunted file: 123 listings where there are normally 25,000, closing
+        # tag and all. Nothing in the response says it is short — no
+        # Content-Length, no ETag, no Last-Modified — so the only tell is its
+        # size against what that url usually gives.
+        #
+        # It does not matter for what gets announced: a short sitemap yields
+        # nothing fresh, so nothing is wrongly sent. It matters for settling.
+        # A district is marked read-through when nothing new is left in it, and
+        # on one of these runs that is true of every district by accident. Settle
+        # a newly added district on a 0.5% sample and its whole standing backlog
+        # is announced as new from the next run — the exact flood settling
+        # exists to prevent.
+        biggest = store.biggest_sitemap(conn, SOURCE_KEY)
+        stunted = biggest is not None and len(found) * 2 < biggest
+        if stunted:
+            stage.set("sitemap_stunted", True)
+            stage.log(
+                "warn",
+                f"sitemap served {len(found)} listings where it usually serves "
+                f"{biggest}; reading it but not settling any district on it",
+            )
+
         here = [one for one in found if one.district in wanted]
         stage.set("in_our_districts", len(here))
 
@@ -382,10 +405,14 @@ def collect(
 
         # A district with nothing new left in it has been read through. From the
         # next run on, anything appearing there appeared after we looked.
+        #
+        # Skipped entirely on a stunted sitemap: "nothing new left" is only
+        # evidence when we have seen the whole list.
         with_fresh = {one.district for one in fresh}
-        for district in sorted(wanted - with_fresh - settled):
-            store.settle_district(conn, SOURCE_KEY, district)
-            stage.count("district_settled")
+        if not stunted:
+            for district in sorted(wanted - with_fresh - settled):
+                store.settle_district(conn, SOURCE_KEY, district)
+                stage.count("district_settled")
 
         refused = 0
         for index_of, one in enumerate(fresh[:budget]):

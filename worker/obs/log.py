@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -33,16 +34,24 @@ class Run:
         self.trigger = trigger
         self.dry_run = dry_run
         self.counters: dict[str, int] = {}
+        # Which machine this is. The scrape job runs both from the server and
+        # from a desk — OpenRent answers the server 405 for content pages — and
+        # without this the run log cannot say which of them made a request.
+        host = socket.gethostname()[:120] or None
         row = conn.execute(
             """
-            INSERT INTO job_runs (job, trigger, run_url) VALUES (%s, %s, %s)
+            INSERT INTO job_runs (job, trigger, run_url, host) VALUES (%s, %s, %s, %s)
             RETURNING id
             """,
-            (job, trigger, run_url),
+            (job, trigger, run_url, host),
         ).fetchone()
         assert row is not None
         self.id: int = row["id"]
-        self.event("info", f"run started: job={job} trigger={trigger}", dry_run=dry_run)
+        self.event(
+            "info",
+            f"run started: job={job} trigger={trigger} host={host}",
+            dry_run=dry_run,
+        )
 
     def event(
         self,
