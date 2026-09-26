@@ -1,26 +1,73 @@
 # OpenRent, read from the site rather than from the Telegram feed.
 #
-# Slower than ingest on purpose, and slower than it was. The sitemap carries no
-# lastmod, so every run fetches the whole nationwide file — about 5MB per child
-# sitemap — to find what is new. There is no way to ask for less: OpenRent sends
-# no Last-Modified, no ETag and no Content-Length, answers Cache-Control
-# no-store, ignores Range, and serves the file uncompressed whatever
-# Accept-Encoding asks for. So the only lever on the bill is how often we ask.
+# ── why this is a calendar and not an interval ───────────────────────────
 #
-# Measured over four days at fifteen minutes: about 950MB a day to discover two
-# or three new listings. Half an hour halves that, and costs a listing at most
-# another fifteen minutes — which the sitemap's own refresh already costs us
-# without telling anybody.
+# The sitemap carries no lastmod, so every run fetches the whole nationwide
+# file — about 5MB per child sitemap — to find what is new. There is no way to
+# ask for less: OpenRent sends no Last-Modified, no ETag and no Content-Length,
+# answers Cache-Control no-store, ignores Range, and serves the file
+# uncompressed whatever Accept-Encoding asks for. All of that was measured, not
+# assumed.
+#
+# So the only lever on the bill is how often we ask, and the answer is not a
+# constant: London letting agents publish during office hours. At a flat fifteen
+# minutes this cost about 950MB a day to discover two or three listings, a third
+# of it overnight when nothing is posted at all.
+#
+# ── the schedule, in London time ─────────────────────────────────────────
+#
+#   weekdays  07:20–17:00   every 20 minutes   (29 runs)
+#   weekdays  17:00–22:00   hourly             (5 runs)
+#   weekdays  22:00–07:20   not at all
+#   weekends  10:00–20:00   hourly             (10 runs)
+#
+# Each band's stated end is exclusive, which is what makes the two weekday bands
+# meet at 17:00 without firing twice. So the last twenty-minute run is 16:40 and
+# the last evening run is 21:00.
+#
+# About 190 runs a week against roughly 980 before — a fivefold cut, and none of
+# it during the hours that produced nothing.
+#
+# ── this needs the server clock set to London ────────────────────────────
+#
+# systemd reads OnCalendar in the machine's own timezone, and there is no
+# per-timer setting for it on every version. So the server must be on London
+# time:
+#
+#     sudo timedatectl set-timezone Europe/London
+#     timedatectl | grep 'Time zone'
+#
+# Skip it and the whole schedule shifts by an hour through British Summer Time —
+# runs from 08:00 to 16:00 instead of 09:00 to 17:00. Nothing breaks, but it is
+# not what was asked for. Every other timer in this project is relative
+# (OnUnitInactiveSec), so changing the zone moves nothing else.
 [Unit]
-Description=Scrape OpenRent every half hour
+Description=Scrape OpenRent on London working hours
 
 [Timer]
 Unit=london-home-finder@scrape.service
-OnBootSec=3min
-OnUnitInactiveSec=30min
+
+# Weekdays, the working day: every twenty minutes from 07:20.
+#
+# Two lines rather than one because the day does not start on the hour: the
+# first covers 07:20 and 07:40, the second the whole hours after it. Written as
+# `07..16:00/20` it would have added a run at 07:00 that nobody asked for.
+OnCalendar=Mon..Fri 07:20,40
+OnCalendar=Mon..Fri 08..16:00/20
+# Weekday evenings: hourly.
+OnCalendar=Mon..Fri 17..21:00
+# Weekends, a shorter day: hourly.
+OnCalendar=Sat,Sun 10..19:00
+
+# A minute and a half of jitter, so we are not on the stroke of the hour with
+# everybody else's crontab.
 RandomizedDelaySec=90s
 AccuracySec=30s
-Persistent=true
+
+# Deliberately NOT Persistent. A run missed because the machine was off should
+# be skipped, not fired the moment it boots — which on a reboot at 03:00 would
+# mean a scrape in the middle of the hours this schedule exists to avoid.
+Persistent=false
 
 [Install]
 WantedBy=timers.target

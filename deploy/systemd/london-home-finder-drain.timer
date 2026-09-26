@@ -1,5 +1,5 @@
 [Unit]
-Description=Run drain every five minutes
+Description=Run drain every two minutes
 
 [Timer]
 Unit=london-home-finder@drain.service

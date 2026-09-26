@@ -1,5 +1,5 @@
 [Unit]
-Description=Run ingest every five minutes
+Description=Run ingest every two minutes
 
 [Timer]
 Unit=london-home-finder@ingest.service

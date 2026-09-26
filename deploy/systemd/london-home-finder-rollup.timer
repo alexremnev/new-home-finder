@@ -1,5 +1,5 @@
 [Unit]
-Description=Run rollup every five minutes
+Description=Run rollup every two minutes
 
 [Timer]
 Unit=london-home-finder@rollup.service
