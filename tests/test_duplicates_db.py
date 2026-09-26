@@ -17,7 +17,10 @@ pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL is not set")
 
 MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "db" / "migrations"
 
-WIPE = "TRUNCATE listings RESTART IDENTITY CASCADE"
+WIPE = (
+    "TRUNCATE listings, notifications, subscriptions, user_channels, users, "
+    "whatsapp_cost_alerts RESTART IDENTITY CASCADE"
+)
 
 
 @pytest.fixture(scope="module")
@@ -176,3 +179,137 @@ def test_a_copy_is_never_offered_for_matching(conn: Any) -> None:
 
     offered = store.listings_for_matching(conn, [first, second])
     assert [int(row["id"]) for row in offered] == [first]
+
+
+# ── what a WhatsApp subscriber may cost ──────────────────────────────────
+#
+# These share this file's whole-chain schema fixture; the caps live in SQL, so
+# nothing about them can be exercised without a database.
+
+def _wa_user(conn: Any, *, plan: str = "free", days: int | None = None) -> int:
+    row = conn.execute(
+        """
+        INSERT INTO users (status, consent_at, consent_source, plan, plan_until)
+        VALUES ('active', now(), 'test', %s,
+                CASE WHEN %s::int IS NULL THEN NULL
+                     ELSE now() + make_interval(days => %s::int) END)
+        RETURNING id
+        """,
+        (plan, days, days),
+    ).fetchone()
+    user = int(row["id"])
+    conn.execute(
+        """
+        INSERT INTO user_channels
+                (user_id, channel, address, is_primary, verified_at, last_inbound_at)
+        VALUES (%s, 'whatsapp', %s, true, now(), now())
+        """,
+        (user, f"4470000{user:05d}"),
+    )
+    conn.execute(
+        "INSERT INTO subscriptions (user_id, criteria, active) VALUES (%s, '{}', true)",
+        (user,),
+    )
+    return user
+
+
+def _sent_today(conn: Any, user: int, howmany: int) -> None:
+    for _ in range(howmany):
+        conn.execute(
+            """
+            INSERT INTO notifications (user_id, channel, kind, status, sent_at)
+            VALUES (%s, 'whatsapp', 'new_listing', 'sent', now())
+            """,
+            (user,),
+        )
+
+
+def test_a_non_payer_is_held_at_thirty_a_day(conn: Any) -> None:
+    user = _wa_user(conn, plan="free")
+    _sent_today(conn, user, 30)
+    conn.execute(
+        """
+        INSERT INTO notifications (user_id, channel, kind, status)
+        VALUES (%s, 'whatsapp', 'new_listing', 'queued')
+        """,
+        (user,),
+    )
+
+    # Held, not refused: the row stays queued and no attempt is spent, so it
+    # goes out when the London day rolls over.
+    claimed = store.claim_queued(conn, limit=10, max_attempts=5)
+    assert claimed == []
+    left = conn.execute(
+        "SELECT status, attempts FROM notifications WHERE status = 'queued'"
+    ).fetchone()
+    assert left is not None and int(left["attempts"]) == 0
+
+
+def test_a_payer_is_never_held_by_the_daily_cap(conn: Any) -> None:
+    # Cutting off what somebody has bought is worse than the bill, so the cap
+    # does not apply to them — an alert does instead.
+    user = _wa_user(conn, plan="month", days=30)
+    _sent_today(conn, user, 60)
+    conn.execute(
+        """
+        INSERT INTO notifications (user_id, channel, kind, status)
+        VALUES (%s, 'whatsapp', 'new_listing', 'queued')
+        """,
+        (user,),
+    )
+
+    claimed = store.claim_queued(conn, limit=10, max_attempts=5)
+    assert len(claimed) == 1
+
+
+def test_crossing_a_threshold_is_announced_once(conn: Any) -> None:
+    user = _wa_user(conn, plan="month", days=30)
+    _sent_today(conn, user, 31)
+
+    first = store.costly_whatsapp(conn)
+    assert [(int(r["user_id"]), r["kind"]) for r in first] == [(user, "daily")]
+    assert bool(first[0]["paid"]) is True
+
+    # drain runs every two minutes; without the record this would be said
+    # thirty times an hour.
+    assert store.costly_whatsapp(conn) == []
+
+
+def test_the_lifetime_figure_is_announced_once_ever(conn: Any) -> None:
+    user = _wa_user(conn, plan="month", days=30)
+    _sent_today(conn, user, 500)
+
+    kinds = {r["kind"] for r in store.costly_whatsapp(conn)}
+    assert kinds == {"daily", "lifetime"}
+
+    # A new day makes the daily alert owed again; the lifetime one never is.
+    conn.execute("DELETE FROM whatsapp_cost_alerts WHERE kind = 'daily'")
+    again = {r["kind"] for r in store.costly_whatsapp(conn)}
+    assert again == {"daily"}
+
+
+def test_a_backlog_older_than_the_window_is_discarded(conn: Any) -> None:
+    user = _wa_user(conn, plan="free")
+    conn.execute(
+        """
+        INSERT INTO notifications (user_id, channel, kind, status, created_at)
+        VALUES (%s, 'whatsapp', 'new_listing', 'queued', now() - interval '5 days')
+        """,
+        (user,),
+    )
+    conn.execute(
+        """
+        INSERT INTO notifications (user_id, channel, kind, status, created_at)
+        VALUES (%s, 'whatsapp', 'new_listing', 'queued', now() - interval '1 hour')
+        """,
+        (user,),
+    )
+
+    # A rolling window from now, not from whenever they reply: at any moment
+    # the queue holds at most the last two days, so the catch-up is the last two
+    # days however long the window was shut.
+    assert store.drop_stale_whatsapp(conn, days=2) == 1
+    left = conn.execute(
+        "SELECT count(*) AS n FROM notifications WHERE status = 'queued'"
+    ).fetchone()
+    assert left is not None and int(left["n"]) == 1

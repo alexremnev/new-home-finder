@@ -23,7 +23,7 @@ def checkout_link(token: str) -> str:
     # itself, and that page needs a token to know whose plan is being bought.
     return f"{SITE}/upgrade?t={token}"
 
-KEPT = "Your filter is kept exactly as it is — paying turns the alerts back on with nothing to set up again."
+KEPT = "Your filter is kept — paying turns the alerts back on with nothing to set up again."
 
 def _when(plan_until: datetime | None) -> str:
     if plan_until is None:
@@ -33,6 +33,8 @@ def _when(plan_until: datetime | None) -> str:
 
 def _falls_back_to(share: int | None) -> str:
 
+    # The share is read from `plans.delivery_share` on the lapsed tier, never
+    # written here: one row decides what is delivered and what is promised.
     if share is None or share >= 100:
         return "After that the alerts stop until you renew."
     return f"After that you receive {share}% of what matches, until you renew."
@@ -54,12 +56,9 @@ def expiring_notice(
 
     return "\n".join(
         [
-            opening,
-            "",
+            f"⏳ {opening}",
             _falls_back_to(share),
-            "",
             KEPT,
-            "",
             f"Full access: {link}" if link else "/pay — full access",
         ]
     )
@@ -83,21 +82,12 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
         )
     return "\n".join(
         [
-            opening,
-            "",
+            f"🔔 {opening}",
             KEPT,
-            "",
-            "To carry on:",
-            # Numbered, because it is a two-step instruction and "tap the link"
-            # on its own left people asking what happens after they pay.
-            f"1. Open {link} and pay by card." if link
-            else "1. Send /pay for a payment link.",
-            "2. The alerts start again straight away — nothing to set up.",
-            "",
-            f"More about the service: {SITE}",
-            "",
-            "/update — change what you are looking for",
-            "/stop — delete my filter for good",
+            f"Pay here and the alerts resume at once: {link}" if link
+            else "/pay — a payment link, and the alerts resume at once",
+            "/update — change my search",
+            "/stop — delete my filter",
         ]
     )
 
@@ -110,27 +100,43 @@ def notice_for(
         return expiry_notice(plan, share, link)
     return expiring_notice(plan, plan_until, stage, share, link)
 
-def digest_notice(
-    matched: int,
-    share: int,
-    *,
-    avg_price: int | None = None,
-    paid: bool = False,
-    rooms_only: bool = False,
-) -> str:
+def checkin_notice() -> str:
+    """Asked half an hour before WhatsApp's 24-hour window shuts.
+
+    Short on purpose: it is a question with two buttons, and every extra line
+    is a line between the question and the answer. Tapping either button is an
+    inbound message, which is what reopens the window — so even "I found a
+    place" leaves us able to reply.
+    """
+
+    return "\n".join(
+        [
+            "👋 How is the search going?",
+            "WhatsApp only lets me write for 24 hours after your last message, "
+            "and that is nearly up.",
+            "Tap below and the alerts carry on.",
+        ]
+    )
+
+def carrying_on(criteria_card: str) -> str:
+    """The answer to "keep searching". States what is being searched for."""
+
+    return "\n".join(
+        [
+            "✅ Alerts are back on — anything held while it was quiet is on its way.",
+            "",
+            criteria_card,
+            "",
+            "/current — show this again",
+            "/update — change my search",
+            "/stop — delete my filter",
+        ]
+    )
+
+def digest_notice(matched: int, share: int, *, paid: bool = False) -> str:
+    """The evening summary. Short on purpose: it is read at a glance."""
 
     listings = "listing" if matched == 1 else "listings"
-    # Says which average it is, because the two are not comparable and the old
-    # wording — "in what matched" — was untrue as soon as anything was left out.
-    # A filter for rooms alone averages rooms; every other filter averages the
-    # homes and leaves rooms out.
-    price = (
-        f"💷 Average room rent: £{avg_price:,}/month"
-        if avg_price and rooms_only
-        else f"💷 Average rent, rooms aside: £{avg_price:,}/month"
-        if avg_price
-        else None
-    )
 
     if matched == 0:
         # A quiet day is worth saying out loud: silence is indistinguishable
@@ -138,22 +144,14 @@ def digest_notice(
         return "\n".join(
             [
                 "🔔 Nothing matched your filter today.",
-                "",
-                "Quiet days happen. If it stays quiet, a wider rent range or one "
-                "more area usually helps — /update to change it.",
+                "Quiet days happen — /update to widen the rent range or add an area.",
             ]
         )
 
     if paid or share >= 100:
-        return "\n".join(
-            [f"🔔 {matched} new {listings} matched your filter today."]
-            + ([price] if price else [])
-        )
+        return f"🔔 {matched} new {listings} matched your filter today."
 
-    return "\n".join(
-        [
-            f"🔒 {matched} new {listings} today — you're missing {100 - share}%! "
-            "Upgrade now to unlock instant notifications.",
-        ]
-        + ([""] + [price] if price else [])
+    return (
+        f"🔒 {matched} new {listings} today — you are seeing {share}%. "
+        "Upgrade to get every one of them."
     )

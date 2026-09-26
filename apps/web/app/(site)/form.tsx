@@ -603,7 +603,10 @@ export function SubscribeForm({
           <div className={whatsappReady ? "offers" : "offers offers-one"}>
             <Choice
               channel="telegram"
-              label="Connect Telegram"
+              // Nobody has connected anything yet, so the button names what
+              // happens rather than the plumbing. Which messenger is already
+              // said by the logo on the button and the colour of the card.
+              label="Start free trial"
               mark={<TelegramMark />}
               offer={offers.telegram}
               busy={busy}
@@ -617,7 +620,7 @@ export function SubscribeForm({
             {whatsappReady && (
               <Choice
                 channel="whatsapp"
-                label="Connect WhatsApp"
+                label="Start free trial"
                 mark={<WhatsAppMark />}
                 offer={offers.whatsapp}
                 busy={busy}
@@ -673,7 +676,7 @@ function Save({
           disabled={busy !== null || !ready}
         >
           {channel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}
-          {busy === channel ? "One moment…" : `Save and back to ${where}`}
+          {busy === channel ? "One moment…" : `Save and go back to ${where}`}
         </button>
 
         {!full && (

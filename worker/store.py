@@ -12,6 +12,11 @@ from worker.contracts.listing import Listing
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
 
+# What a WhatsApp subscriber may cost. See 0048 for why these two numbers and
+# why they are not `max_alerts_per_day` returning.
+WA_DAILY_ALERT = 30
+WA_LIFETIME_ALERT = 500
+
 _INSERT_COLUMNS = (
     "source_key", "external_id", "url", "price_pcm", "bedrooms", "bathrooms",
     "property_type", "furnished", "pets_allowed", "bills_included", "available_from",
@@ -296,6 +301,130 @@ def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None
     most = None if row is None else row["most"]
     return None if most is None else int(most)
 
+def costly_whatsapp(
+    conn: Conn, *, daily: int = WA_DAILY_ALERT, lifetime: int = WA_LIFETIME_ALERT
+) -> list[Row]:
+    """WhatsApp subscribers who have crossed a volume threshold unannounced.
+
+    One row per alert still owed, with `kind` saying which threshold and
+    `paid` saying whether delivery was stopped or merely noted. The insert into
+    `whatsapp_cost_alerts` is what makes it "still owed": drain runs every two
+    minutes, and without it crossing a line would be announced thirty times an
+    hour.
+    """
+
+    return list(
+        conn.execute(
+            """
+            WITH tally AS (
+                SELECT n.user_id,
+                       count(*) FILTER (
+                           WHERE (n.sent_at AT TIME ZONE 'Europe/London')::date
+                               = (now() AT TIME ZONE 'Europe/London')::date
+                       ) AS today,
+                       count(*) AS ever
+                  FROM notifications n
+                 WHERE n.channel = 'whatsapp' AND n.status = 'sent'
+                 GROUP BY n.user_id
+            ),
+            owed AS (
+                SELECT t.user_id, 'daily' AS kind, t.today AS sent
+                  FROM tally t WHERE t.today >= %(daily)s
+                UNION ALL
+                SELECT t.user_id, 'lifetime', t.ever
+                  FROM tally t WHERE t.ever >= %(lifetime)s
+            ),
+            claimed AS (
+                INSERT INTO whatsapp_cost_alerts (user_id, kind, day, sent)
+                SELECT user_id, kind, (now() AT TIME ZONE 'Europe/London')::date, sent
+                  FROM owed
+                ON CONFLICT DO NOTHING
+                RETURNING user_id, kind, sent
+            )
+            SELECT c.user_id, c.kind, c.sent,
+                   EXISTS (
+                       SELECT 1 FROM users u JOIN plans p ON p.key = u.plan
+                        WHERE u.id = c.user_id
+                          AND p.price_pence > 0
+                          AND (u.plan_until IS NULL OR u.plan_until > now())
+                   ) AS paid
+              FROM claimed c
+             ORDER BY c.user_id, c.kind
+            """,
+            {"daily": daily, "lifetime": lifetime},
+        ).fetchall()
+    )
+
+def drop_stale_whatsapp(conn: Conn, *, days: int = 2) -> int:
+    """Keep the WhatsApp backlog to the last `days`, whenever it is collected.
+
+    A rolling window, measured from now rather than from whenever the person
+    replies. Run on every drain, so the queue never holds more than two days of
+    listings at any moment: somebody who answers the check-in after ten hours
+    gets those ten hours, and somebody who answers after three weeks gets the
+    last two days — not the three weeks.
+
+    That is the point. A flat listed a week ago has been let, and sending it
+    anyway is a wall of noise where every line is a message Meta charges for.
+    """
+
+    gone = conn.execute(
+        """
+        UPDATE notifications
+           SET status = 'skipped', error = 'stale: held longer than the backlog window'
+         WHERE channel = 'whatsapp' AND status = 'queued'
+           AND created_at < now() - make_interval(days => %s)
+        RETURNING id
+        """,
+        (days,),
+    ).fetchall()
+    return len(gone)
+
+def closing_windows(conn: Conn, *, minutes: int = 30, limit: int = 200) -> list[Row]:
+    """WhatsApp numbers whose 24-hour window shuts within `minutes`.
+
+    One question per window: `window_asked_at` is compared against
+    `last_inbound_at`, so a window that has since been reopened makes the old
+    answer stale by itself and nothing has to be cleaned up.
+
+    Only people with an active subscription, because the question is whether to
+    carry on receiving — there is nothing to carry on with otherwise.
+    """
+
+    return list(
+        conn.execute(
+            """
+            SELECT uc.user_id, uc.address, uc.last_inbound_at, s.criteria
+              FROM user_channels uc
+              JOIN users u         ON u.id = uc.user_id AND u.status = 'active'
+              JOIN subscriptions s ON s.user_id = uc.user_id AND s.active
+             WHERE uc.channel = 'whatsapp'
+               AND uc.is_primary
+               AND uc.verified_at IS NOT NULL
+               AND uc.last_inbound_at IS NOT NULL
+               -- Inside the window, but with less than `minutes` of it left.
+               AND uc.last_inbound_at <=
+                   now() - interval '24 hours' + make_interval(mins => %(minutes)s)
+               AND uc.last_inbound_at > now() - interval '24 hours'
+               AND (uc.window_asked_at IS NULL
+                 OR uc.window_asked_at < uc.last_inbound_at)
+             ORDER BY uc.last_inbound_at
+             LIMIT %(limit)s
+            """,
+            {"minutes": minutes, "limit": limit},
+        ).fetchall()
+    )
+
+def mark_window_asked(conn: Conn, user_id: int) -> None:
+
+    conn.execute(
+        """
+        UPDATE user_channels SET window_asked_at = now()
+         WHERE user_id = %s AND channel = 'whatsapp'
+        """,
+        (user_id,),
+    )
+
 def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
 
     return list(
@@ -374,43 +503,7 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                        count(n.id) FILTER (WHERE n.status = 'sent')      AS sent,
                        count(n.id) FILTER (
                            WHERE n.status = 'skipped' AND n.error = 'share'
-                       ) AS withheld,
-                       -- Rooms and whole homes are never averaged together: a
-                       -- £900 room beside a £2,100 flat produces a figure that
-                       -- describes neither, and the digest quoted it as though
-                       -- it described the market.
-                       --
-                       -- So a filter asking only for rooms gets the average of
-                       -- rooms, and every other filter gets the average with
-                       -- rooms left out. A mixed filter therefore reports on the
-                       -- homes it matched; that is a partial answer, but it is
-                       -- a true one.
-                       round(avg(l.price_pcm) FILTER (
-                           WHERE CASE
-                               WHEN jsonb_typeof(s.criteria->'property_types') = 'array'
-                                AND jsonb_array_length(s.criteria->'property_types') = 1
-                                AND s.criteria->'property_types'->>0 = 'room'
-                               THEN l.property_type = 'room'
-                               -- NULL is a home: the feed leaves the type unset
-                               -- for a plain bedroom count, and only ever writes
-                               -- 'room' when it means one.
-                               ELSE l.property_type IS DISTINCT FROM 'room'
-                           END
-                       ))::int AS avg_price,
-                       -- Which of the two the figure is, so the digest can say
-                       -- so rather than leaving it to be guessed.
-                       --
-                       -- Aggregated, because the rows are grouped by user and
-                       -- `s.criteria` belongs to the subscription. `bool_or`
-                       -- rather than a bare expression: the group is one active
-                       -- subscription in practice — the newest wins and the rest
-                       -- stand down — so "any of them is rooms-only" is the same
-                       -- answer, and it is one Postgres will accept.
-                       coalesce(bool_or(
-                           jsonb_typeof(s.criteria->'property_types') = 'array'
-                           AND jsonb_array_length(s.criteria->'property_types') = 1
-                           AND s.criteria->'property_types'->>0 = 'room'
-                       ), false) AS rooms_only
+                       ) AS withheld
                   FROM subscriptions s
                   JOIN users u ON u.id = s.user_id AND u.status = 'active'
                   -- LEFT, because a day with no match is still a day worth
@@ -431,8 +524,7 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                 ON CONFLICT (user_id, day) DO NOTHING
                 RETURNING user_id
             )
-            SELECT d.user_id, d.matched, d.sent, d.withheld, d.avg_price,
-                   d.rooms_only,
+            SELECT d.user_id, d.matched, d.sent, d.withheld,
                    uc.channel, uc.address, uc.last_inbound_at,
                    -- Paid means a plan that costs money and has not run out.
                    -- A live trial is not paid: it is the thing the button is
@@ -466,7 +558,12 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
 PHOTO_GRACE_MINUTES = 5
 
 def claim_queued(
-    conn: Conn, *, limit: int, max_attempts: int, photo_grace: int = PHOTO_GRACE_MINUTES
+    conn: Conn,
+    *,
+    limit: int,
+    max_attempts: int,
+    photo_grace: int = PHOTO_GRACE_MINUTES,
+    wa_daily_cap: int = WA_DAILY_ALERT,
 ) -> list[Row]:
 
     claimed = conn.execute(
@@ -486,6 +583,42 @@ def claim_queued(
                           AND m.wa_media_checked_at IS NULL
                    )
                )
+               -- And held back the same way while WhatsApp's window is shut.
+               -- Nothing can be sent then and there are no templates, so an
+               -- attempt would only spend one of five and the message would be
+               -- dead within ten minutes. Held, it goes out the moment the
+               -- person writes in — which is what the check-in asks them to do.
+               AND NOT (
+                   n.channel = 'whatsapp'
+                   AND EXISTS (
+                       SELECT 1 FROM user_channels uc
+                        WHERE uc.user_id = n.user_id AND uc.channel = 'whatsapp'
+                          AND (uc.last_inbound_at IS NULL
+                            OR uc.last_inbound_at <= now() - interval '24 hours')
+                   )
+               )
+               -- Thirty a day on WhatsApp, for somebody who is not paying for
+               -- it. Held rather than dropped: the day rolls over and they go
+               -- out in order. A paying subscriber is not capped at all — an
+               -- alert tells us instead, because cutting off what somebody has
+               -- bought is worse than the bill.
+               AND NOT (
+                   n.channel = 'whatsapp'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM users u JOIN plans p ON p.key = u.plan
+                        WHERE u.id = n.user_id
+                          AND p.price_pence > 0
+                          AND (u.plan_until IS NULL OR u.plan_until > now())
+                   )
+                   AND (
+                       SELECT count(*) FROM notifications s
+                        WHERE s.user_id = n.user_id
+                          AND s.channel = 'whatsapp'
+                          AND s.status = 'sent'
+                          AND (s.sent_at AT TIME ZONE 'Europe/London')::date
+                            = (now() AT TIME ZONE 'Europe/London')::date
+                   ) >= %(wa_daily_cap)s
+               )
              ORDER BY n.created_at
              LIMIT %(limit)s
              FOR UPDATE SKIP LOCKED
@@ -494,7 +627,12 @@ def claim_queued(
           FROM due WHERE n.id = due.id
         RETURNING n.id
         """,
-        {"limit": limit, "max_attempts": max_attempts, "photo_grace": photo_grace},
+        {
+            "limit": limit,
+            "max_attempts": max_attempts,
+            "photo_grace": photo_grace,
+            "wa_daily_cap": wa_daily_cap,
+        },
     ).fetchall()
     ids = [int(r["id"]) for r in claimed]
     if not ids:

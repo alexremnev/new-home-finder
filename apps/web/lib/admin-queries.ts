@@ -600,8 +600,12 @@ export async function logPage(
   return { rows, total: counted[0]?.total ?? 0 };
 }
 
+export const WA_DAILY_ALERT = 30;
+
 export type SubscriberRow = {
   user_id: number;
+  /** WhatsApp messages sent to them today, in London days. */
+  wa_today: number;
   status: string;
   plan: string;
   plan_until: string | null;
@@ -639,6 +643,14 @@ export async function subscriberPage(
                   AND n.created_at <= now() - make_interval(mins => $2::int)) AS failed_window,
               (SELECT max(n.sent_at)::text FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent') AS last_sent,
+              -- WhatsApp today, on its own: Meta bills per message, and thirty
+              -- in a day is the figure that stops delivery for somebody who is
+              -- not paying. Counted in London days, like every other date here.
+              (SELECT count(*)::int FROM notifications n
+                WHERE n.user_id = u.id AND n.channel = 'whatsapp'
+                  AND n.status = 'sent'
+                  AND (n.sent_at AT TIME ZONE 'Europe/London')::date
+                    = (now() AT TIME ZONE 'Europe/London')::date) AS wa_today,
               u.created_at::text AS created_at
          FROM users u
          LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary

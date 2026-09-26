@@ -80,10 +80,11 @@ describe("the criteria card", () => {
 describe("the announcement", () => {
   it("states the criteria and what happens next", () => {
     const text = criteriaSet(full);
-    expect(text.startsWith("✅ Your search criteria are set")).toBe(true);
+    expect(text.startsWith("✅ Your search is set")).toBe(true);
     expect(text).toContain(criteriaCard(full));
-    expect(text).toContain("only what appears from now on");
-    expect(text).toContain("/stop — delete my filter and stop");
+    // The commands come from one list, so this message cannot drift from the
+    // others about what they are called.
+    expect(text).toContain("/stop — delete my filter");
   });
 
   it("reads the same after a change as it does the first time", () => {
@@ -123,7 +124,7 @@ describe("a refund", () => {
   it("names the amount with its pence", () => {
     // The same rounding bug that made £19.99 read as £20 in the admin would be
     // worse here: this message is a receipt.
-    expect(refundIssued(1999, null)).toContain("£19.99 has been refunded");
+    expect(refundIssued(1999, null)).toContain("£19.99 refunded");
   });
 
   it("says the alerts have dropped back when the plan is over", () => {
@@ -131,6 +132,17 @@ describe("a refund", () => {
     expect(refundIssued(1999, new Date(Date.now() - 86_400_000))).toContain(
       "Full access has ended",
     );
+  });
+
+  it("carries no blank line it does not need", () => {
+    // Read in a chat window, where an empty line costs a third of what is
+    // visible. One blank line separates blocks; two separate nothing.
+    for (const text of [
+      refundIssued(1999, null),
+      refundIssued(500, new Date(Date.now() + 5 * 86_400_000)),
+    ]) {
+      expect(text).not.toContain("\n\n");
+    }
   });
 
   it("says when access still runs, for a partial refund", () => {

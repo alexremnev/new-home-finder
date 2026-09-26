@@ -18,7 +18,14 @@ from worker.contracts.notify import (
     SendResult,
 )
 from worker.notify import build_notifier
-from worker.notify.plans import checkout_link, digest_notice, notice_for, upgrade_link
+from worker.notify.ops import tell_ops
+from worker.notify.plans import (
+    checkin_notice,
+    checkout_link,
+    digest_notice,
+    notice_for,
+    upgrade_link,
+)
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
 
@@ -422,6 +429,110 @@ def _apply(conn: Conn, stage: Any, notification_id: int, user_id: int, decision:
     store.leave_queued(conn, notification_id, decision.error)
     stage.count("retry_later")
 
+# How long before WhatsApp's window shuts to ask whether to carry on. Thirty
+# minutes is long enough that a reply still lands inside the window, and short
+# enough that the question is not asked to somebody about to write in anyway.
+CHECKIN_MINUTES = 30
+
+# How much of a backlog is worth keeping. Two days, as a rolling window from
+# now — not two days from whenever somebody replies. So the catch-up is always
+# the last two days and never more, however long the window was shut.
+BACKLOG_DAYS = 2
+
+def watch_whatsapp_cost(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
+    """Trim a stale backlog, and say when somebody has become expensive.
+
+    The caps themselves live in `claim_queued` — held, not refused, so nothing
+    is lost and the day rolling over releases it. This is only the trimming and
+    the telling.
+    """
+
+    with run.stage("cost", source_key="whatsapp") as stage:
+        if dry_run:
+            stage.set("suppressed", True)
+            return
+
+        stale = store.drop_stale_whatsapp(conn, days=BACKLOG_DAYS)
+        stage.count("stale_dropped", stale)
+
+        for row in store.costly_whatsapp(conn):
+            user = int(row["user_id"])
+            sent = int(row["sent"])
+            paid = bool(row["paid"])
+            if row["kind"] == "daily":
+                what = (
+                    f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages today.\n"
+                    + (
+                        "They are paying, so delivery carries on."
+                        if paid
+                        else "They are not paying, so delivery is stopped until tomorrow."
+                    )
+                )
+            else:
+                what = (
+                    f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages in total.\n"
+                    + (
+                        "They are paying, so delivery carries on."
+                        if paid
+                        else "They are not paying; the daily stop applies as usual."
+                    )
+                )
+            stage.log("warn", f"whatsapp volume: user {user} {row['kind']} {sent}",
+                      user_id=user)
+            stage.count("alerted" if tell_ops(what) else "alert_failed")
+
+def ask_before_the_window_shuts(
+    conn: Conn, run: Run, *, dry_run: bool = False
+) -> None:
+    """The last chance to reach a WhatsApp subscriber before we cannot.
+
+    With no approved templates, nothing at all can be sent outside the 24-hour
+    window — so alerts queue up and wait. This asks, while there is still time,
+    whether they want them; either button is an inbound message, which reopens
+    the window and releases everything held.
+    """
+
+    with run.stage("checkin", source_key="whatsapp") as stage:
+        if dry_run:
+            stage.set("suppressed", True)
+            return
+
+        due = store.closing_windows(conn, minutes=CHECKIN_MINUTES)
+        stage.set("closing", len(due))
+        if not due:
+            return
+
+        notifier = build_notifier("whatsapp")
+        if notifier is None:
+            stage.degrade("whatsapp is not configured; cannot ask anybody")
+            return
+
+        for row in due:
+            # Marked before sending, not after. A send that fails is a question
+            # not asked; a send that succeeds and then fails to be recorded
+            # would be asked again on the next run, and twice in half an hour
+            # reads as a malfunction.
+            store.mark_window_asked(conn, int(row["user_id"]))
+
+            result = notifier.send(
+                Recipient(
+                    channel="whatsapp",
+                    address=str(row["address"]),
+                    last_inbound=row.get("last_inbound_at"),
+                ),
+                Alert(
+                    kind="expiring",
+                    text=checkin_notice(),
+                    actions=[
+                        Action(label="🔔 Keep searching", short="Keep searching",
+                               callback="continue"),
+                        Action(label="🏠 I found a place", short="Found a place",
+                               callback="found"),
+                    ],
+                ),
+            )
+            stage.count("asked" if result.ok else "ask_failed")
+
 def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
     with run.stage("expire") as stage:
@@ -470,15 +581,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     ),
                     Alert(
                         kind="expiring",
-                        text=digest_notice(
-                            int(row["matched"]),
-                            share,
-                            avg_price=(
-                                None if row["avg_price"] is None else int(row["avg_price"])
-                            ),
-                            paid=paid,
-                            rooms_only=bool(row.get("rooms_only")),
-                        ),
+                        text=digest_notice(int(row["matched"]), share, paid=paid),
                         actions=actions,
                     ),
                 )
@@ -529,7 +632,9 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 )
 
 __all__ = [
-    "alert_for", "checkout_for", "drain", "in_share", "interleave_by_user",
+    "alert_for", "ask_before_the_window_shuts", "checkout_for", "drain",
+    "watch_whatsapp_cost",
+    "in_share", "interleave_by_user",
     "listing_view",
     "notify_plan_changes",
     "outcome_for", "queue_matches", "withheld_share",

@@ -1,4 +1,6 @@
 import { query } from "./db";
+import { withSiteLink } from "./messages";
+import { siteUrl } from "./plans";
 import { sendMessage } from "./telegram";
 import { sendWhatsApp } from "./whatsapp";
 
@@ -20,8 +22,17 @@ export async function tell(userId: number, text: string): Promise<boolean> {
     return false;
   }
 
-  if (to.channel === "telegram") return sendMessage(to.address, text);
-  if (to.channel === "whatsapp") return sendWhatsApp(to.address, text);
+  // The same rule as the two webhooks: a way back to the site on everything
+  // except a listing alert — a button on Telegram, a link on WhatsApp.
+  if (to.channel === "telegram") {
+    const site = siteUrl();
+    return sendMessage(
+      to.address,
+      text,
+      text.includes(site) ? undefined : [[{ text: "🌐 Open the site", url: `${site}/` }]],
+    );
+  }
+  if (to.channel === "whatsapp") return sendWhatsApp(to.address, withSiteLink(text));
 
   console.error("no way to reach that channel", { channel: to.channel });
   return false;

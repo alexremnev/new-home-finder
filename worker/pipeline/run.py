@@ -8,10 +8,12 @@ import psycopg
 from worker.config import Config
 from worker.obs import Run
 from worker.pipeline.outbox import (
+    ask_before_the_window_shuts,
     drain,
     notify_plan_changes,
     queue_matches,
     seed_new_subscriptions,
+    watch_whatsapp_cost,
 )
 from worker.pipeline.rollup import run_rollup
 
@@ -38,7 +40,13 @@ def run_job(
     if job == "drain":
 
         seed_new_subscriptions(conn, run, dry_run=cfg.dry_run)
+        # Before the digest and before delivery: this is what reopens a shut
+        # WhatsApp window, and everything held back goes out once it is open.
+        ask_before_the_window_shuts(conn, run, dry_run=cfg.dry_run)
         notify_plan_changes(conn, run, dry_run=cfg.dry_run)
+        # After the digest, so today's count includes it, and before nothing:
+        # the caps themselves are enforced when the queue is claimed.
+        watch_whatsapp_cost(conn, run, dry_run=cfg.dry_run)
         return drain(conn, run, suppress=suppress_delivery, dry_run=cfg.dry_run)
 
     if job == "ingest":

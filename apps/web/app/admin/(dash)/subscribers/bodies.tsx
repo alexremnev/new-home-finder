@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import {
-  alertPoints, byDistrict, byPrice, planMix, subscriberPage,
+  alertPoints, byDistrict, byPrice, planMix, subscriberPage, WA_DAILY_ALERT,
 } from "@/lib/admin-queries";
 import { dayOf, since, windowLeft } from "@/lib/when";
 
@@ -117,6 +117,7 @@ export async function EveryoneTable({ span, page }: { span: string; page: number
               <th>Plan</th>
               <th>Channel</th>
               <th>Free window</th>
+              <th className="num">WA today</th>
               <th>Areas</th>
               <th className="num">{win.key === "today" || win.key === "yesterday"
                 ? win.label
@@ -155,6 +156,12 @@ export async function EveryoneTable({ span, page }: { span: string; page: number
                     ) : (
                       <span className="metric-note">closed</span>
                     )}
+                  </td>
+                  {/* Red at thirty: that is where delivery stops for somebody
+                      who is not paying, and where the alert fires for somebody
+                      who is. */}
+                  <td className={row.wa_today >= WA_DAILY_ALERT ? "num bad" : "num"}>
+                    {row.channel === "whatsapp" ? row.wa_today : "—"}
                   </td>
                   <td style={{ maxWidth: "12rem" }}>{row.districts ?? "—"}</td>
                   <td className="num">{row.sent_window}</td>

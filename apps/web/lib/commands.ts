@@ -70,9 +70,9 @@ export function parseCommand(text: string | undefined): Command {
 }
 
 export const COMMAND_HELP = [
-  "/current — the filter I'm using for you",
-  "",
+  "/current — my search",
+  "/update — change my search",
   "/pay — full access",
   "/support — how to reach us",
-  "/stop — delete my filter and stop the messages",
+  "/stop — delete my filter",
 ].join("\n");

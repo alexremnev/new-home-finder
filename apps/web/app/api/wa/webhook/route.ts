@@ -12,8 +12,10 @@ import {
   PAUSED,
   RESUMED,
   STOPPED,
-  alreadyOnAnotherChannel,
+  CHANGE_FILTER,
   criteriaCard,
+  LINK_EXPIRED,
+  withSiteLink,
   criteriaSet,
   noFilterYet,
   planLine,
@@ -126,7 +128,9 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Never swallowed. A tap that was understood but whose answer could not
       // be delivered is indistinguishable, from the outside, from a button
       // that does nothing — and the webhook still returns 200 either way.
-      const sent = await sendWhatsApp(number, reply).catch((error) => {
+      // Every reply carries the site, unless it already names it. One place,
+      // so no command can be the one that forgets.
+      const sent = await sendWhatsApp(number, withSiteLink(reply)).catch((error) => {
         console.error("wa reply threw", { from: number.slice(-4), error: String(error) });
         return false;
       });
@@ -220,13 +224,7 @@ async function commanded(
           .catch(() => null);
         if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
       }
-      return [
-        "Change your search here — it takes a minute:",
-        "",
-        where,
-        "",
-        "Saving replaces this filter. Until you do, it carries on as it is.",
-      ].join("\n");
+      return `${CHANGE_FILTER}\n${where}`;
     }
 
     default:
@@ -236,6 +234,22 @@ async function commanded(
 
 async function pressed(number: string, id: string): Promise<string | null> {
   console.log("wa tap", { from: number.slice(-4), id });
+
+  // The answer to the check-in sent half an hour before the window shut. The
+  // tap itself already reopened it — every inbound does, at the top of this
+  // route — so everything held back goes out on the next drain, and this only
+  // has to say so and name what is being searched for.
+  if (id === "continue") {
+    const account = await accountForChat(number, "whatsapp").catch(() => null);
+    if (!account || account.subscription_id === null) return noFilterYet(siteUrl());
+    return [
+      "✅ Alerts are back on — anything held while it was quiet is on its way.",
+      "",
+      criteriaCard((account.criteria ?? {}) as Criteria),
+      "",
+      COMMAND_HELP,
+    ].join("\n");
+  }
 
   if (id === "pause" || id === "found") {
     const stopped = await stopFilter(
@@ -253,18 +267,12 @@ async function pressed(number: string, id: string): Promise<string | null> {
     // Cloud API simply does not offer it — so the listing stays on screen and
     // the reply says what actually happened instead of pretending.
     return noted
-      ? "Noted — that one will not come up again."
+      ? "👍 Noted — that one will not come up again."
       : "That listing is no longer one of yours.";
   }
 
   if (id === "change") {
-    return [
-      "Change your search here — it takes a minute:",
-      "",
-      `${siteUrl()}/`,
-      "",
-      "Saving replaces this filter. Until you do, it carries on as it is.",
-    ].join("\n");
+    return `${CHANGE_FILTER}\n${siteUrl()}/`;
   }
 
   // Unknown. The tap has already reopened the window, which was most of the
@@ -289,14 +297,14 @@ async function handle(number: string, text: string): Promise<string | null> {
     );
     if (known.length === 0) {
       return (
-        "I do not have a search for this number yet. Set one up at " +
-        "londonhomefinder.co.uk and press Connect to WhatsApp."
+        "🎯 I don't have a search for this number yet — set one up and press " +
+        "Connect WhatsApp."
       );
     }
     return commanded(number, Number(known[0]?.id), text);
   }
 
-  type Claim = null | { taken: string } | { criteria: Criteria };
+  type Claim = null | { criteria: Criteria };
 
   const claimed: Claim = await transaction<Claim>(async (run) => {
     const rows = await run(
@@ -308,18 +316,6 @@ async function handle(number: string, text: string): Promise<string | null> {
     );
     let userId = rows[0]?.user_id as number | undefined;
     if (userId === undefined) return null;
-
-    // One search, one destination — the same rule as /start, enforced on both
-    // sides rather than trusted to the interface.
-    const elsewhere = await run(
-      `SELECT channel FROM user_channels
-        WHERE user_id = $1 AND channel <> 'whatsapp' AND verified_at IS NOT NULL
-        LIMIT 1`,
-      [userId],
-    );
-    if (elsewhere[0] !== undefined) {
-      return { taken: String(elsewhere[0].channel) };
-    }
 
     await run(
       `UPDATE users
@@ -369,9 +365,17 @@ async function handle(number: string, text: string): Promise<string | null> {
        VALUES ($1, 'whatsapp', $2, true, now(), now())
        ON CONFLICT (user_id, channel)
          DO UPDATE SET address = EXCLUDED.address,
+                       is_primary = true,
                        verified_at = now(),
                        last_inbound_at = now()`,
       [userId, number],
+    );
+    // Exactly one primary per account — see the same clause in the Telegram
+    // webhook. Two primaries would match one search twice and deliver it twice.
+    await run(
+      `UPDATE user_channels SET is_primary = false
+        WHERE user_id = $1 AND channel <> 'whatsapp' AND is_primary`,
+      [userId],
     );
 
     await beginSubscription(run, userId, "whatsapp");
@@ -386,16 +390,8 @@ async function handle(number: string, text: string): Promise<string | null> {
 
   if (claimed === null) {
     console.log("wa inbound: token not claimable — used, expired, or not ours");
-    return (
-      "That link has expired. Please fill the form in again at " +
-      "londonhomefinder.co.uk and use the new link — it takes a moment."
-    );
+    return LINK_EXPIRED;
   }
-  if ("taken" in claimed) {
-    console.log("wa inbound: that search already goes to", claimed.taken);
-    return alreadyOnAnotherChannel(claimed.taken);
-  }
-
   console.log("wa inbound: linked");
 
   return criteriaSet(claimed.criteria);

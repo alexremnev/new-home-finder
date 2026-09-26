@@ -1,18 +1,8 @@
+import { COMMAND_HELP } from "@/lib/commands";
 import { pounds as price } from "@/lib/money";
 import type { Criteria } from "./criteria";
 import type { Account } from "./plans";
 import { lapsedShare, paidPlans, siteUrl } from "./plans";
-
-export function alreadyOnAnotherChannel(channel: string): string {
-  const other = channel === "telegram" ? "Telegram" : "WhatsApp";
-  return [
-    `This search already sends its alerts to ${other}.`,
-    "",
-    "One search goes to one app, so that a listing never arrives twice. If you",
-    "want alerts here as well, set up a second search — it can use the same",
-    "filter or a different one.",
-  ].join("\n");
-}
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -106,59 +96,42 @@ export function criteriaCard(criteria: Criteria): string {
 // the criteria rather than be told that they changed them.
 export function criteriaSet(criteria: Criteria): string {
   return [
-    "✅ Your search criteria are set",
+    "✅ Your search is set — I'll message you the moment a new listing matches.",
     "",
     criteriaCard(criteria),
     "",
-    "I'll message you as soon as a new listing matches. Nothing arrives for listings",
-    "that were already on the market — only what appears from now on.",
-    "",
-    "/current — show this again",
-    "/stop — delete my filter and stop",
+    COMMAND_HELP,
   ].join("\n");
 }
 
-export const LINK_EXPIRED = [
-  "That link has expired. Please fill the form again and use the new link —",
-  "it takes a moment.",
-  "",
-  process.env.SITE_URL ?? "https://londonhomefinder.co.uk",
-].join("\n");
+export const LINK_EXPIRED =
+  "⌛ That link has expired. Fill the form in again and use the new one — it takes a moment.";
 
 export const STOPPED = [
-  "Done. Your filter is deleted and no further messages will be sent.",
-  "",
-  "Anything already queued has been discarded, so nothing will arrive after this.",
-  "You can subscribe again any time.",
+  "🗑 Your filter is deleted and nothing further will be sent.",
+  "Anything already queued is discarded. You can subscribe again any time.",
 ].join("\n");
 
 export const NOTHING_TO_STOP = "You have no active filter, so there is nothing to stop.";
 
-export const SET_FILTERS = "Set up your search criteria";
+export const SET_FILTERS = "🎯 Set up your search — it takes a minute.";
 
-export const CHANGE_FILTER = "\u270f\ufe0f Change my filter";
+export const CHANGE_FILTER =
+  "\u270f\ufe0f Change your search below. Saving replaces it; until you do, it carries on as it is.";
 
 export const FILTERS_BUTTON = "\ud83c\udfaf Set Filters";
 
 export const PAUSED = [
-  "Paused. No further alerts will be sent.",
-  "",
-  "Your filter is kept exactly as it is — /resume turns the alerts back on with",
-  "nothing to set up again.",
+  "⏸️ Paused — no further alerts.",
+  "Your filter is kept. /resume turns them back on with nothing to set up again.",
 ].join("\n");
 
 export const NOTHING_TO_PAUSE = "You have no active filter, so there is nothing to pause.";
 
 export function paymentReceived(planName: string, until: Date | null): string {
-  const lines = [
-    "✅ Payment received — full access is on.",
-    "",
-    "Every listing that matches your filter now arrives the moment it appears,",
-    "with nothing held back.",
-  ];
-  if (until) {
-    lines.push("", `Runs until ${until.toISOString().slice(0, 10)} · ${planName}`);
-  }
+  const lines = ["✅ Payment received — every matching listing now arrives in full."];
+  if (until) lines.push(`📅 ${planName}, until ${until.toISOString().slice(0, 10)}`);
+  lines.push("/update — change what you are looking for", "/current — show my filter");
   return lines.join("\n");
 }
 
@@ -171,49 +144,45 @@ export function paymentReceived(planName: string, until: Date | null): string {
  */
 export function refundIssued(pence: number, until: Date | null): string {
   const live = until !== null && until.getTime() > Date.now();
-  const lines = [
-    `↩️ ${price(pence)} has been refunded.`,
-    "",
-  ];
-  if (live) {
-    lines.push(
-      `Full access runs until ${until.toISOString().slice(0, 10)}, then the alerts`,
-      "drop back to the free share.",
-    );
-  } else {
-    lines.push("Full access has ended, and the alerts drop back to the free share.");
-  }
+  const lines = [`↩️ ${price(pence)} refunded.`];
   lines.push(
-    "",
-    "Your filter is kept exactly as it is.",
-    "",
-    "/pay — full access again",
-    "/update — change what you are looking for",
+    live
+      ? `Full access runs until ${until.toISOString().slice(0, 10)}, then drops back to a share.`
+      : "Full access has ended — you now receive a share of what matches.",
   );
+  lines.push("Your filter is kept.", "/pay — full access again", "/update — change my search");
   return lines.join("\n");
 }
 
 export const FOUND_A_PLACE = [
   "🎉 That is the whole point — congratulations.",
-  "",
-  "Alerts are off and your filter is kept. If it falls through, /resume brings",
-  "them straight back with nothing to set up again.",
+  "Alerts are off and your filter is kept. If it falls through, /resume brings them back.",
 ].join("\n");
 
-export const RESUMED = "Alerts are back on. Your filter is unchanged.";
+export const RESUMED = "🔔 Alerts are back on. Your filter is unchanged.";
 
 export const NOTHING_TO_RESUME = [
   "You have no paused filter to turn back on.",
-  "",
-  "If you stopped with /stop, the filter was deleted — set one up again and the",
-  "alerts start.",
+  "If you used /stop it was deleted — set one up again and the alerts start.",
 ].join("\n");
 
+/**
+ * The site, added to a reply that does not already point at it.
+ *
+ * Every message except a listing alert should offer a way back to the site, and
+ * doing it here rather than in twenty places is what keeps them consistent. A
+ * message that already carries the address — "change your search here" — is
+ * left alone: two links to the same place in one short message is noise.
+ *
+ * Telegram gets a button instead; see `withSite` in its webhook.
+ */
+export function withSiteLink(text: string): string {
+  const site = siteUrl();
+  return text.includes(site) ? text : `${text}\n🌐 ${site}`;
+}
+
 export function noFilterYet(site: string): string {
-  return [
-    "You don't have a filter yet — set one up here and the alerts start:",
-    site,
-  ].join("\n");
+  return `🎯 You don't have a search yet — set one up and the alerts start:\n${site}`;
 }
 
 export function planLine(name: string, until: Date | null, live: boolean): string {

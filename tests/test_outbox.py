@@ -169,47 +169,34 @@ def test_the_digest_hour_is_london_not_utc() -> None:
     assert digest_due(datetime(2026, 9, 15, 19, 30, tzinfo=timezone.utc)) is True
     assert digest_due(datetime(2026, 9, 15, 18, 30, tzinfo=timezone.utc)) is False
 
-def test_the_digest_counts_what_matched_and_names_what_is_missing() -> None:
+def test_the_digest_says_what_share_is_arriving() -> None:
     assert digest_notice(12, 20) == (
-        "🔒 12 new listings today — you're missing 80%! "
-        "Upgrade now to unlock instant notifications."
+        "🔒 12 new listings today — you are seeing 20%. "
+        "Upgrade to get every one of them."
     )
 
 def test_the_digest_agrees_with_itself_about_one_listing() -> None:
     assert "1 new listing today" in digest_notice(1, 20)
     assert "1 new listings" not in digest_notice(1, 20)
 
-def test_the_digest_names_the_average_rent_when_there_is_one() -> None:
-    text = digest_notice(12, 20, avg_price=1840)
-    # "rooms aside", because the figure leaves them out: a £900 room averaged
-    # with a £2,100 flat describes neither.
-    assert "💷 Average rent, rooms aside: £1,840/month" in text
-    assert "missing 80%" in text
-
-def test_a_filter_for_rooms_alone_is_told_the_room_average() -> None:
-    # Somebody searching only for rooms wants the rooms figure, and saying which
-    # one it is matters: the two numbers are not comparable.
-    text = digest_notice(12, 100, avg_price=910, rooms_only=True)
-    assert "💷 Average room rent: £910/month" in text
-    assert "rooms aside" not in text
-
-def test_no_average_means_no_line_at_all() -> None:
-    # A rooms-only filter that matched no room, or a filter whose only matches
-    # were rooms: better silent than a figure invented to fill the line.
-    assert "💷" not in digest_notice(12, 100, avg_price=None)
-    assert "💷" not in digest_notice(12, 100, avg_price=None, rooms_only=True)
+def test_the_digest_names_no_price_at_all() -> None:
+    # The average rent used to be here. It was removed along with the query
+    # behind it: two numbers that could not be compared, in a message read at a
+    # glance.
+    for text in (digest_notice(12, 20), digest_notice(12, 100), digest_notice(0, 20)):
+        assert "£" not in text
+        assert "Average" not in text
 
 def test_a_paying_subscriber_is_not_told_what_they_are_missing() -> None:
 
     # They are missing nothing, and an upgrade line to somebody who pays reads
     # as a bill.
-    text = digest_notice(12, 100, avg_price=1840, paid=True)
-    assert text.startswith("🔔 12 new listings matched your filter today.")
-    assert "missing" not in text
+    text = digest_notice(12, 100, paid=True)
+    assert text == "🔔 12 new listings matched your filter today."
     assert "Upgrade" not in text
 
 def test_full_access_on_a_trial_is_told_the_same_thing() -> None:
-    assert "missing" not in digest_notice(5, 100)
+    assert "seeing" not in digest_notice(5, 100)
 
 def test_a_quiet_day_says_so_rather_than_saying_nothing() -> None:
 
@@ -218,64 +205,14 @@ def test_a_quiet_day_says_so_rather_than_saying_nothing() -> None:
     text = digest_notice(0, 20)
     assert "Nothing matched your filter today." in text
     assert "/update" in text
-    assert "missing" not in text
 
-def test_a_quiet_day_names_no_average_it_cannot_have() -> None:
-    assert "Average" not in digest_notice(0, 20, avg_price=None)
-    assert "£" not in digest_notice(0, 20)
-
-def test_an_ended_plan_says_what_arrives_instead_of_claiming_silence() -> None:
-    text = notice_for("month", datetime(2026, 9, 15, 12, tzinfo=timezone.utc), "expired", 20)
-    assert "You now receive 20% of what matches your filter." in text
-    assert "have stopped" not in text
-
-def test_an_ending_plan_names_the_share_it_falls_back_to() -> None:
-    for stage in ("day", "hour"):
-        text = notice_for("trial", datetime(2026, 9, 15, 12, tzinfo=timezone.utc), stage, 20)
-        assert "you receive 20% of what matches, until you renew." in text
-        assert "the alerts stop" not in text
-
-def test_without_a_lapsed_tier_the_old_wording_stands() -> None:
-
-    # A share of 100, or none configured, means there is no fallback: then the
-    # alerts really do stop, and saying otherwise would be the lie.
-    for share in (None, 100):
-        assert "alerts have stopped" in notice_for("month", None, "expired", share)
-        assert "the alerts stop until you renew" in notice_for("month", None, "day", share)
-
-def test_no_notice_promises_a_period_no_plan_sells() -> None:
-
-    moment = datetime(2026, 9, 15, 12, tzinfo=timezone.utc)
-    for stage in ("day", "hour", "expired"):
-        for plan in ("trial", "week", "month"):
-            assert "2 weeks" not in notice_for(plan, moment, stage, 20)
-            assert "2 more weeks" not in notice_for(plan, moment, stage, 20)
-
-def test_an_ended_plan_carries_a_link_that_actually_opens_checkout() -> None:
-
-    # The notice used to print a bare /upgrade with no token, and that page can
-    # only answer "that link has expired".
-    text = notice_for("month", None, "expired", 20, "https://x.test/upgrade?t=abc")
-    assert "https://x.test/upgrade?t=abc" in text
-    assert "/upgrade\n" not in text
-
-def test_without_a_link_the_notice_falls_back_to_the_command() -> None:
-    assert "Send /pay for a payment link." in notice_for("month", None, "expired", 20)
-
-def test_an_ended_plan_says_what_to_do_and_where_to_read_about_it() -> None:
-    from worker.notify.plans import SITE
-
-    # The moment a plan runs out is the moment somebody decides whether to pay.
-    # A statement that it ended, with no instruction, left people asking how.
-    text = notice_for("month", None, "expired", 20, "https://x.test/upgrade?t=abc")
-    assert "To carry on:" in text
-    assert "1. Open https://x.test/upgrade?t=abc and pay by card." in text
-    assert "2. The alerts start again straight away" in text
-    # Somewhere to read about it rather than deciding inside a chat window.
-    assert f"More about the service: {SITE}" in text
-    # And the two ways out, so neither is a thing you have to remember.
-    assert "/update" in text
-    assert "/stop" in text
+def test_no_message_carries_a_blank_line_it_does_not_need() -> None:
+    # Every one of these is read in a chat window, where an empty line costs a
+    # third of the visible message.
+    for text in (
+        digest_notice(0, 20), digest_notice(12, 20), digest_notice(12, 100, paid=True),
+    ):
+        assert "\n\n" not in text
 
 def test_a_price_drop_reuses_the_listing_shape() -> None:
 

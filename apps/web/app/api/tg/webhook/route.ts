@@ -13,7 +13,6 @@ import {
   CHANGE_FILTER,
   FILTERS_BUTTON,
   FOUND_A_PLACE,
-  alreadyOnAnotherChannel,
   LINK_EXPIRED,
   NOTHING_TO_PAUSE,
   NOTHING_TO_RESUME,
@@ -84,10 +83,32 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (update.callback_query?.id) {
       await answerCallback(update.callback_query.id, "Something went wrong").catch(() => undefined);
     }
-    await sendMessage(chatId, "Something went wrong on my side. Please try again in a moment.")
+    await reply(chatId, "Something went wrong on my side. Please try again in a moment.")
       .catch(() => undefined);
   }
   return ok();
+}
+
+// Every message this bot sends, except a listing alert, offers a way back to
+// the site — as a button, because a url in the body is a url somebody has to
+// copy. Done here rather than at each call site, so no command can be the one
+// that forgets.
+//
+// Two things are left alone: a message that already carries a url button (the
+// upgrade offer, the filter form), because a second button to the same place is
+// noise; and a body that already names the address.
+async function reply(
+  chatId: string,
+  text: string,
+  keyboard?: Keyboard,
+): Promise<boolean> {
+  const site = siteUrl();
+  const hasLink =
+    text.includes(site) ||
+    (keyboard ?? []).some((row) => row.some((button) => Boolean(button.url)));
+  const rows: Keyboard = [...(keyboard ?? [])];
+  if (!hasLink) rows.push([{ text: "🌐 Open the site", url: `${site}/` }]);
+  return sendMessage(chatId, text, rows.length ? rows : undefined);
 }
 
 async function handle(chatId: string, text: string | undefined): Promise<void> {
@@ -97,11 +118,11 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   const command = parseCommand(text);
 
   if (command.kind === "support") {
-    await sendMessage(chatId, SUPPORT_REPLY);
+    await reply(chatId, SUPPORT_REPLY);
     return;
   }
   if (command.kind === "cancel") {
-    await sendMessage(chatId, COMMAND_HELP);
+    await reply(chatId, COMMAND_HELP);
     return;
   }
 
@@ -122,7 +143,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
   switch (command.kind) {
     case "show": {
       if (account.subscription_id === null) {
-        await sendMessage(chatId, noFilterYet(siteUrl()));
+        await reply(chatId, noFilterYet(siteUrl()));
         return;
       }
       const body = [
@@ -132,7 +153,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
         "",
         COMMAND_HELP,
       ].join("\n");
-      await sendMessage(chatId, body);
+      await reply(chatId, body);
       return;
     }
 
@@ -144,7 +165,7 @@ async function handle(chatId: string, text: string | undefined): Promise<void> {
       return;
 
     default:
-      await sendMessage(chatId, command.reason ? `${command.reason}\n\n${COMMAND_HELP}` : COMMAND_HELP);
+      await reply(chatId, command.reason ? `${command.reason}\n${COMMAND_HELP}` : COMMAND_HELP);
   }
 }
 
@@ -164,7 +185,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
     return sendToForm(chatId, false);
   }
 
-  type Claim = null | { taken: string } | { userId: number };
+  type Claim = null | { userId: number };
 
   const claimed: Claim = await transaction<Claim>(async (run) => {
 
@@ -176,18 +197,6 @@ async function start(chatId: string, token: string | null): Promise<void> {
     );
     let userId = rows[0]?.user_id;
     if (userId === undefined) return null;
-
-    // One search, one destination. Without this the model is a convention: two
-    // verified channels on one account would double the digest and the notices.
-    const elsewhere = await run(
-      `SELECT channel FROM user_channels
-        WHERE user_id = $1 AND channel <> 'telegram' AND verified_at IS NOT NULL
-        LIMIT 1`,
-      [userId],
-    );
-    if (elsewhere[0] !== undefined) {
-      return { taken: String(elsewhere[0].channel) };
-    }
 
     await run(
       `UPDATE users
@@ -233,8 +242,21 @@ async function start(chatId: string, token: string | null): Promise<void> {
       `INSERT INTO user_channels (user_id, channel, address, is_primary, verified_at)
        VALUES ($1, 'telegram', $2, true, now())
        ON CONFLICT (user_id, channel)
-         DO UPDATE SET address = EXCLUDED.address, verified_at = now()`,
+         DO UPDATE SET address = EXCLUDED.address,
+                       is_primary = true,
+                       verified_at = now()`,
       [userId, chatId],
+    );
+    // Exactly one primary per account. Connecting a second messenger is no
+    // longer refused, so this is what stops one search being matched twice and
+    // therefore delivered twice: the messenger just connected takes over, and
+    // the other stops receiving. Two independent searches are still two
+    // accounts, each with its own channel — which is what the separate trials
+    // and prices are for.
+    await run(
+      `UPDATE user_channels SET is_primary = false
+        WHERE user_id = $1 AND channel <> 'telegram' AND is_primary`,
+      [userId],
     );
 
     await beginSubscription(run, Number(userId));
@@ -242,18 +264,13 @@ async function start(chatId: string, token: string | null): Promise<void> {
   });
 
   if (claimed === null) {
-    await sendMessage(chatId, LINK_EXPIRED);
+    await reply(chatId, LINK_EXPIRED);
     return;
   }
-  if ("taken" in claimed) {
-    await sendMessage(chatId, alreadyOnAnotherChannel(claimed.taken));
-    return;
-  }
-
   // Read back rather than trust the form: this is what the filter will actually
   // match on, after the district limit and the rest of enforceLimits.
   const account = await accountForChat(chatId);
-  await sendMessage(chatId, criteriaSet((account?.criteria ?? {}) as Criteria));
+  await reply(chatId, criteriaSet((account?.criteria ?? {}) as Criteria));
 }
 
 async function offerUpgrade(chatId: string, account: Account): Promise<void> {
@@ -261,7 +278,7 @@ async function offerUpgrade(chatId: string, account: Account): Promise<void> {
   const keyboard: Keyboard = [
     [{ text: "💎 Choose a plan", url: `${siteUrl()}/upgrade?t=${token}` }],
   ];
-  await sendMessage(chatId, await upgradeInvitation(account, token), keyboard);
+  await reply(chatId, await upgradeInvitation(account, token), keyboard);
 }
 
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {
@@ -277,7 +294,7 @@ async function sendToForm(chatId: string, existing: boolean): Promise<void> {
       if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
     }
   }
-  await sendMessage(chatId, existing ? CHANGE_FILTER : SET_FILTERS, [
+  await reply(chatId, existing ? CHANGE_FILTER : SET_FILTERS, [
     [{ text: FILTERS_BUTTON, url: where }],
   ]);
 }
@@ -339,21 +356,21 @@ async function ignoreListing(
 async function pauseAlerts(chatId: string, reason: Reason): Promise<void> {
   const stopped = await stopFilter("telegram", chatId, reason);
   if (!stopped) {
-    await sendMessage(chatId, NOTHING_TO_PAUSE);
+    await reply(chatId, NOTHING_TO_PAUSE);
     return;
   }
-  await sendMessage(chatId, reason === "found_a_place" ? FOUND_A_PLACE : PAUSED);
+  await reply(chatId, reason === "found_a_place" ? FOUND_A_PLACE : PAUSED);
 }
 
 async function resume(chatId: string): Promise<void> {
   const woken = await resumeFilter("telegram", chatId);
-  await sendMessage(chatId, woken ? RESUMED : NOTHING_TO_RESUME);
+  await reply(chatId, woken ? RESUMED : NOTHING_TO_RESUME);
 }
 
 async function pushMenu(chatId: string): Promise<void> {
   const admin = process.env.TELEGRAM_ADMIN_CHAT;
   if (!admin || chatId !== admin) {
-    await sendMessage(chatId, COMMAND_HELP);
+    await reply(chatId, COMMAND_HELP);
     return;
   }
   const ok = await setMyCommands(BOT_MENU);
@@ -367,13 +384,13 @@ async function pushMenu(chatId: string): Promise<void> {
 
 async function stop(chatId: string): Promise<void> {
   const stopped = await deleteFilter("telegram", chatId);
-  await sendMessage(chatId, stopped ? STOPPED : NOTHING_TO_STOP);
+  await reply(chatId, stopped ? STOPPED : NOTHING_TO_STOP);
 }
 
 async function grant(chatId: string, ref: string, plan: string, days: number): Promise<void> {
   const admin = process.env.TELEGRAM_ADMIN_CHAT;
   if (!admin || chatId !== admin) {
-    await sendMessage(chatId, COMMAND_HELP);
+    await reply(chatId, COMMAND_HELP);
     return;
   }
   if (days < 1 || days > 400) {
