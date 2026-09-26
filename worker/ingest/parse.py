@@ -28,6 +28,7 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
         furnished=parsed.furnished,
         available_from=parsed.available_from,
         deposit_pcm=parsed.deposit_pcm,
+        floor_area_sqft=parsed.floor_area_sqft,
         postcode=parsed.postcode,
         postcode_district=parsed.postcode_district,
         raw=parsed.raw,

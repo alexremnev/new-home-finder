@@ -28,6 +28,7 @@ def matches(criteria: Criteria, listing: ListingValues) -> Verdict:
         _check_price,
         _check_bedrooms,
         _check_bathrooms,
+        _check_floor_area,
         _check_property_type,
         _check_areas,
         _check_furnished,
@@ -50,6 +51,18 @@ def _check_bedrooms(criteria: Criteria, listing: ListingValues) -> Verdict:
 def _check_bathrooms(criteria: Criteria, listing: ListingValues) -> Verdict:
 
     return _range("bathrooms", criteria.get("bathrooms"), listing.get("bathrooms"))
+
+def _check_floor_area(criteria: Criteria, listing: ListingValues) -> Verdict:
+
+    # Square feet on both sides — the filter is stated in feet and the column is
+    # stored in feet, so nothing is converted here. Most listings say nothing
+    # about size, and `_range` already lets a missing value through: a filter on
+    # area narrows what does say and never hides what does not.
+    return _range(
+        "floor_area_sqft",
+        criteria.get("floor_area_sqft"),
+        listing.get("floor_area_sqft"),
+    )
 
 def _range(name: str, wanted: Any, value: Any) -> Verdict:
     if not isinstance(wanted, dict):

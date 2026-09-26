@@ -620,6 +620,60 @@ form p.error {
 
 .range2 { margin-top: 0.25rem; }
 
+/* A slider that does not apply. Faded rather than hidden: the field is still
+   part of the form and vanishing it would make the card jump. */
+.range2-off { opacity: 0.45; }
+
+/* The same range in metres, under the feet. Quiet, because it is a second
+   reading of one control rather than another thing to set. */
+.range2-metric {
+  margin: 0.15rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+.range2-off .range2-input { cursor: not-allowed; }
+
+/* Only for a screen reader. The date input is labelled by the heading above the
+   row, so a visible second label would say the same thing twice. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The date and how many days either side of it, on one line. The number is
+   first because it reads as "± 10 days of —" left to right. */
+.date-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.25rem;
+}
+
+.date-days { flex: none; }
+.date-days input { width: 5.5rem; }
+.date-on { flex: 1 1 auto; min-width: 0; }
+.date-on input { width: 100%; }
+
+.date-days input:disabled {
+  background: var(--line);
+  color: var(--ink-soft);
+  cursor: not-allowed;
+}
+
+@media (max-width: 26rem) {
+  /* Two controls on a narrow screen are better stacked than squeezed. */
+  .date-row { flex-direction: column; align-items: stretch; }
+  .date-days input { width: 100%; }
+}
+
 .range2-value,
 
 .range2-track {

@@ -17,6 +17,7 @@ _INSERT_COLUMNS = (
     "property_type", "furnished", "pets_allowed", "bills_included", "available_from",
     "min_tenancy_months", "deposit_pcm", "postcode", "postcode_district", "tfl_zone",
     "lat", "lng", "title", "description", "is_landlord_direct", "photo_count",
+    "floor_area_sqft",
 )
 
 def insert_listing(conn: Conn, listing: Listing) -> int:
@@ -45,7 +46,7 @@ _LISTING_VIEW_COLUMNS = (
     "available_from", "furnished", "pets_allowed", "bills_included",
     "min_tenancy_months", "is_landlord_direct", "url",
 
-    "bathrooms", "deposit_pcm", "raw", "image_url",
+    "bathrooms", "deposit_pcm", "raw", "image_url", "floor_area_sqft",
 )
 
 def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
@@ -261,12 +262,17 @@ def known_external_ids(
     }
 
 def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None:
-    """The largest sitemap this source has served us lately, in listings.
+    """The most listings one child sitemap has held lately.
 
     OpenRent sometimes answers the same sitemap url with a complete but stunted
     file — 123 listings where there are normally 25,000, closing tag and all, so
     nothing about the response says it is short. Only its size does, and only
     compared against what the same url usually gives.
+
+    Per child sitemap, not per run, because the number of children varies: the
+    index lists one file some runs and two others. Compared per run, a perfectly
+    good single-file run of 24,920 sat just under half of a two-file run's
+    49,872 and was called stunted by 32 listings.
 
     None when there is no history to compare against, which is the first run and
     is not a reason to distrust anything.
@@ -274,10 +280,15 @@ def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None
 
     row = conn.execute(
         """
-        SELECT max((counters->>'in_sitemap')::int) AS most
+        SELECT max(
+                 (counters->>'in_sitemap')::int
+                 / greatest(1, (counters->>'sitemaps')::int)
+               ) AS most
           FROM job_stages
          WHERE stage = 'scrape' AND source_key = %s
            AND jsonb_typeof(counters->'in_sitemap') = 'number'
+           AND jsonb_typeof(counters->'sitemaps') = 'number'
+           AND (counters->>'sitemaps')::int > 0
            AND started_at > now() - make_interval(days => %s)
         """,
         (source_key, days),

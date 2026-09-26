@@ -106,7 +106,7 @@ class FakeConn:
             # The districts live subscriptions name — what the scraper now
             # follows instead of an operator's list of coverage.
             self.rows = [{"code": code} for code in self.districts]
-        elif "max((counters->>'in_sitemap')::int)" in sql:
+        elif "in_sitemap" in sql and "max(" in sql:
             self.one = {"most": self.biggest}
             self.rows = []
         elif "FROM source_sweeps" in sql:
@@ -430,6 +430,21 @@ def test_a_stunted_sitemap_settles_nothing() -> None:
 
     assert conn.settled == []
     assert swept.announce == []
+
+def test_one_child_sitemap_is_not_mistaken_for_a_stunted_one() -> None:
+    from worker.sources.openrent import collect
+
+    # The index lists one listings file some runs and two others. The first
+    # version of this guard compared the run's total against the biggest run
+    # seen, so a perfectly good single-file run of 24,920 sat just under half of
+    # a two-file run's 49,872 and was called stunted by 32 listings. It is
+    # compared per child file for exactly this reason.
+    #
+    # INDEX names two children, so `serving` answers both with the same list:
+    # 3 listings across 2 files, and a usual child of 3. Nothing stunted.
+    conn = FakeConn(districts=["SE16"], biggest=3)
+    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
+    assert conn.settled == ["SE16"]
 
 def test_a_full_sitemap_still_settles_a_quiet_district() -> None:
     from worker.sources.openrent import collect

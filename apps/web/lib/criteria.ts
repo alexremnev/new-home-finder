@@ -9,6 +9,9 @@ export type Criteria = {
   bedrooms?: { min?: number; max?: number };
 
   bathrooms?: { min?: number; max?: number };
+  // Square feet. One unit throughout, because that is what the form asks in;
+  // the sources' metres are converted on the way into the database.
+  floor_area_sqft?: { min?: number; max?: number };
   areas?: { postcode_districts?: string[] };
   furnished?: string[];
   pets_allowed?: boolean;
@@ -34,6 +37,9 @@ export const PROPERTY_TYPES = ["flat", "house", "room"] as const;
 
 const PRICE_LIMIT = 20_000;
 const BEDROOM_LIMIT = 10;
+// The same ceiling as the column's own constraint. The form offers a narrower
+// band; this is only about refusing nonsense somebody hand-crafted.
+const AREA_LIMIT = 20_000;
 
 export class InvalidForm extends Error {}
 
@@ -66,6 +72,8 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
   if (bedrooms) criteria.bedrooms = bedrooms;
   const bathrooms = range(form.bathrooms_min, form.bathrooms_max, BEDROOM_LIMIT);
   if (bathrooms) criteria.bathrooms = bathrooms;
+  const area = range(form.area_min, form.area_max, AREA_LIMIT);
+  if (area) criteria.floor_area_sqft = area;
 
   const after = day(form.available_after);
   const before = day(form.available_before);

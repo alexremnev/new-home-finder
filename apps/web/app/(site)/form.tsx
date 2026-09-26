@@ -61,9 +61,27 @@ const rooms = (value: number) => String(value);
 const TYPE_LABELS: Record<string, string> = {
   flat: "Flat",
   house: "House",
-  room: "Room in a shared flat",
+  room: "Room",
 };
 const beds = (value: number) => (value === 0 ? "Studio" : String(value));
+
+// How many days either side of the desired date a listing may be available.
+// Ten was hard-coded; it is now the starting point of a field.
+const DAY_WINDOW = 10;
+const DAY_WINDOW_MAX = 90;
+
+// Internal floor area, in square feet because that is what British listings
+// quote. 100 is a small single room; 3000 is a large house, and the top handle
+// parked there means "and above".
+const AREA_MIN = 100;
+const AREA_MAX = 3000;
+const AREA_STEP = 50;
+
+// 10.7639 square feet to the square metre. Shown beside the feet because most
+// people outside the lettings trade think in metres.
+const SQFT_PER_SQM = 10.7639;
+const sqft = (value: number) => value.toLocaleString("en-GB") + " ft²";
+const sqm = (value: number) => Math.round(value / SQFT_PER_SQM) + " m²";
 
 const money = (value: number) => "£" + value.toLocaleString("en-GB");
 const percent = (value: number, min: number, max: number) =>
@@ -83,6 +101,12 @@ export function SubscribeForm({
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
   const [bedrooms, setBedrooms] = useState<[number, number]>([BEDS_MIN, ROOMS_MAX]);
   const [bathrooms, setBathrooms] = useState<[number, number]>([BATHS_MIN, ROOMS_MAX]);
+  // Controlled, because two other fields depend on them: bedrooms is
+  // meaningless for a room, and the date's window only matters with a date.
+  const [wantedTypes, setWantedTypes] = useState<string[]>([]);
+  const [availableOn, setAvailableOn] = useState("");
+  const [dayWindow, setDayWindow] = useState(DAY_WINDOW);
+  const [area, setArea] = useState<[number, number]>([AREA_MIN, AREA_MAX]);
   const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
@@ -90,6 +114,10 @@ export function SubscribeForm({
     mode === "name" ? named : [...districts].sort().map((code) => ({ code, name: code }));
 
   const full = chosen.length >= maxDistricts;
+
+  // Only when rooms are the *only* thing wanted. Ticking Room beside Flat still
+  // leaves bedrooms meaningful, for the flats.
+  const roomsOnly = wantedTypes.length > 0 && wantedTypes.every((one) => one === "room");
 
   function add(area: Area) {
     if (chosen.some((one) => one.code === area.code)) {
@@ -169,10 +197,17 @@ export function SubscribeForm({
     // Only the ends that were actually moved. A slider left at its ceiling
     // means "and above", not "at most five" — sending the max there would hide
     // every six-bedroom house from somebody who asked for no maximum.
-    if (bedrooms[0] > BEDS_MIN) payload.bedrooms_min = String(bedrooms[0]);
-    if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
+    // Nothing from a slider that is switched off: a bedroom count filed against
+    // a rooms-only search would quietly match nothing.
+    if (!roomsOnly) {
+      if (bedrooms[0] > BEDS_MIN) payload.bedrooms_min = String(bedrooms[0]);
+      if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
+    }
     if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
     if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
+    // The top handle at its ceiling means "and above", so no maximum is sent.
+    if (area[0] > AREA_MIN) payload.area_min = String(area[0]);
+    if (area[1] < AREA_MAX) payload.area_max = String(area[1]);
 
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
@@ -181,8 +216,8 @@ export function SubscribeForm({
       if (!Number.isNaN(day.getTime())) {
         const shift = (days: number) =>
           new Date(day.getTime() + days * 86_400_000).toISOString().slice(0, 10);
-        payload.available_after = shift(-10);
-        payload.available_before = shift(10);
+        payload.available_after = shift(-dayWindow);
+        payload.available_before = shift(dayWindow);
       }
     }
 
@@ -215,6 +250,20 @@ export function SubscribeForm({
 
   const placeholder =
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
+
+  // What has been typed is a district in its own right, and also the start of
+  // another one. "E1" against "E14": the person may mean either, so nothing is
+  // committed until they say so.
+  const said = typed.trim().toLowerCase();
+  const stillAmbiguous =
+    said !== "" &&
+    options.some(
+      (one) => one.name.toLowerCase() === said || one.code.toLowerCase() === said,
+    ) &&
+    options.some(
+      (one) =>
+        one.name.toLowerCase().startsWith(said) && one.name.toLowerCase() !== said,
+    );
 
   return (
     <form onSubmit={submit} className="hero-form">
@@ -271,13 +320,27 @@ export function SubscribeForm({
             // as an ordinary change whose value is the option in full, so an
             // exact match is a pick rather than someone halfway through typing
             // — and nobody should have to press Enter after choosing.
-            const picked = options.find(
+            //
+            // Except when the exact match is also the start of another option.
+            // "E1" is a district and so is "E14": committing on the exact match
+            // added E1 the moment it was typed and made E14 unreachable. In that
+            // case the typing is allowed to continue, and Enter or clicking away
+            // commits — which the hint below says while it is ambiguous.
+            const said = value.trim().toLowerCase();
+            const exact = options.find(
               (one) =>
-                one.name.toLowerCase() === value.trim().toLowerCase() ||
-                one.code.toLowerCase() === value.trim().toLowerCase(),
+                one.name.toLowerCase() === said || one.code.toLowerCase() === said,
             );
-            if (picked) {
-              add(picked);
+            const alsoAPrefix =
+              said !== "" &&
+              options.some(
+                (one) =>
+                  one.name.toLowerCase().startsWith(said) &&
+                  one.name.toLowerCase() !== said,
+              );
+
+            if (exact && !alsoAPrefix) {
+              add(exact);
               return;
             }
             setTyped(value);
@@ -301,7 +364,9 @@ export function SubscribeForm({
         </datalist>
 
         <p className="hint">
-          Start typing and pick from the list.
+          {stillAmbiguous
+            ? `Press Enter to add ${typed.trim().toUpperCase()}, or keep typing.`
+            : "Start typing and pick from the list."}
         </p>
 
         {chosen.length > 0 && (
@@ -352,7 +417,14 @@ export function SubscribeForm({
           onChange={setBedrooms}
           format={beds}
           openTop="+"
+          disabled={roomsOnly}
         />
+        {roomsOnly && (
+          <small className="note">
+            A room is one room in somebody else's flat, so a bedroom count says
+            nothing about it. Tick Flat or House as well to use this again.
+          </small>
+        )}
       </div>
 
       <div>
@@ -368,21 +440,91 @@ export function SubscribeForm({
         />
       </div>
 
-      <label>
-        <span>Desired let available date</span>
-        <input type="date" name="available_on" />
+      <div>
+        <span className="field-label">Floor area</span>
+        <RangeSlider
+          min={AREA_MIN}
+          max={AREA_MAX}
+          step={AREA_STEP}
+          value={area}
+          onChange={setArea}
+          format={sqft}
+          openTop="+"
+        />
+        {/* The same numbers in metres, under the feet. Not a second control:
+            one slider, read twice. */}
+        <p className="range2-metric">
+          {area[0] === AREA_MIN && area[1] === AREA_MAX
+            ? "Any size"
+            : `${sqm(area[0])} — ${sqm(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
+        </p>
         <small className="note">
-          Listings available within about ten days of it. Leave blank for any date —
-          a listing that gives no date is sent either way.
+          Most listings never say how big they are, and those still come through —
+          this narrows the ones that do say.
         </small>
-      </label>
+      </div>
+
+      <div>
+        <span className="field-label">Desired let available date</span>
+        <div className="date-row">
+          <label className="date-days">
+            <span>± days</span>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              max={DAY_WINDOW_MAX}
+              step={1}
+              value={dayWindow}
+              // Off until there is a date to be either side of.
+              disabled={availableOn === ""}
+              onChange={(event) => {
+                const days = Number(event.target.value);
+                setDayWindow(
+                  Number.isFinite(days)
+                    ? Math.min(DAY_WINDOW_MAX, Math.max(0, Math.round(days)))
+                    : 0,
+                );
+              }}
+            />
+          </label>
+          <label className="date-on">
+            <span className="sr-only">Date</span>
+            <input
+              type="date"
+              name="available_on"
+              value={availableOn}
+              onChange={(event) => setAvailableOn(event.target.value)}
+            />
+          </label>
+        </div>
+        <small className="note">
+          {availableOn === ""
+            ? "Leave blank for any date — a listing that gives no date is sent either way."
+            : dayWindow === 0
+              ? "Only listings available on exactly that day."
+              : `Listings available within ${dayWindow} day${dayWindow === 1 ? "" : "s"} either side of it.`}
+        </small>
+      </div>
 
       <fieldset aria-labelledby="type-label">
         <span id="type-label" className="field-label">Property type</span>
         <div className="choices">
           {types.map((option) => (
             <label key={option}>
-              <input type="checkbox" name="property_types" value={option} />{" "}
+              <input
+                type="checkbox"
+                name="property_types"
+                value={option}
+                checked={wantedTypes.includes(option)}
+                onChange={(event) =>
+                  setWantedTypes((was) =>
+                    event.target.checked
+                      ? [...was, option]
+                      : was.filter((one) => one !== option),
+                  )
+                }
+              />{" "}
               {TYPE_LABELS[option] ?? option}
             </label>
           ))}
@@ -613,7 +755,7 @@ function Tick() {
 }
 
 function RangeSlider({
-  min, max, step, value, onChange, format, openTop = "",
+  min, max, step, value, onChange, format, openTop = "", disabled = false,
 }: {
   min: number;
   max: number;
@@ -622,13 +764,14 @@ function RangeSlider({
   onChange: (next: [number, number]) => void;
   format: (n: number) => string;
   openTop?: string;
+  disabled?: boolean;
 }) {
   const [low, high] = value;
   const atFloor = low === min;
   const atCeiling = high === max;
 
   return (
-    <div className="range2">
+    <div className={disabled ? "range2 range2-off" : "range2"}>
       <output className="range2-value">
         {atFloor && atCeiling
           ? "Any"
@@ -652,6 +795,7 @@ function RangeSlider({
           step={step}
           value={low}
           aria-label="Lowest"
+          disabled={disabled}
           onChange={(event) => onChange([Math.min(Number(event.target.value), high), high])}
         />
         <input
@@ -663,6 +807,7 @@ function RangeSlider({
           step={step}
           value={high}
           aria-label="Highest"
+          disabled={disabled}
           onChange={(event) => onChange([low, Math.max(Number(event.target.value), low)])}
         />
       </div>

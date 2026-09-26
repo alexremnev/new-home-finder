@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any
 
+from worker.units import sqft_from
+
 LABELS = (
     "Location", "Postcode", "Address", "Price", "Bedrooms",
     "Bathrooms", "Size", "Available", "Furnishing", "Deposit",
@@ -47,6 +49,7 @@ class Parsed:
     postcode: str | None = None
     postcode_district: str | None = None
     deposit_pcm: float | None = None
+    floor_area_sqft: int | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 class Unparseable(Exception):
@@ -181,6 +184,10 @@ def parse(
         postcode=postcode,
         postcode_district=district_of(postcode),
         deposit_pcm=float(money(values.get("deposit")) or 0) or None,
+        # The Size field, read as an area rather than kept as prose. It is still
+        # in `raw` below, because the string says things the number cannot —
+        # "approx", or a range.
+        floor_area_sqft=sqft_from(values.get("size")),
 
         raw={
             "via": "tg_feed",

@@ -181,3 +181,30 @@ describe("property type", () => {
     expect(parseForm({ property_types: [] }, ENABLED).property_types).toBeUndefined();
   });
 });
+
+describe("floor area", () => {
+  it("takes a range in square feet", () => {
+    expect(parseForm({ area_min: "500", area_max: "1200" }, ENABLED).floor_area_sqft)
+      .toEqual({ min: 500, max: 1200 });
+  });
+
+  it("leaves the top open when only a floor is given", () => {
+    // What a slider parked at its ceiling sends: no maximum, so a large house
+    // is not filtered out of somebody who asked for "500 and up".
+    expect(parseForm({ area_min: "500" }, ENABLED).floor_area_sqft)
+      .toEqual({ min: 500 });
+  });
+
+  it("is absent when the slider was not touched", () => {
+    expect(parseForm({}, ENABLED).floor_area_sqft).toBeUndefined();
+  });
+
+  it("refuses a range that is inside out", () => {
+    expect(() => parseForm({ area_min: "2000", area_max: "500" }, ENABLED))
+      .toThrow(InvalidForm);
+  });
+
+  it("refuses an area no home has", () => {
+    expect(() => parseForm({ area_max: "999999" }, ENABLED)).toThrow(InvalidForm);
+  });
+});

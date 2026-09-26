@@ -173,11 +173,6 @@ export async function EveryoneTable({ span, page }: { span: string; page: number
         <span>page {page} of {totalPages} · {total} accounts</span>
         <Link className={page >= totalPages ? "off" : ""} href={link(page + 1)}>older →</Link>
       </div>
-      <div className="pager">
-        <Link className={page <= 1 ? "off" : ""} href={link(page - 1)}>← newer</Link>
-        <span>page {page} of {totalPages} · {total} accounts</span>
-        <Link className={page >= totalPages ? "off" : ""} href={link(page + 1)}>older →</Link>
-      </div>
     </>
   );
 }

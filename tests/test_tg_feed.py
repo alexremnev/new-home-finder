@@ -156,3 +156,44 @@ class TestValues:
 
     def test_an_unreadable_date_is_unknown_rather_than_wrong(self) -> None:
         assert available_from("sometime soon", received_at=SENT) is None
+
+class TestSize:
+    def test_the_size_field_becomes_square_feet(self) -> None:
+        from worker.units import sqft_from
+
+        # British listings quote feet, the scraped pages quote metres, and the
+        # feed has been seen doing either. The unit is read, never assumed.
+        assert sqft_from("650 sq ft") == 650
+        assert sqft_from("1,250 sqft") == 1250
+        assert sqft_from("820 ft²") == 820
+        assert sqft_from("105 sq m") == 1130
+        assert sqft_from("60m²") == 646
+
+    def test_an_area_with_no_unit_is_refused(self) -> None:
+        from worker.units import sqft_from
+
+        # "65" is 65 square feet or 65 square metres depending on who wrote it,
+        # and either reading silently removes homes from somebody's alerts.
+        assert sqft_from("65") is None
+        assert sqft_from("N/A") is None
+        assert sqft_from("") is None
+        assert sqft_from(None) is None
+
+    def test_an_area_nobody_could_live_in_is_refused(self) -> None:
+        from worker.units import sqft_from
+
+        # A typo or a plot of land, not a London flat.
+        assert sqft_from("2 sq m") is None
+        assert sqft_from("999999 sq ft") is None
+
+    def test_the_conversion_survives_a_round_trip(self) -> None:
+        from worker.units import sqft_from, sqm_from_sqft
+
+        feet = sqft_from("105 sq m")
+        assert feet is not None
+        assert sqm_from_sqft(feet) == 105
+
+    def test_a_message_without_a_size_stores_none(self) -> None:
+        parsed = parse(LISTING, BUTTONS, received_at=SENT, message_id=108177)
+        # The fixture says "N/A", which is exactly the commonest case.
+        assert parsed.floor_area_sqft is None

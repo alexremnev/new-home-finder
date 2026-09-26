@@ -55,6 +55,7 @@ import psycopg
 from worker import store
 from worker.contracts.listing import Listing
 from worker.ingest.photo import image_in
+from worker.units import sqft_from
 from worker.obs import Run
 
 Row = dict[str, Any]
@@ -306,6 +307,9 @@ def as_listing(found: Found, html: str) -> Listing | None:
         available_from=when(available.group(1)) if available else None,
         min_tenancy_months=int(tenancy.group(1)) if tenancy else None,
         deposit_pcm=money(deposit.group(1)) if deposit else None,
+        # These pages state it in metres — "105 sq m" — and the unit is read
+        # from the text rather than assumed. See worker.units.
+        floor_area_sqft=sqft_from(text),
         postcode=postcode,
         postcode_district=found.district,
         # Every OpenRent listing is let by the landlord; that is the site.
@@ -372,14 +376,20 @@ def collect(
         # a newly added district on a 0.5% sample and its whole standing backlog
         # is announced as new from the next run — the exact flood settling
         # exists to prevent.
+        # Per child sitemap, because the index lists one file some runs and two
+        # others. Compared per run, a perfectly good single-file run of 24,920
+        # sat just under half of a two-file run's 49,872 and was called stunted
+        # by 32 listings — which is what the first version of this did.
+        each = len(found) // max(1, len(children))
         biggest = store.biggest_sitemap(conn, SOURCE_KEY)
-        stunted = biggest is not None and len(found) * 2 < biggest
+        stunted = biggest is not None and each * 2 < biggest
         if stunted:
             stage.set("sitemap_stunted", True)
             stage.log(
                 "warn",
-                f"sitemap served {len(found)} listings where it usually serves "
-                f"{biggest}; reading it but not settling any district on it",
+                f"each sitemap held about {each} listings where they usually hold "
+                f"{biggest} ({len(found)} across {len(children)} files); reading "
+                f"them but not settling any district on it",
             )
 
         here = [one for one in found if one.district in wanted]

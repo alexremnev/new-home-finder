@@ -50,5 +50,8 @@ class Listing(BaseModel):
     description: str | None = None
     is_landlord_direct: bool | None = None
     photo_count: int | None = Field(default=None, ge=0)
+    # Square feet, always. Metres are converted by worker.units on the way in,
+    # and a source that gave no unit leaves this None rather than guessing.
+    floor_area_sqft: int | None = Field(default=None, ge=50, le=20_000)
 
     raw: dict[str, object] = Field(default_factory=dict)
