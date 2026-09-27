@@ -280,12 +280,15 @@ UPDATE source_locations SET enabled = true
    AND location_id IN (SELECT id FROM locations WHERE code IN ('E1', 'SE1'));
 ```
 
-## Как проходят скраперы, по хостам
+## Как проходят скраперы, на сервере и локально
 
-Три запроса. Выполнять в Supabase → SQL Editor; ничего не меняют, только читают.
+Четыре запроса. Выполнять в Supabase → SQL Editor; только читают, ничего не меняют.
+
+Период задаётся в одном месте каждого запроса — `interval '24 hours'`. Меняйте
+на `'7 days'`, `'30 days'`, как нужно.
 
 `job_runs.host` пишется с миграции 0044 и пуст для прогонов, записанных раньше —
-такие строки помечены `(до 0044)`, а не спрятаны: «неизвестно» и «не запускался»
+такие помечены `(до 0044)`, а не спрятаны: «неизвестно откуда» и «не запускался»
 это разные вещи.
 
 Задачи с 27 сентября — по одной на портал: `rightmove`, `zoopla`, `openrent_v2`.
@@ -293,122 +296,142 @@ UPDATE source_locations SET enabled = true
 карте сайта, выключенный установщиком.
 
 ```sql
--- ═══════════════ A. последние 10 прогонов каждого скрапера, по хостам ═══════
+-- ═══════════════ A. каждый прогон: где, когда, чем кончился ════════════════
 --
--- `job_runs.host` пишется с 0044 и NULL для прогонов, записанных раньше.
--- Стадия берётся одна на прогон: у портальных задач она называется 'scrape'
--- и несёт source_key, поэтому все счётчики трафика — оттуда.
-WITH runs AS (
-    SELECT r.id,
-           r.job,
-           coalesce(r.host, '(до 0044)') AS host,
-           r.trigger,
-           r.status,
-           r.started_at,
-           r.finished_at,
-           r.error,
-           row_number() OVER (
-               PARTITION BY coalesce(r.host, '(до 0044)'), r.job
-               ORDER BY r.started_at DESC
-           ) AS nth
-      FROM job_runs r
-     WHERE r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
-)
-SELECT runs.host,
-       runs.job,
-       runs.nth                                              AS "№",
-       to_char(runs.started_at AT TIME ZONE 'Europe/London',
-               'DD Mon HH24:MI:SS')                          AS "когда (Лондон)",
-       runs.trigger                                          AS "запуск",
-       runs.status                                           AS "статус",
-       round(extract(epoch FROM runs.finished_at - runs.started_at))::int
-                                                             AS "сек",
-       (s.counters->>'districts')::int                       AS "районов",
-       (s.counters->>'seen')::int                            AS "увидел",
-       (s.counters->>'new')::int                             AS "новых",
-       (s.counters->>'stored')::int                          AS "записал",
-       (s.counters->>'announced')::int                       AS "отправил",
-       pg_size_pretty((s.counters->>'bytes')::bigint)        AS "трафик",
-       pg_size_pretty(
-           nullif((s.counters->>'proxy_bytes')::bigint, 0))   AS "через прокси",
-       (s.counters->>'requests')::int                        AS "запросов",
-       nullif((s.counters->>'refused')::int, 0)              AS "отказов",
-       nullif((s.counters->>'district_partial')::int, 0)     AS "недочитано",
-       s.counters->'refused_this_address'                    AS "адрес отвергли",
-       left(coalesce(runs.error, ''), 120)                   AS "ошибка"
-  FROM runs
+-- Одна строка на прогон, новые сверху. Период — в единственном месте, в
+-- `interval` ниже: поставьте '24 hours', '7 days', '30 days'.
+--
+-- `job_runs.host` пишется с миграции 0044 и пуст для прогонов, записанных
+-- раньше — такие помечены «(до 0044)», а не спрятаны: «неизвестно откуда» и
+-- «не запускался» это разные вещи.
+--
+-- Счётчики берутся из стадии, а не из прогона: у портальных задач стадия
+-- называется 'scrape' и несёт source_key, и весь учёт трафика — там.
+SELECT coalesce(r.host, '(до 0044)')                        AS host,
+       r.job,
+       to_char(r.started_at AT TIME ZONE 'Europe/London',
+               'DD Mon HH24:MI:SS')                         AS started_london,
+       r.trigger,
+       r.status,
+       round(extract(epoch FROM r.finished_at - r.started_at))::int AS secs,
+       -- Мегабайты, а не байты: вопрос был про мегабайты, и 4.9 читается, а
+       -- 5138022 нет.
+       round((s.counters->>'bytes')::numeric / 1048576, 2)   AS mb,
+       round((s.counters->>'proxy_bytes')::numeric / 1048576, 2) AS mb_proxy,
+       (s.counters->>'requests')::int                        AS requests,
+       (s.counters->>'districts')::int                       AS districts,
+       (s.counters->>'seen')::int                            AS seen,
+       (s.counters->>'new')::int                             AS new,
+       (s.counters->>'stored')::int                          AS stored,
+       (s.counters->>'announced')::int                        AS sent,
+       nullif((s.counters->>'duplicate')::int, 0)            AS duplicates,
+       nullif((s.counters->>'refused')::int, 0)              AS refused,
+       nullif((s.counters->>'invalid')::int, 0)              AS rejected,
+       nullif((s.counters->>'district_partial')::int, 0)     AS part_read,
+       nullif((s.counters->>'no_photo')::int, 0)             AS no_photo,
+       s.counters->'refused_this_address'                    AS address_refused,
+       -- Ошибка прогона, а если её нет — последнее, что стадия сказала в лог.
+       -- Прогон может закончиться «degraded» без r.error: причина тогда только
+       -- в job_events, и без этого поля пришлось бы искать её отдельным запросом.
+       coalesce(nullif(left(r.error, 200), ''), e.message)   AS error
+  FROM job_runs r
   -- LATERAL, а не GROUP BY: у портальной задачи одна стадия 'scrape' на прогон,
-  -- а у `portals` их три, и брать надо ту, что совпала с именем задачи.
+  -- а у `portals` их три, и нужна та, что совпала с именем задачи.
   LEFT JOIN LATERAL (
       SELECT js.counters
         FROM job_stages js
-       WHERE js.run_id = runs.id
+       WHERE js.run_id = r.id
          AND js.stage = 'scrape'
-         AND (runs.job = 'portals' OR js.source_key = runs.job)
+         AND (r.job = 'portals' OR js.source_key = r.job)
        ORDER BY js.started_at
        LIMIT 1
   ) AS s ON true
- WHERE runs.nth <= 10
- ORDER BY runs.host, runs.job, runs.nth;
+  LEFT JOIN LATERAL (
+      SELECT je.message
+        FROM job_events je
+       WHERE je.run_id = r.id
+         AND je.level IN ('error', 'warn')
+       ORDER BY je.id DESC
+       LIMIT 1
+  ) AS e ON true
+ WHERE r.started_at > now() - interval '24 hours'
+   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+ ORDER BY r.started_at DESC;
 
 
--- ═══════════════ B. сводка по этим же 10 прогонам ═══════════════════════════
+-- ═══════════════ B. сводка: как себя ведёт каждый читатель на каждой машине ═
 --
--- Одна строка на хост и задачу: сколько из последних десяти прошло чисто,
--- сколько трафика и когда последний раз. Это ответ на «как проходят».
-WITH runs AS (
-    SELECT r.id, r.job, coalesce(r.host, '(до 0044)') AS host,
-           r.status, r.started_at, r.finished_at,
-           row_number() OVER (
-               PARTITION BY coalesce(r.host, '(до 0044)'), r.job
-               ORDER BY r.started_at DESC
-           ) AS nth
-      FROM job_runs r
-     WHERE r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
-),
-last10 AS (SELECT * FROM runs WHERE nth <= 10)
-SELECT l.host,
-       l.job,
-       count(*)                                              AS "прогонов",
-       count(*) FILTER (WHERE l.status = 'ok')               AS "чисто",
-       count(*) FILTER (WHERE l.status = 'degraded')         AS "с ошибками",
-       count(*) FILTER (WHERE l.status = 'failed')           AS "упало",
-       count(*) FILTER (WHERE l.status = 'skipped_locked')   AS "пропущено",
+-- Это ответ на «как проходит»: доля чистых прогонов, трафик, сколько дошло до
+-- людей, и когда последний раз что-то было.
+SELECT coalesce(r.host, '(до 0044)')                        AS host,
+       r.job,
+       count(*)                                              AS runs,
+       count(*) FILTER (WHERE r.status = 'ok')               AS ok,
+       count(*) FILTER (WHERE r.status = 'degraded')         AS degraded,
+       count(*) FILTER (WHERE r.status = 'failed')           AS failed,
+       count(*) FILTER (WHERE r.status = 'skipped_locked')   AS skipped,
+       count(*) FILTER (WHERE r.status = 'running')          AS running,
+       round(100.0 * count(*) FILTER (WHERE r.status = 'ok')
+                   / nullif(count(*), 0))                    AS ok_pct,
        round(percentile_cont(0.5) WITHIN GROUP (
-           ORDER BY extract(epoch FROM l.finished_at - l.started_at)
-       ))::int                                               AS "медиана, сек",
-       pg_size_pretty(sum((s.counters->>'bytes')::bigint))   AS "трафик всего",
-       sum((s.counters->>'announced')::int)                  AS "отправлено",
-       to_char(max(l.started_at) AT TIME ZONE 'Europe/London',
-               'DD Mon HH24:MI')                             AS "последний"
-  FROM last10 l
+           ORDER BY extract(epoch FROM r.finished_at - r.started_at)
+       ))::int                                               AS median_secs,
+       round(sum((s.counters->>'bytes')::numeric) / 1048576, 1)       AS mb_total,
+       round(sum((s.counters->>'proxy_bytes')::numeric) / 1048576, 1) AS mb_proxy,
+       round(avg((s.counters->>'bytes')::numeric) / 1048576, 2)       AS mb_per_run,
+       sum((s.counters->>'stored')::int)                     AS stored,
+       sum((s.counters->>'announced')::int)                  AS sent,
+       sum((s.counters->>'refused')::int)                    AS refused,
+       to_char(max(r.started_at) AT TIME ZONE 'Europe/London',
+               'DD Mon HH24:MI')                             AS last_run
+  FROM job_runs r
   LEFT JOIN LATERAL (
       SELECT js.counters
         FROM job_stages js
-       WHERE js.run_id = l.id AND js.stage = 'scrape'
-         AND (l.job = 'portals' OR js.source_key = l.job)
+       WHERE js.run_id = r.id AND js.stage = 'scrape'
+         AND (r.job = 'portals' OR js.source_key = r.job)
        ORDER BY js.started_at
        LIMIT 1
   ) AS s ON true
- GROUP BY l.host, l.job
- ORDER BY l.host, l.job;
+ WHERE r.started_at > now() - interval '24 hours'
+   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+ GROUP BY 1, 2
+ ORDER BY 1, 2;
 
 
--- ═══════════════ C. одну задачу гоняют с двух машин? ════════════════════════
+-- ═══════════════ C. только то, что пошло не так ════════════════════════════
+--
+-- Каждая жалоба с текстом, а не только код возврата. Стадия может пройти как
+-- degraded и оставить причину в job_events — тогда в запросе A её видно одной
+-- строкой, а здесь целиком.
+SELECT coalesce(r.host, '(до 0044)')                        AS host,
+       r.job,
+       to_char(je.ts AT TIME ZONE 'Europe/London',
+               'DD Mon HH24:MI:SS')                         AS at_london,
+       je.level,
+       je.source_key,
+       je.message
+  FROM job_events je
+  JOIN job_runs r ON r.id = je.run_id
+ WHERE je.ts > now() - interval '24 hours'
+   AND je.level IN ('error', 'warn')
+   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+ ORDER BY je.ts DESC
+ LIMIT 200;
+
+
+-- ═══════════════ D. одну задачу гоняют с двух машин? ═══════════════════════
 --
 -- То, ради чего в 0044 и появилась колонка host: когда трафик удваивается,
--- первый вопрос — не запущены ли оба расписания одновременно. Раньше это
--- выводили арифметикой по промежуткам между прогонами.
+-- первый вопрос — не запущены ли оба расписания. Раньше это выводили
+-- арифметикой по промежуткам между прогонами.
 SELECT job,
-       count(DISTINCT coalesce(host, '(до 0044)'))           AS "хостов",
-       string_agg(DISTINCT coalesce(host, '(до 0044)'), ', ' ORDER BY
-                  coalesce(host, '(до 0044)'))               AS "какие",
-       count(*)                                              AS "прогонов за сутки"
+       count(DISTINCT coalesce(host, '(до 0044)'))           AS hosts,
+       string_agg(DISTINCT coalesce(host, '(до 0044)'), ', ') AS which,
+       count(*)                                              AS runs
   FROM job_runs
  WHERE started_at > now() - interval '24 hours'
  GROUP BY job
- -- Без HAVING: видеть надо все задачи, а не только сдвоенные. Больше одного
- -- хоста — первым делом.
  ORDER BY 2 DESC, job;
 ```
 

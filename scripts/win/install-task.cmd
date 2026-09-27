@@ -3,10 +3,10 @@ REM Install the scheduled tasks. Run once, from an elevated prompt.
 REM
 REM   scripts\win\install-task.cmd
 REM
-REM Six tasks, not one. ingest reads the feed, drain sends what it queued, rollup
-REM totals the day into daily_stats so the console reads counts instead of
-REM computing them, report checks for silence, and two portal readers fetch the
-REM sites that refuse the server's address.
+REM Seven tasks, not one. ingest reads the feed, drain sends what it queued,
+REM rollup totals the day into daily_stats so the console reads counts instead of
+REM computing them, report checks for silence, and three portal readers fetch
+REM the sites directly — two of which refuse the server's address outright.
 REM
 REM The offsets matter: drain at +2 so a batch goes out in the cycle it was queued
 REM in rather than waiting for the next, and rollup at +3 so it counts a delivery
@@ -25,40 +25,42 @@ schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:02 ^
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:03 ^
   /TN "home rollup" /TR "%RUN% rollup"
 
-REM ── the portal readers that the server cannot run ──────────────────────────
+REM ── the three portal readers ───────────────────────────────────────────────
 REM
-REM Zoopla and OpenRent, read from their own search pages. They live here and
-REM not on the server because the server's address is refused: measured from it
-REM on 27 September 2026, Zoopla answers 403 under every browser fingerprint and
-REM OpenRent answers 405. From this connection both serve the identical requests.
+REM Every twenty minutes, round the clock, offset seven minutes from each other
+REM so the three sweeps never start in the same minute.
 REM
-REM So running them here is not a workaround, it is the cheap arrangement: the
-REM alternative is a metered residential proxy, and this costs nothing.
+REM /SC MINUTE /MO 20 is a plain repeat with no daily window, so this runs
+REM overnight too. The server's timers stop between 22:00 and 07:20 because that
+REM band exists to hold down a traffic bill; here there is no bill, and a
+REM listing posted at 23:00 is worth finding at 23:00.
 REM
-REM Rightmove is deliberately NOT here. The server serves it fine and runs it on
-REM its own timer; adding it here would mean two machines fetching the same
-REM pages, and whichever arrived second would find nothing new and have paid for
-REM the privilege.
+REM Zoopla and OpenRent especially belong here rather than on the server.
+REM Measured from the server on 27 September 2026: Zoopla answers 403 under
+REM every browser fingerprint and OpenRent answers 405, while this connection is
+REM served normally. So running them here is not a workaround, it is the cheap
+REM arrangement — the alternative is a metered residential proxy.
 REM
-REM The old "home scrape" task is removed rather than left alone. It ran the
+REM Rightmove is served on the server as well, so it now runs in both places.
+REM That is not harmful — whichever sweep arrives second finds nothing new — but
+REM it is wasted work, and if this machine is reliably awake the server's copy
+REM can be stopped with:
+REM
+REM     systemctl disable --now london-home-finder-rightmove.timer
+REM
+REM The old "home scrape" task is deleted rather than left alone. It ran the
 REM sitemap reader, which fetched the whole nationwide sitemap every half hour —
-REM about 950MB a day to discover two or three listings — and `openrent_v2`
-REM below replaces it by reading one 92KB page per district.
+REM about 950MB a day to discover two or three listings — and openrent_v2 does
+REM the same job by reading one 92KB page per district.
 schtasks /Delete /F /TN "home scrape" 2>NUL
 
-REM Every twenty minutes from 07:20 to 22:00, offset from each other so the two
-REM sweeps do not start together.
-REM
-REM Longer in the evening than the server's schedule, which stops the
-REM twenty-minute band at 17:00 and goes hourly. That band exists to hold down a
-REM traffic bill; here there is no bill, so the cheaper thing is to keep looking.
-REM
-REM /DU 14:40 /RI 20 is how Task Scheduler expresses a window: start at 07:20,
-REM repeat every 20 minutes for fourteen hours and forty minutes.
-schtasks /Create /F /RL LIMITED /SC DAILY /ST 07:20 /DU 14:40 /RI 20 ^
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:00 ^
+  /TN "home rightmove" /TR "%RUN% rightmove"
+
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:07 ^
   /TN "home zoopla" /TR "%RUN% zoopla"
 
-schtasks /Create /F /RL LIMITED /SC DAILY /ST 07:27 /DU 14:40 /RI 20 ^
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:14 ^
   /TN "home openrent" /TR "%RUN% openrent_v2"
 
 schtasks /Create /F /RL LIMITED /SC HOURLY /MO 1 /ST 00:20 ^

@@ -1793,19 +1793,6 @@ form p.error {
 
 .scroll-x { overflow-x: auto; }
 
-/* A table with more columns than will fit.
- *
- * `.grid` is width: 100%, which inside `.scroll-x` means it shrinks to the
- * container instead of overflowing it — so the columns squeeze and every
- * heading wraps into a stack of single words. That is what happened to the
- * scraper tables: the wrapper was there and scrolled nothing, because there
- * was nothing wider than the box to scroll.
- *
- * A min-width gives `.scroll-x` something to scroll. Below that width the
- * table keeps its shape and the container slides; above it, `width: 100%`
- * still fills the card as before. */
-.grid.roomy { min-width: 44rem; }
-
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;

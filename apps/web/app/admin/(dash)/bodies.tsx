@@ -84,13 +84,33 @@ const JOB_WHY: Record<string, string> = {
     "Читает новые сообщения из Telegram-фида, разбирает их в объявления и ставит " +
     "совпадения в очередь. Запускается каждые две минуты. Если молчит — новых " +
     "объявлений не появится вообще.",
+  rightmove:
+    "Читает страницы поиска Rightmove — по одной на район, около 120 КБ, все поля " +
+    "из встроенного в страницу JSON. По расписанию рабочего дня: в будни с 7:20 " +
+    "до 17 каждые 20 минут, с 17 до 22 раз в час, ночью не запускается; в " +
+    "выходные с 10 до 20 раз в час. Запускается на сервере: Rightmove его " +
+    "адресу отдаёт. Если молчит — Rightmove перестанет приходить со скрапера, " +
+    "но фид его публикует, так что часть объявлений всё равно дойдёт.",
+  zoopla:
+    "То же для Zoopla, около 63 КБ на район. Важно: Zoopla отвечает адресу " +
+    "сервера 403 под любым отпечатком браузера, а домашней машине отдаёт " +
+    "нормально — поэтому либо этот читатель стоит в планировщике на Windows, " +
+    "либо ему нужен резидентский прокси. «Отказов» в состоянии означает именно это.",
+  openrent_v2:
+    "Читает OpenRent со страниц поиска: одна страница района отдаёт все его id " +
+    "целиком, дальше страница объявления качается только для действительно " +
+    "новых. Заменил старый scrape, который тянул карту сайта всей страны — " +
+    "около 950 МБ в сутки. OpenRent тоже отвечает серверу 405, оговорка та же, " +
+    "что у Zoopla. Если молчит — OpenRent перестанет приходить вовсе: фид его " +
+    "не публикует, это и была причина завести отдельный читатель.",
+  portals:
+    "Все три портальных читателя одним прогоном. По расписанию не стоит — это " +
+    "для ручного обхода. Если появился здесь, значит кто-то запускал вручную.",
   scrape:
-    "Читает OpenRent прямо с сайта: фид его не публикует. По расписанию рабочего " +
-    "дня: в будни с 7:20 до 17 каждые 20 минут, с 17 до 22 раз в час, ночью " +
-    "не запускается; в выходные с 10 до 20 раз в час. Карта сайта у них без " +
-    "lastmod и без ETag, поэтому каждый прогон качает её целиком — реже " +
-    "спрашивать это единственный способ платить меньше. " +
-    "Если молчит — OpenRent перестанет приходить, остальные источники не пострадают.",
+    "Старый читатель OpenRent по карте сайта. Выключен установщиком: качал " +
+    "карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх " +
+    "объявлений, — а на страницы объявлений OpenRent отвечает серверу 405. " +
+    "Пустая строка здесь — норма. Его работу делает openrent_v2.",
   drain:
     "Отправляет то, что стоит в очереди: уведомления об окончании плана, вечерний " +
     "дайджест и сами алерты. Каждые две минуты. Если молчит — объявления есть, но " +
@@ -240,26 +260,30 @@ export async function Feeds({ span }: { span: string }) {
 // ordered here rather than taken from the database, so that a reader which has
 // not run at all still gets a panel — a silent scraper is the thing worth
 // seeing, and it cannot show itself.
+// The readers that fetch a portal's own pages, one tile each. Named and
+// ordered here rather than taken from the database, so that a reader which has
+// not run at all still gets a tile — a silent scraper is the thing worth
+// seeing, and it cannot show itself.
 const PORTALS: { source: string; label: string; why: string }[] = [
   {
     source: "rightmove",
     label: "Rightmove",
-    why: "Читает страницу поиска по каждому району: все поля берутся из встроенного JSON, отдельные страницы объявлений не запрашиваются. Около 120 КБ на район за прогон. Сортировка — «самые новые», листание останавливается, как только доходит до объявлений старше прошлого обхода, поэтому в обычном режиме это одна страница.",
+    why: "Читает страницу поиска по каждому району: все поля берутся из встроенного JSON, отдельные страницы объявлений не запрашиваются. Около 120 КБ на район за прогон. Сортировка — «самые новые», листание останавливается, как только доходит до объявлений старше прошлого обхода, поэтому в обычном режиме это одна страница. Большое число — сколько объявлений этот читатель увидел раньше всех остальных, включая Telegram-фид; это его настоящий вклад. Рядом: «seen» — всё, что попалось, включая найденное кем-то раньше; «stored» — сколько новых строк создал (меньше, чем seen, потому что объявление, опубликованное фидом минутой раньше, уже лежит в базе); «sent» — сколько из этого действительно ушло подписчикам, и расхождение со stored нормально для района, который ещё дочитывается. Трафик — из счётчика libcurl, то есть ровно то, что прошло по сети в сжатом виде.",
   },
   {
     source: "zoopla",
     label: "Zoopla",
-    why: "То же, но данные лежат в RSC-потоке страницы, а не в __NEXT_DATA__. Читается только массив собственных объявлений района: рядом лежат ещё два — продвинутые и из соседних районов, — и второй заведомо не наш. Около 63 КБ на район, вдвое дешевле Rightmove.",
+    why: "То же, но данные лежат в RSC-потоке страницы, а не в __NEXT_DATA__. Читается только массив собственных объявлений района: рядом лежат ещё два — продвинутые и из соседних районов, — и второй заведомо не наш. Около 63 КБ на район, вдвое дешевле Rightmove. Замечание: Zoopla отвечает адресу сервера 403 под любым отпечатком браузера, поэтому либо этот читатель запускается с домашней машины, либо ему нужен резидентский прокси. Если в состоянии видно «refused» — дело именно в этом.",
   },
   {
     source: "openrent_v2",
-    label: "OpenRent (поиск)",
-    why: "Новый читатель OpenRent. Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу.",
+    label: "OpenRent (search)",
+    why: "Новый читатель OpenRent. Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу. OpenRent отвечает адресу сервера 405, так что здесь та же оговорка, что у Zoopla.",
   },
   {
     source: "openrent",
-    label: "OpenRent (карта сайта)",
-    why: "Старый читатель. Выключен установщиком: он качал карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх объявлений, — а на страницы объявлений OpenRent отвечает этому серверу 405. Пустая строка здесь — это норма, а не поломка. Оставлен рядом, чтобы было с чем сравнить новый.",
+    label: "OpenRent (sitemap)",
+    why: "Старый читатель. Выключен установщиком: он качал карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх объявлений, — а на страницы объявлений OpenRent отвечает серверу 405. Пустая плитка здесь — норма, а не поломка. Оставлен рядом, чтобы было с чем сравнить новый.",
   },
 ];
 
@@ -273,6 +297,19 @@ function portalTone(row: PortalRun | undefined, expected: boolean): "good" | "wa
   return "good";
 }
 
+// Tiles, not a table.
+//
+// Two attempts at a wide table broke this tab, and the reason is structural
+// rather than a detail to be tuned: `.grid` is width: 100%, so inside a card it
+// cannot overflow and scroll — it squeezes, and every heading collapses into a
+// stack of single words. Every other panel here uses `.tiles`, which is a grid
+// of cards that reflows at any width, and matching it is both safer and more
+// consistent than making tables a special case.
+//
+// The headline number is what the scraper found FIRST, before any other
+// reader. That is its real contribution: `stored` undercounts it, because a
+// listing the feed published a minute earlier is already in the table and the
+// scraper writes nothing.
 export async function Portals({ span }: { span: string }) {
   const win = spanFrom(span);
   const [rows, tally] = await Promise.all([portalRuns(win), readerTally(win)]);
@@ -282,67 +319,43 @@ export async function Portals({ span }: { span: string }) {
 
   return (
     <>
-      <div className="scroll-x">
-        {/* Headings are one word each on purpose. `.grid` is width: 100%, so a
-            long heading does not widen the table — it wraps inside a squeezed
-            column, and nine of those turn the card into a thicket. The `why`
-            above the panel explains what each one counts. */}
-        <table className="grid roomy">
-          <thead>
-            <tr>
-              <th>скрапер</th>
-              <th className="num">первым</th>
-              <th className="num">увидел</th>
-              <th className="num">записал</th>
-              <th className="num">отправил</th>
-              <th className="num">трафик</th>
-              <th>состояние</th>
-            </tr>
-          </thead>
-          <tbody>
-            {PORTALS.map((one) => {
-              const row = rows.find((r) => r.source === one.source);
-              const mine = tally.find((t) => t.reader === one.source);
-              const expected = one.source !== "openrent";
-              const quiet = !row || row.runs === 0;
-              return (
-                <tr key={one.source}>
-                  <td>
-                    {one.label}
-                    <Why text={one.why} />
-                  </td>
-                  <td className="num">{(mine?.got_first ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{(mine?.saw ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{(row?.stored ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{(row?.announced ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{weight(Number(row?.bytes ?? 0))}</td>
-                  <td className={portalTone(row, expected)}>
-                    {quiet
-                      ? expected
-                        ? "не запускался"
-                        : "выключен"
-                      : [
-                          `${row.runs} прогонов`,
-                          row.last_at ? ago(row.last_at) : null,
-                          row.refused > 0 ? `отказов ${row.refused}` : null,
-                          row.bad > 0 ? `падений ${row.bad}` : null,
-                          row.invalid > 0 ? `брак ${row.invalid}` : null,
-                          row.partial > 0 ? `недочитано ${row.partial}` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      <div className="tiles">
+        {PORTALS.map((one) => {
+          const row = rows.find((r) => r.source === one.source);
+          const mine = tally.find((t) => t.reader === one.source);
+          const expected = one.source !== "openrent";
+          const quiet = !row || row.runs === 0;
+          return (
+            <Metric
+              key={one.source}
+              label={one.label}
+              value={mine?.got_first ?? 0}
+              tone={portalTone(row, expected)}
+              note={[
+                quiet ? (expected ? "never ran" : "switched off") : null,
+                mine ? `${mine.saw} seen` : null,
+                row ? `${row.stored} stored` : null,
+                row ? `${row.announced} sent` : null,
+                row ? weight(Number(row.bytes ?? 0)) : null,
+                row && row.runs > 0 ? `${row.runs} runs` : null,
+                row?.last_at ? ago(row.last_at) : null,
+                row && row.refused > 0 ? `${row.refused} refused` : null,
+                row && row.bad > 0 ? `${row.bad} failed` : null,
+                row && row.invalid > 0 ? `${row.invalid} rejected` : null,
+                row && row.partial > 0 ? `${row.partial} part-read` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              why={one.why}
+            />
+          );
+        })}
       </div>
       <p className="hint">
-        {`за период ${spanWords(win)} · трафик ${weight(total)}`}
+        {`found first ${spanWords(win)} · ${weight(total)} downloaded`}
         {billable > 0
-          ? ` · через прокси ${weight(billable)} — это и есть счёт DataImpulse`
-          : " · прокси не используется, всё идёт напрямую с сервера"}
+          ? ` · ${weight(billable)} of it through the proxy, which is what DataImpulse bills`
+          : " · no proxy in use, everything went out directly"}
       </p>
     </>
   );
@@ -357,16 +370,14 @@ const PORTAL_NAMES: Record<string, string> = {
 function lead(seconds: number | null): string {
   if (seconds === null) return "";
   const amount = Math.abs(seconds);
-  const how = amount < 90 ? `${amount} с` : `${Math.round(amount / 60)} мин`;
-  if (amount < 30) return "приходят одновременно";
-  return seconds > 0
-    ? `скрапер позже на ${how}`
-    : `скрапер раньше на ${how}`;
+  const how = amount < 90 ? `${amount}s` : `${Math.round(amount / 60)} min`;
+  if (amount < 30) return "neck and neck";
+  return seconds > 0 ? `scraper ${how} later` : `scraper ${how} sooner`;
 }
 
-// Can the Telegram feed be switched off? The panel is built around the one
-// number that answers it — how many listings only the feed saw, in a district
-// the scrapers actually read. Everything else is context for that number.
+// Can the Telegram feed be switched off? One tile per portal, and the headline
+// number is the only one that answers it: listings the feed found and the
+// scraper did not, in a district the scrapers actually read.
 export async function FeedVersusScrapers({ span }: { span: string }) {
   const win = spanFrom(span);
   const [rows, since] = await Promise.all([readerOverlap(win), sightingsSince()]);
@@ -377,54 +388,43 @@ export async function FeedVersusScrapers({ span }: { span: string }) {
   if (seen === 0) {
     return (
       <p className="hint">
-        За этот период ничего не сравнивалось. Учёт начался{" "}
-        {since ? at(since) : "ещё не начался"} — раньше этой даты никто не
-        записывал, кто увидел объявление, и задним числом это не восстановить.
+        Nothing to compare in this range. Recording started{" "}
+        {since ? at(since) : "— not yet"}: before then nothing wrote down which
+        reader saw a listing, and that cannot be reconstructed afterwards.
       </p>
     );
   }
 
   return (
     <>
-      <div className="scroll-x">
-        <table className="grid roomy">
-          <thead>
-            <tr>
-              <th>портал</th>
-              <th className="num">всего</th>
-              <th className="num">оба</th>
-              <th className="num">фид</th>
-              <th className="num">пропущено</th>
-              <th className="num">скрапер</th>
-              <th>кто раньше</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.portal}>
-                <td>{PORTAL_NAMES[row.portal] ?? row.portal}</td>
-                <td className="num">{row.total.toLocaleString("en-GB")}</td>
-                <td className="num">{row.both.toLocaleString("en-GB")}</td>
-                <td className="num">{row.feed_only.toLocaleString("en-GB")}</td>
-                <td className={row.feed_only_covered > 0 ? "num bad" : "num good"}>
-                  {row.feed_only_covered.toLocaleString("en-GB")}
-                </td>
-                <td className="num">{row.scraper_only.toLocaleString("en-GB")}</td>
-                <td>
-                  {row.both === 0
-                    ? "—"
-                    : `${row.scraper_first} / ${row.feed_first} · ${lead(row.median_lead_secs)}`}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="tiles">
+        {rows.map((row) => (
+          <Metric
+            key={row.portal}
+            label={PORTAL_NAMES[row.portal] ?? row.portal}
+            value={row.feed_only_covered}
+            tone={row.feed_only_covered > 0 ? "bad" : "good"}
+            note={[
+              `${row.total} listings`,
+              `${row.both} both`,
+              `${row.feed_only} feed only`,
+              `${row.scraper_only} scraper only`,
+              row.both > 0
+                ? `first: ${row.scraper_first} scraper / ${row.feed_first} feed`
+                : null,
+              row.both > 0 ? lead(row.median_lead_secs) : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            why="Большое число — объявления, которые нашёл фид, а скрапер нет, и которые лежали в районе, который скрапер читает. Это единственная цифра, означающая промах: объявление в районе, который никто не выбрал, скрапер не смотрит по замыслу, поэтому «feed only» само по себе ничего не значит. Устойчивый ноль здесь — основание выключить Telegram-источник. «first» — сколько раз первым был скрапер против фида, и медианная разница: читатель, который находит всё, но на пять минут позже, для уведомлений заменой не является. Группировка идёт по id объявления на портале, а не по строке в базе: для Rightmove и Zoopla фид и скрапер пишут в одну строку, а у OpenRent старый и новый читатели — две строки с одним номером."
+          />
+        ))}
       </div>
       <p className="hint">
         {missed === 0
-          ? "Скраперы не пропустили ничего, что нашёл фид в наших районах за этот период."
-          : `Фид нашёл ${missed} объявлений в наших районах, которых не нашли скраперы — пока отключать его рано.`}
-        {since ? ` · учёт с ${at(since)}` : ""}
+          ? "The scrapers missed nothing the feed found in a district they read."
+          : `The feed found ${missed} listings in districts the scrapers read and they did not — too early to switch it off.`}
+        {since ? ` · recording since ${at(since)}` : ""}
       </p>
     </>
   );
