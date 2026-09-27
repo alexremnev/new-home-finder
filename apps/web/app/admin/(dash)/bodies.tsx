@@ -282,17 +282,19 @@ export async function Portals({ span }: { span: string }) {
 
   return (
     <>
-      <div className="grid-wrap scroll-x">
-        <table className="grid">
+      <div className="scroll-x">
+        {/* Headings are one word each on purpose. `.grid` is width: 100%, so a
+            long heading does not widen the table — it wraps inside a squeezed
+            column, and nine of those turn the card into a thicket. The `why`
+            above the panel explains what each one counts. */}
+        <table className="grid roomy">
           <thead>
             <tr>
               <th>скрапер</th>
-              <th className="num">нашёл первым</th>
+              <th className="num">первым</th>
               <th className="num">увидел</th>
               <th className="num">записал</th>
-              <th className="num">отправлено</th>
-              <th className="num">прогонов</th>
-              <th className="num">запросов</th>
+              <th className="num">отправил</th>
               <th className="num">трафик</th>
               <th>состояние</th>
             </tr>
@@ -302,7 +304,7 @@ export async function Portals({ span }: { span: string }) {
               const row = rows.find((r) => r.source === one.source);
               const mine = tally.find((t) => t.reader === one.source);
               const expected = one.source !== "openrent";
-              const tone = portalTone(row, expected);
+              const quiet = !row || row.runs === 0;
               return (
                 <tr key={one.source}>
                   <td>
@@ -313,20 +315,19 @@ export async function Portals({ span }: { span: string }) {
                   <td className="num">{(mine?.saw ?? 0).toLocaleString("en-GB")}</td>
                   <td className="num">{(row?.stored ?? 0).toLocaleString("en-GB")}</td>
                   <td className="num">{(row?.announced ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{(row?.runs ?? 0).toLocaleString("en-GB")}</td>
-                  <td className="num">{(row?.requests ?? 0).toLocaleString("en-GB")}</td>
                   <td className="num">{weight(Number(row?.bytes ?? 0))}</td>
-                  <td className={tone}>
-                    {!row || row.runs === 0
+                  <td className={portalTone(row, expected)}>
+                    {quiet
                       ? expected
                         ? "не запускался"
                         : "выключен"
                       : [
+                          `${row.runs} прогонов`,
                           row.last_at ? ago(row.last_at) : null,
-                          row.refused > 0 ? `отказов: ${row.refused}` : null,
-                          row.invalid > 0 ? `брак: ${row.invalid}` : null,
-                          row.partial > 0 ? `недочитано: ${row.partial}` : null,
-                          row.bad > 0 ? `падений: ${row.bad}` : null,
+                          row.refused > 0 ? `отказов ${row.refused}` : null,
+                          row.bad > 0 ? `падений ${row.bad}` : null,
+                          row.invalid > 0 ? `брак ${row.invalid}` : null,
+                          row.partial > 0 ? `недочитано ${row.partial}` : null,
                         ]
                           .filter(Boolean)
                           .join(" · ")}
@@ -385,16 +386,16 @@ export async function FeedVersusScrapers({ span }: { span: string }) {
 
   return (
     <>
-      <div className="grid-wrap scroll-x">
-        <table className="grid">
+      <div className="scroll-x">
+        <table className="grid roomy">
           <thead>
             <tr>
               <th>портал</th>
               <th className="num">всего</th>
               <th className="num">оба</th>
-              <th className="num">только фид</th>
-              <th className="num">из них в наших районах</th>
-              <th className="num">только скрапер</th>
+              <th className="num">фид</th>
+              <th className="num">пропущено</th>
+              <th className="num">скрапер</th>
               <th>кто раньше</th>
             </tr>
           </thead>

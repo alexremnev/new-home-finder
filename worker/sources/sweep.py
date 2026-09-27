@@ -381,6 +381,21 @@ def _collect(
         # `bytes` because that is the counter the admin System tab charts.
         stage.set("bytes", fetcher.wire)
         stage.set("proxy_requests", fetcher.proxied)
+        if fetcher.blocked:
+            # Worth saying out loud even when the proxy then carried the run:
+            # this is the portal telling us it does not want this address, and
+            # the difference between "we are paying for traffic" and "we are
+            # paying for traffic because we have to" is this line.
+            stage.set("refused_this_address", sorted(fetcher.blocked))
+            stage.log(
+                "info" if fetcher.proxy else "warn",
+                f"{', '.join(sorted(fetcher.blocked))} refused this server's "
+                + (
+                    "address; the run went through the proxy instead"
+                    if fetcher.proxy
+                    else "address and no proxy is configured — set SCRAPE_PROXY"
+                ),
+            )
         # What DataImpulse will invoice. Zero with no proxy configured, and
         # always below `bytes` while pictures stay on the CDN exemption.
         stage.set("proxy_bytes", fetcher.proxy_wire)

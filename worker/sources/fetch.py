@@ -42,6 +42,25 @@ IMPERSONATE = ("chrome124", "safari17_0", "chrome123", "edge101")
 # one page.
 TIMEOUT = 30.0
 
+# Worth trying under a different browser fingerprint. These are the answers a
+# TLS-fingerprint rule gives.
+ROTATE = (401, 403, 429)
+
+# Worth trying from a different address. Everything in ROTATE, plus 405:
+# OpenRent answers 405 Method Not Allowed to a plain GET from a datacentre
+# address while serving the identical request from a home connection, which is
+# not a statement about the method.
+#
+# A 404 is deliberately absent. That is an answer, and asking again from
+# somewhere else would spend traffic to receive it twice.
+BLOCKED = (401, 403, 405, 429)
+
+
+def host_of(url: str) -> str:
+    """The hostname out of a url, lowercased and without its port."""
+
+    return url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+
 
 def _number(raw: object) -> int:
     """One of libcurl's counters as a whole number.
@@ -99,6 +118,12 @@ class Fetcher:
     proxied: int = 0
     #: The target that last worked, tried first next time.
     _best: str = field(default="", init=False)
+    #: Hosts that refused this address, learned during this run. See `get`.
+    #: A set rather than a setting: which portals block a datacentre changes
+    #: without notice, and a config file that has to be edited when it does is
+    #: a config file that will be wrong.
+    blocked: set[str] = field(default_factory=set)
+
     #: One libcurl handle per impersonation target, kept open for the run.
     #:
     #: A handle holds its connection, so a sweep of twenty districts does one
@@ -132,38 +157,83 @@ class Fetcher:
             direct_hosts=direct,
         )
 
-    def wants_proxy(self, url: str) -> bool:
-        if not self.proxy:
-            return False
-        host = url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
-        return not any(host == one or host.endswith("." + one) for one in self.direct_hosts)
+    def never_proxy(self, url: str) -> bool:
+        """Hosts that go direct whatever happens. See `direct_hosts`."""
 
-    def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
-        """Fetch one url, trying each fingerprint until one is served.
+        return any(
+            host_of(url) == one or host_of(url).endswith("." + one)
+            for one in self.direct_hosts
+        )
 
-        Raises `Refused` when none is. Every attempt is metered, including the
-        refused ones: a 403 through a residential proxy is traffic somebody
-        charges for.
-        """
-
-        order = ([self._best] if self._best else []) + [
+    def _order(self) -> list[str]:
+        return ([self._best] if self._best else []) + [
             one for one in self.targets if one != self._best
         ]
-        last = 0
-        for target in order:
-            reply = self._once(url, target, accept)
-            if 200 <= reply.status < 300:
-                self._best = target
-                return reply
-            # Only a refusal is worth another fingerprint. A 404 is an answer,
-            # and a 500 is their problem — trying four handshakes against
-            # either is four times the traffic for the same result.
-            if reply.status not in (401, 403, 429):
-                last = reply.status
-                break
-            last = reply.status
 
-        raise Refused(f"{url} answered {last} under every fingerprint tried")
+    def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
+        """Fetch one url. Direct if that works, through the proxy if it must.
+
+        Raises `Refused` when nothing served it. Every attempt is metered,
+        including the refused ones: a 403 through a residential proxy is
+        traffic somebody charges for.
+
+        ── why the proxy is an escalation and not a setting ─────────────────
+
+        The three portals do not agree about this server. Measured from the
+        server itself on 27 September 2026: Rightmove serves it, Zoopla answers
+        403 under every fingerprint, OpenRent answers 405. From a home
+        connection all three serve the identical requests, so what Zoopla and
+        OpenRent object to is the address.
+
+        Routing everything through the proxy to satisfy two of them would put
+        Rightmove's traffic — the largest share — on a metered connection for
+        no reason. So direct is tried first and the proxy is the answer to
+        being refused, which means Rightmove stays free and the other two cost
+        only what they have to.
+
+        The refusal is remembered per host for the life of this Fetcher, so
+        only the first district of a run pays the wasted probe. It is *not*
+        remembered longer than that: a portal that stops blocking us goes back
+        to being free by itself on the next run, with nothing to reconfigure.
+        """
+
+        host = host_of(url)
+        if self.never_proxy(url) or not self.proxy:
+            routes = [False]
+        elif host in self.blocked:
+            # Learned earlier this run. Skipping the probe saves one refused
+            # request per district.
+            routes = [True]
+        else:
+            routes = [False, True]
+
+        last = 0
+        for through_proxy in routes:
+            for target in self._order():
+                reply = self._once(url, target, accept, through_proxy)
+                if 200 <= reply.status < 300:
+                    self._best = target
+                    return reply
+                last = reply.status
+                # Only a refusal is worth another fingerprint. A 404 is an
+                # answer and a 500 is their problem — four handshakes against
+                # either is four times the traffic for the same result.
+                if reply.status not in ROTATE:
+                    break
+            if not through_proxy and last in BLOCKED:
+                # Recorded whether or not there is anywhere to escalate to.
+                # With no proxy configured this is the only evidence that the
+                # portal objects to the address rather than to the request,
+                # and that is exactly the case somebody needs told about.
+                self.blocked.add(host)
+                if len(routes) > 1:
+                    continue
+            break
+
+        where = "the proxy" if routes[-1] else "this address"
+        raise Refused(
+            f"{url} answered {last} under every fingerprint tried, from {where}"
+        )
 
     def head(self, url: str) -> tuple[int, str | None]:
         """Ask for the headers only. Returns the status and any `Location`.
@@ -181,7 +251,12 @@ class Fetcher:
 
         body = io.BytesIO()
         headers = io.BytesIO()
-        through_proxy = self.wants_proxy(url)
+        # The same escalation as `get`, decided from what that already
+        # learned: a host known to refuse this address is asked through the
+        # proxy straight away.
+        through_proxy = bool(self.proxy) and not self.never_proxy(url) and (
+            host_of(url) in self.blocked
+        )
         target = self._best or self.targets[0]
         curl = self._handle(target)
 
@@ -246,9 +321,10 @@ class Fetcher:
     def __exit__(self, *_: object) -> None:
         self.close()
 
-    def _once(self, url: str, target: str, accept: str) -> Reply:
+    def _once(
+        self, url: str, target: str, accept: str, through_proxy: bool
+    ) -> Reply:
         body = io.BytesIO()
-        through_proxy = self.wants_proxy(url)
         curl = self._handle(target)
 
         # Every option is set on every request, none left to carry over. A
@@ -292,4 +368,7 @@ class Fetcher:
         )
 
 
-__all__ = ["IMPERSONATE", "TIMEOUT", "Fetcher", "Refused", "Reply"]
+__all__ = [
+    "BLOCKED", "IMPERSONATE", "ROTATE", "TIMEOUT", "Fetcher", "Refused",
+    "Reply", "host_of",
+]
