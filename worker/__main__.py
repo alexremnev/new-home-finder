@@ -9,15 +9,25 @@ from worker.config import Config, ConfigError
 from worker.db import connect
 from worker.db import advisory_lock as db_advisory_lock
 from worker.obs import Run
-from worker.pipeline.run import run_job
+from worker.pipeline.run import PORTAL_JOBS, run_job
 
 Row = dict[str, Any]
 
 # `scrape` is the original OpenRent reader, which discovers from the sitemap.
-# `portals` is the newer set that reads each site's own search pages —
-# Rightmove, Zoopla and OpenRent again — through one engine. They are separate
-# jobs so that either can be run, timed or turned off without the other.
-JOBS = ("ingest", "scrape", "portals", "drain", "rollup")
+#
+# The three portal readers are one job each, named after their source key, so
+# that each has its own timer and its own row in `job_runs`. Combined into one
+# job they shared a schedule — three sweeps landing on the server at the same
+# minute — and shared a status, so a portal that had stopped was invisible
+# behind the two that had not.
+#
+# `portals` runs all three in one go. Nothing schedules it; it is for a manual
+# sweep.
+JOBS = (
+    "ingest", "scrape", "portals",
+    *PORTAL_JOBS,
+    "drain", "rollup",
+)
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="worker")

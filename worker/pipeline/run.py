@@ -5,6 +5,7 @@ from typing import Any
 
 import psycopg
 
+from worker import store
 from worker.config import Config
 from worker.obs import Run
 from worker.pipeline.outbox import (
@@ -21,6 +22,34 @@ Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
 
 DEFAULT_SOURCE = "tg_feed"
+
+
+def _rightmove() -> Any:
+    from worker.sources.rightmove import Rightmove
+
+    return Rightmove()
+
+
+def _zoopla() -> Any:
+    from worker.sources.zoopla import Zoopla
+
+    return Zoopla()
+
+
+def _openrent_v2() -> Any:
+    from worker.sources.openrent_v2 import OpenRentV2
+
+    return OpenRentV2()
+
+
+# One job per portal, keyed by source key. Built through these thunks rather
+# than imported at module level: the delivery host installs no scraping extra,
+# and `import worker.pipeline.run` must not require curl_cffi there.
+PORTAL_JOBS: dict[str, Any] = {
+    "rightmove": _rightmove,
+    "zoopla": _zoopla,
+    "openrent_v2": _openrent_v2,
+}
 
 def run_job(
     conn: Conn,
@@ -86,40 +115,52 @@ def run_job(
             )
         return "ok"
 
-    if job == "portals":
+    if job in PORTAL_JOBS or job == "portals":
 
-        # Every portal read from its own search pages, through one engine.
-        # Everything after this is the same path a feed listing takes, which is
-        # why there is nothing here but collect and queue.
-        from worker.sources.openrent_v2 import OpenRentV2
-        from worker.sources.rightmove import Rightmove
+        # One job per portal, and the job name *is* the source key. Each has
+        # its own timer so the three do not land on the server together, and
+        # each gets its own row in `job_runs` — which is what makes the admin
+        # Jobs panel say "zoopla has not run since Tuesday" instead of hiding
+        # it inside one combined job that looks healthy because the other two
+        # worked.
+        #
+        # `portals` still runs all of them, for a manual sweep. Nothing
+        # schedules it.
         from worker.sources.sweep import collect as sweep_portal
-        from worker.sources.zoopla import Zoopla
 
-        portals = {
-            one.key: one for one in (Rightmove(), Zoopla(), OpenRentV2())
-        }
-        if source_key is not None:
-            if source_key not in portals:
+        wanted = dict(PORTAL_JOBS) if job == "portals" else {job: PORTAL_JOBS[job]}
+
+        # `sources.enabled` decides whether a portal runs, so switching one off
+        # is one UPDATE and no deploy. An explicit --source overrides it,
+        # because asking for one reader by name is a deliberate act and having
+        # it silently do nothing would be worse than an error.
+        if source_key is None:
+            live = store.enabled_sources(conn)
+            for key in sorted(set(wanted) - live):
+                run.event("info", f"{key} is disabled in sources; skipping")
+                del wanted[key]
+            if not wanted:
+                run.event("warn", "no enabled portal to read")
+                return "ok"
+        else:
+            if source_key not in PORTAL_JOBS:
                 run.event(
                     "error",
-                    f"{source_key!r} is not a portal this job reads; "
-                    f"try one of {sorted(portals)}",
+                    f"{source_key!r} is not a portal; "
+                    f"try one of {sorted(PORTAL_JOBS)}",
                 )
                 return "failed"
-            portals = {source_key: portals[source_key]}
+            wanted = {source_key: PORTAL_JOBS[source_key]}
 
         status = "ok"
-        for key, portal in portals.items():
+        for key, build in wanted.items():
             try:
-                sweep = sweep_portal(conn, run, portal, dry_run=cfg.dry_run)
+                sweep = sweep_portal(conn, run, build(), dry_run=cfg.dry_run)
             except Exception as exc:
                 # One portal must not take the others' listings with it. The
                 # stage is already marked failed by `run.stage`; this keeps the
                 # job going and reports honestly at the end.
-                run.event(
-                    "error", f"{key} failed: {type(exc).__name__}: {exc}"
-                )
+                run.event("error", f"{key} failed: {type(exc).__name__}: {exc}")
                 status = "degraded"
                 continue
             # Only what the engine is willing to call new — see the note on
@@ -133,4 +174,4 @@ def run_job(
     run.event("error", f"unknown job {job!r}")
     return "failed"
 
-__all__ = ["DEFAULT_SOURCE", "run_job"]
+__all__ = ["DEFAULT_SOURCE", "PORTAL_JOBS", "run_job"]

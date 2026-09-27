@@ -472,6 +472,7 @@ def collect(
                 continue
 
             listing_id = store.insert_listing(conn, listing)
+            store.record_sightings(conn, [listing_id], SOURCE_KEY)
 
             # Usually nothing to find — this is the only source for OpenRent —
             # but a flat listed both here and on an agent's Rightmove page is

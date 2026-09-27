@@ -46,7 +46,7 @@ cd "$DIR"
 # telethon went missing once and took ingest down with it.
 # `scrape` brings curl_cffi, which the portal readers need: Rightmove and
 # Zoopla both answer a plain client 403 and the same request 200 once the TLS
-# handshake looks like a browser's. Without it the portals job cannot import.
+# handshake looks like a browser's. Without it the portal readers cannot import.
 uv sync --frozen --no-dev --extra ingest --extra scrape
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
@@ -85,17 +85,25 @@ systemctl daemon-reload
 # download the whole country only to be refused.
 #
 # Disabled here rather than merely left un-enabled, so that a deploy undoes it
-# if somebody turned it on by hand. `portals` below reads the same site from its
-# search pages instead, for about a fiftieth of the traffic, and does not need
-# the sitemap at all.
+# if somebody turned it on by hand. The `openrent_v2` timer below reads the same
+# site from its search pages instead, for about a fiftieth of the traffic, and
+# does not need the sitemap at all.
 #
 # --now stops a run already in flight; both failures are ignored because a
 # timer that was never enabled is not an error.
 systemctl disable --now london-home-finder-scrape.timer 2>/dev/null || true
 
-# Everything else on, `portals` included: Rightmove, Zoopla and OpenRent read
-# from their own search pages.
-for job in ingest portals drain rollup report; do
+# An earlier deploy scheduled all three portal readers as one `portals` job.
+# They are one job each now, so that timer is removed rather than left behind
+# firing a fourth sweep nobody is watching.
+systemctl disable --now london-home-finder-portals.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-portals.timer
+systemctl daemon-reload
+
+# Everything on. The three portal readers are separate jobs with separate
+# timers, offset from each other by seven minutes so the sweeps do not land on
+# this machine in the same minute — see the header of each timer.
+for job in ingest rightmove zoopla openrent_v2 drain rollup report; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 

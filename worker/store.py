@@ -319,6 +319,65 @@ def known_external_ids(
         ).fetchall()
     }
 
+def enabled_sources(conn: Conn) -> set[str]:
+    """Which source keys are switched on.
+
+    Read so that turning a portal off is one UPDATE and no deploy — the same
+    principle as the coverage and rate settings in `sources.config`. Until
+    this existed the column was decoration: the job built every reader whatever
+    the row said.
+    """
+
+    return {
+        str(row["key"])
+        for row in conn.execute("SELECT key FROM sources WHERE enabled").fetchall()
+    }
+
+
+def listing_ids_for(
+    conn: Conn, *, source_key: str, external_ids: list[str]
+) -> dict[str, int]:
+    """external_id -> listing id, for the ones already stored.
+
+    The id-carrying form of `known_external_ids`. A scraper needs both answers
+    at once: which of these are new to us, and — for the ones that are not —
+    which row to record the sighting against. Asking twice would be a second
+    round trip for a question the first one already answered.
+    """
+
+    if not external_ids:
+        return {}
+    return {
+        str(row["external_id"]): int(row["id"])
+        for row in conn.execute(
+            "SELECT id, external_id FROM listings "
+            "WHERE source_key = %s AND external_id = ANY(%s)",
+            (source_key, external_ids),
+        ).fetchall()
+    }
+
+
+def record_sightings(conn: Conn, listing_ids: list[int], reader: str) -> None:
+    """Note that this reader has seen these listings.
+
+    One statement for the whole district rather than one per listing: a sweep
+    sees a few hundred, almost all of them already known, and three portals
+    times twenty districts times a round trip each would cost more than the
+    fetching does. See 0052 for why this is recorded at all.
+    """
+
+    if not listing_ids:
+        return
+    conn.execute(
+        """
+        INSERT INTO listing_sightings (listing_id, reader)
+        SELECT unnest(%s::bigint[]), %s
+        ON CONFLICT (listing_id, reader) DO NOTHING
+        """,
+        (list(listing_ids), reader),
+    )
+
+
 def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None:
     """The most listings one child sitemap has held lately.
 

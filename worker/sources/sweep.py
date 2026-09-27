@@ -173,8 +173,25 @@ class Sweep:
     proxy_wire: int = 0
 
 
-def keep(conn: Conn, stage: Stage, catch: Catch) -> int | None:
-    """Store one listing. None when it was a copy of one already sent.
+@dataclass(frozen=True)
+class Kept:
+    """What storing one listing came to.
+
+    The id is given even for a copy, and on purpose: the reader did see that
+    flat, and the sighting record is about who saw what rather than about what
+    gets sent. Returning None for a copy — which is what this did first — lost
+    the id and quietly left those listings out of the feed-versus-scraper
+    comparison altogether.
+    """
+
+    listing_id: int
+    #: A copy of one already stored from another portal, so nobody is told
+    #: about it. See `store.mark_duplicate`.
+    duplicate: bool
+
+
+def keep(conn: Conn, stage: Stage, catch: Catch) -> Kept:
+    """Store one listing.
 
     The half of scraping that has nothing to do with which portal it came
     from, so every portal gets the duplicate rule and the picture without
@@ -187,11 +204,11 @@ def keep(conn: Conn, stage: Stage, catch: Catch) -> int | None:
     # whichever we saw first is the one that gets sent.
     if store.mark_duplicate(conn, listing_id) is not None:
         stage.count("duplicate")
-        return None
+        return Kept(listing_id=listing_id, duplicate=True)
 
     store.set_listing_image(conn, listing_id, catch.image)
     stage.count("with_photo" if catch.image else "no_photo")
-    return listing_id
+    return Kept(listing_id=listing_id, duplicate=False)
 
 
 def collect(
@@ -304,7 +321,13 @@ def _collect(
             stage.count("pages", harvest.pages)
 
             ids = [one.listing.external_id for one in harvest.caught]
-            known = already(ids)
+            # id-carrying, because both answers are wanted at once: which of
+            # these are new to us, and which row to record a sighting against
+            # for the ones that are not.
+            have = store.listing_ids_for(
+                conn, source_key=portal.key, external_ids=ids
+            )
+            known = set(have)
             fresh = [
                 one for one in harvest.caught if one.listing.external_id not in known
             ]
@@ -313,13 +336,22 @@ def _collect(
             stage.count("new", len(fresh))
 
             for one in fresh:
-                listing_id = keep(conn, stage, one)
-                if listing_id is None:
+                kept = keep(conn, stage, one)
+                # Recorded either way, so that a copy still counts as seen.
+                have[one.listing.external_id] = kept.listing_id
+                if kept.duplicate:
                     continue
-                stored.append(listing_id)
+                stored.append(kept.listing_id)
                 stage.count("stored")
                 if _announceable(portal, one, news_since):
-                    announce.append(listing_id)
+                    announce.append(kept.listing_id)
+
+            # That this reader saw them — all of them, including the ones some
+            # other reader stored first. Skipping those would make a scraper
+            # look as though it had missed everything the Telegram feed got in
+            # ahead of it, which is the opposite of what this records. One
+            # statement for the district; see 0052.
+            store.record_sightings(conn, list(have.values()), portal.key)
 
             if portal.dated:
                 # Start watching, from now. Everything on the portal at this
@@ -353,6 +385,11 @@ def _collect(
         # always below `bytes` while pictures stay on the CDN exemption.
         stage.set("proxy_bytes", fetcher.proxy_wire)
         stage.set("stored", len(stored))
+        # What this reader actually caused to be sent, as opposed to what it
+        # merely wrote down. The two differ for a district still settling, and
+        # that difference is the first thing to look at when a scraper is busy
+        # and nobody is hearing from it.
+        stage.set("announced", len(announce))
         stage.count("stored_not_announced", len(stored) - len(announce))
 
     return Sweep(stored, announce, fetcher.wire, fetcher.proxy_wire)
@@ -377,5 +414,5 @@ def _announceable(portal: Portal, catch: Catch, since: datetime | None) -> bool:
 
 __all__ = [
     "DISTRICT_BUDGET", "PAUSE_SECONDS", "REFUSALS_ALLOWED", "Catch", "Harvest",
-    "Known", "Portal", "Sweep", "collect", "keep",
+    "Kept", "Known", "Portal", "Sweep", "collect", "keep",
 ]

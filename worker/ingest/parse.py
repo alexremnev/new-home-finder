@@ -15,6 +15,11 @@ Conn = psycopg.Connection[Row]
 
 BATCH = 500
 
+# How a sighting from the Telegram feed is labelled in `listing_sightings`.
+# Not a source key: the feed carries every portal, and which portal a listing
+# is from is already `listings.source_key`.
+FEED_READER = "tg_feed"
+
 def as_listing(parsed: tg_feed.Parsed) -> Listing:
 
     return Listing(
@@ -107,6 +112,11 @@ def run_parse(
                     stage.count("district_discovered")
 
             listing_id = store.insert_listing(conn, listing)
+            # Which path found this flat, so that retiring the feed can be a
+            # decision about measured coverage and lead time rather than a
+            # hope. The feed and the scrapers converge on one row for
+            # Rightmove and Zoopla, so the row itself cannot say. See 0052.
+            store.record_sightings(conn, [listing_id], FEED_READER)
             store.mark_parsed(conn, message_id, listing_id)
 
             # Rightmove and Zoopla both carry most London stock, so the same
@@ -123,4 +133,4 @@ def run_parse(
         stage.set("listings", len(written))
         return written
 
-__all__ = ["BATCH", "as_listing", "run_parse"]
+__all__ = ["BATCH", "FEED_READER", "as_listing", "run_parse"]

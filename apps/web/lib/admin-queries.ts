@@ -490,12 +490,18 @@ export type JobState = {
 // Every job that has run in the window, plus the ones that should have. A job
 // missing from job_runs is the interesting case — silence, not health — and a
 // name that stopped existing should not haunt the page forever.
-// `portals` rather than `scrape`. The old sitemap reader is disabled by the
+// One entry per portal reader, not one combined `portals` job. That is the
+// point of the split: a job that has stopped shows as silent here, where
+// combined it hid behind the two that still worked.
+//
+// `scrape` is absent deliberately. The old sitemap reader is disabled by the
 // installer — it downloaded the whole country each run and OpenRent answers
 // this server 405 on listing pages anyway — so expecting it would paint a
 // permanent red panel for a job nobody wants running. If it is ever enabled
 // again it appears here anyway, through `seen`.
-export const EXPECTED_JOBS = ["ingest", "portals", "drain", "rollup", "report"] as const;
+export const EXPECTED_JOBS = [
+  "ingest", "rightmove", "zoopla", "openrent_v2", "drain", "rollup", "report",
+] as const;
 
 export async function jobStates(win: Win): Promise<JobState[]> {
   return query<JobState>(
@@ -1058,6 +1064,148 @@ export async function visitorsBy(
 //
 // The guard on `jsonb_typeof` is there so a counter that is somehow not a
 // number cannot break the page with a cast error.
+export type ReaderTally = {
+  reader: string;
+  saw: number;
+  got_first: number;
+};
+
+// How many listings each reader actually brought in, which is not the same as
+// how many it stored.
+//
+// A scraper that finds a flat the Telegram feed posted a minute earlier stores
+// nothing — the row is already there — so `stored` undercounts what it found.
+// `saw` is everything it saw; `got_first` is what it got to before any other
+// reader, and that is the honest measure of what each one contributes.
+//
+// Scoped to listings whose first sighting by anybody falls in the window, so
+// that the ranking is over the whole race and not over the part of it that
+// happens to fall inside the period being looked at.
+export async function readerTally(win: Win): Promise<ReaderTally[]> {
+  return query<ReaderTally>(
+    `WITH inwin AS (
+       SELECT listing_id
+         FROM listing_sightings
+        GROUP BY listing_id
+       HAVING min(first_at) >  now() - make_interval(mins => $1::int)
+          AND min(first_at) <= now() - make_interval(mins => $2::int)
+     ),
+     ranked AS (
+       SELECT g.reader,
+              row_number() OVER (
+                PARTITION BY g.listing_id ORDER BY g.first_at, g.reader
+              ) AS place
+         FROM listing_sightings g
+         JOIN inwin USING (listing_id)
+     )
+     SELECT reader,
+            count(*)::int AS saw,
+            count(*) FILTER (WHERE place = 1)::int AS got_first
+       FROM ranked
+      GROUP BY reader
+      ORDER BY reader`,
+    [Math.round(win.mins), Math.round(win.endMins)],
+  ).catch(() => []);
+}
+
+export type ReaderOverlap = {
+  portal: string;
+  total: number;
+  both: number;
+  feed_only: number;
+  scraper_only: number;
+  feed_only_covered: number;
+  scraper_first: number;
+  feed_first: number;
+  median_lead_secs: number | null;
+};
+
+// Feed against scraper, per portal, so the Telegram source can be retired on
+// evidence. See 0052 for why this cannot be read off `listings`.
+//
+// Grouped by external_id rather than by listing id, because the two shapes
+// differ: the feed and the Rightmove scraper upsert into one row, while
+// `openrent` and `openrent_v2` are two rows for the same flat that happen to
+// share OpenRent's numeric id.
+//
+// `feed_only_covered` is the number that actually matters. A listing only the
+// feed saw is uninteresting if it was in a district no subscriber has chosen —
+// the scrapers only read subscribed districts, so that is coverage working as
+// designed, not a miss. The ones in a *covered* district are real misses.
+export async function readerOverlap(win: Win): Promise<ReaderOverlap[]> {
+  return query<ReaderOverlap>(
+    `WITH covered AS (
+       SELECT DISTINCT upper(area) AS code
+         FROM subscriptions s
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+             coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+         ) AS area
+        WHERE s.active
+     ),
+     fam AS (
+       SELECT l.id,
+              l.external_id,
+              -- The two OpenRent readers are one portal for this purpose.
+              CASE WHEN l.source_key = 'openrent_v2' THEN 'openrent'
+                   ELSE l.source_key END AS portal,
+              upper(l.postcode_district) AS district
+         FROM listings l
+        WHERE l.first_seen_at >  now() - make_interval(mins => $1::int)
+          AND l.first_seen_at <= now() - make_interval(mins => $2::int)
+     ),
+     saw AS (
+       SELECT f.portal,
+              f.external_id,
+              bool_or(f.district IN (SELECT code FROM covered)) AS in_covered,
+              min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
+              min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
+         FROM fam f
+         LEFT JOIN listing_sightings g ON g.listing_id = f.id
+        GROUP BY f.portal, f.external_id
+     )
+     SELECT portal,
+            count(*)::int AS total,
+            count(*) FILTER (
+              WHERE feed_at IS NOT NULL AND scraper_at IS NOT NULL)::int AS both,
+            count(*) FILTER (
+              WHERE feed_at IS NOT NULL AND scraper_at IS NULL)::int AS feed_only,
+            count(*) FILTER (
+              WHERE feed_at IS NULL AND scraper_at IS NOT NULL)::int AS scraper_only,
+            count(*) FILTER (
+              WHERE feed_at IS NOT NULL AND scraper_at IS NULL
+                AND in_covered)::int AS feed_only_covered,
+            count(*) FILTER (
+              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
+                AND scraper_at < feed_at)::int AS scraper_first,
+            count(*) FILTER (
+              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
+                AND feed_at < scraper_at)::int AS feed_first,
+            -- Positive means the scraper was later. Only over the ones both
+            -- saw, because a lead time needs two timestamps.
+            round(
+              percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY extract(epoch FROM scraper_at - feed_at)
+              )
+            )::int AS median_lead_secs
+       FROM saw
+      WHERE feed_at IS NOT NULL OR scraper_at IS NOT NULL
+      GROUP BY portal
+      ORDER BY portal`,
+    [Math.round(win.mins), Math.round(win.endMins)],
+  ).catch(() => []);
+}
+
+// When the comparison above started having anything to say. Nothing was
+// backfilled, so a window reaching before this is reporting on a period when
+// only some of the readers were recording — worth saying on the page rather
+// than letting somebody read a misleading zero.
+export async function sightingsSince(): Promise<string | null> {
+  const rows = await query<{ first_at: string | null }>(
+    `SELECT min(first_at)::text AS first_at FROM listing_sightings`,
+  ).catch(() => []);
+  return rows[0]?.first_at ?? null;
+}
+
 export type PortalRun = {
   source: string;
   runs: number;
@@ -1066,6 +1214,7 @@ export type PortalRun = {
   proxy_bytes: number;
   requests: number;
   stored: number;
+  announced: number;
   seen: number;
   invalid: number;
   refused: number;
@@ -1109,6 +1258,9 @@ export async function portalRuns(win: Win): Promise<PortalRun[]> {
             coalesce(sum((counters->>'stored')::bigint)
                      FILTER (WHERE jsonb_typeof(counters->'stored') = 'number'), 0)::int
               AS stored,
+            coalesce(sum((counters->>'announced')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'announced') = 'number'), 0)::int
+              AS announced,
             coalesce(sum((counters->>'seen')::bigint)
                      FILTER (WHERE jsonb_typeof(counters->'seen') = 'number'), 0)::int
               AS seen,

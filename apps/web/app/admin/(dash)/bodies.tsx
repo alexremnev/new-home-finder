@@ -1,10 +1,10 @@
 import Link from "next/link";
 
-import type { PortalRun } from "@/lib/admin-queries";
+import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries";
 import {
   delivery, duplicates, intakePoints, jobStates, knownJobs, logPage,
-  messagePoints, portalRuns, problems, recentRuns, runPoints, scrapeBytes,
-  sourceFeeds, unparseablePoints,
+  messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
+  runPoints, scrapeBytes, sightingsSince, sourceFeeds, unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
 
@@ -275,44 +275,155 @@ function portalTone(row: PortalRun | undefined, expected: boolean): "good" | "wa
 
 export async function Portals({ span }: { span: string }) {
   const win = spanFrom(span);
-  const rows = await portalRuns(win);
+  const [rows, tally] = await Promise.all([portalRuns(win), readerTally(win)]);
 
   const billable = rows.reduce((sum, row) => sum + Number(row.proxy_bytes ?? 0), 0);
   const total = rows.reduce((sum, row) => sum + Number(row.bytes ?? 0), 0);
 
   return (
     <>
-      <div className="tiles">
-        {PORTALS.map((one) => {
-          const row = rows.find((r) => r.source === one.source);
-          const expected = one.source !== "openrent";
-          return (
-            <Metric
-              key={one.source}
-              label={one.label}
-              value={row?.stored ?? 0}
-              tone={portalTone(row, expected)}
-              note={[
-                row ? `${row.runs} прогонов` : "не запускался",
-                row ? weight(Number(row.bytes ?? 0)) : null,
-                row && row.requests > 0 ? `${row.requests} запросов` : null,
-                row?.last_at ? `последний ${ago(row.last_at)}` : null,
-                row && row.refused > 0 ? `отказов: ${row.refused}` : null,
-                row && row.invalid > 0 ? `брак: ${row.invalid}` : null,
-                row && row.partial > 0 ? `недочитано районов: ${row.partial}` : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-              why={one.why}
-            />
-          );
-        })}
+      <div className="grid-wrap scroll-x">
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>скрапер</th>
+              <th className="num">нашёл первым</th>
+              <th className="num">увидел</th>
+              <th className="num">записал</th>
+              <th className="num">отправлено</th>
+              <th className="num">прогонов</th>
+              <th className="num">запросов</th>
+              <th className="num">трафик</th>
+              <th>состояние</th>
+            </tr>
+          </thead>
+          <tbody>
+            {PORTALS.map((one) => {
+              const row = rows.find((r) => r.source === one.source);
+              const mine = tally.find((t) => t.reader === one.source);
+              const expected = one.source !== "openrent";
+              const tone = portalTone(row, expected);
+              return (
+                <tr key={one.source}>
+                  <td>
+                    {one.label}
+                    <Why text={one.why} />
+                  </td>
+                  <td className="num">{(mine?.got_first ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{(mine?.saw ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{(row?.stored ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{(row?.announced ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{(row?.runs ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{(row?.requests ?? 0).toLocaleString("en-GB")}</td>
+                  <td className="num">{weight(Number(row?.bytes ?? 0))}</td>
+                  <td className={tone}>
+                    {!row || row.runs === 0
+                      ? expected
+                        ? "не запускался"
+                        : "выключен"
+                      : [
+                          row.last_at ? ago(row.last_at) : null,
+                          row.refused > 0 ? `отказов: ${row.refused}` : null,
+                          row.invalid > 0 ? `брак: ${row.invalid}` : null,
+                          row.partial > 0 ? `недочитано: ${row.partial}` : null,
+                          row.bad > 0 ? `падений: ${row.bad}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
       <p className="hint">
-        {`сохранено объявлений ${spanWords(win)} · трафик ${weight(total)}`}
+        {`за период ${spanWords(win)} · трафик ${weight(total)}`}
         {billable > 0
           ? ` · через прокси ${weight(billable)} — это и есть счёт DataImpulse`
           : " · прокси не используется, всё идёт напрямую с сервера"}
+      </p>
+    </>
+  );
+}
+
+const PORTAL_NAMES: Record<string, string> = {
+  rightmove: "Rightmove",
+  zoopla: "Zoopla",
+  openrent: "OpenRent",
+};
+
+function lead(seconds: number | null): string {
+  if (seconds === null) return "";
+  const amount = Math.abs(seconds);
+  const how = amount < 90 ? `${amount} с` : `${Math.round(amount / 60)} мин`;
+  if (amount < 30) return "приходят одновременно";
+  return seconds > 0
+    ? `скрапер позже на ${how}`
+    : `скрапер раньше на ${how}`;
+}
+
+// Can the Telegram feed be switched off? The panel is built around the one
+// number that answers it — how many listings only the feed saw, in a district
+// the scrapers actually read. Everything else is context for that number.
+export async function FeedVersusScrapers({ span }: { span: string }) {
+  const win = spanFrom(span);
+  const [rows, since] = await Promise.all([readerOverlap(win), sightingsSince()]);
+
+  const missed = rows.reduce((sum, row) => sum + row.feed_only_covered, 0);
+  const seen = rows.reduce((sum, row) => sum + row.total, 0);
+
+  if (seen === 0) {
+    return (
+      <p className="hint">
+        За этот период ничего не сравнивалось. Учёт начался{" "}
+        {since ? at(since) : "ещё не начался"} — раньше этой даты никто не
+        записывал, кто увидел объявление, и задним числом это не восстановить.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <div className="grid-wrap scroll-x">
+        <table className="grid">
+          <thead>
+            <tr>
+              <th>портал</th>
+              <th className="num">всего</th>
+              <th className="num">оба</th>
+              <th className="num">только фид</th>
+              <th className="num">из них в наших районах</th>
+              <th className="num">только скрапер</th>
+              <th>кто раньше</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.portal}>
+                <td>{PORTAL_NAMES[row.portal] ?? row.portal}</td>
+                <td className="num">{row.total.toLocaleString("en-GB")}</td>
+                <td className="num">{row.both.toLocaleString("en-GB")}</td>
+                <td className="num">{row.feed_only.toLocaleString("en-GB")}</td>
+                <td className={row.feed_only_covered > 0 ? "num bad" : "num good"}>
+                  {row.feed_only_covered.toLocaleString("en-GB")}
+                </td>
+                <td className="num">{row.scraper_only.toLocaleString("en-GB")}</td>
+                <td>
+                  {row.both === 0
+                    ? "—"
+                    : `${row.scraper_first} / ${row.feed_first} · ${lead(row.median_lead_secs)}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="hint">
+        {missed === 0
+          ? "Скраперы не пропустили ничего, что нашёл фид в наших районах за этот период."
+          : `Фид нашёл ${missed} объявлений в наших районах, которых не нашли скраперы — пока отключать его рано.`}
+        {since ? ` · учёт с ${at(since)}` : ""}
       </p>
     </>
   );
