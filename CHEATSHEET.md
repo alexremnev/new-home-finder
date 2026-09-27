@@ -280,6 +280,138 @@ UPDATE source_locations SET enabled = true
    AND location_id IN (SELECT id FROM locations WHERE code IN ('E1', 'SE1'));
 ```
 
+## Как проходят скраперы, по хостам
+
+Три запроса. Выполнять в Supabase → SQL Editor; ничего не меняют, только читают.
+
+`job_runs.host` пишется с миграции 0044 и пуст для прогонов, записанных раньше —
+такие строки помечены `(до 0044)`, а не спрятаны: «неизвестно» и «не запускался»
+это разные вещи.
+
+Задачи с 27 сентября — по одной на портал: `rightmove`, `zoopla`, `openrent_v2`.
+`portals` гоняет все три и по расписанию не стоит, `scrape` — старый читатель по
+карте сайта, выключенный установщиком.
+
+```sql
+-- ═══════════════ A. последние 10 прогонов каждого скрапера, по хостам ═══════
+--
+-- `job_runs.host` пишется с 0044 и NULL для прогонов, записанных раньше.
+-- Стадия берётся одна на прогон: у портальных задач она называется 'scrape'
+-- и несёт source_key, поэтому все счётчики трафика — оттуда.
+WITH runs AS (
+    SELECT r.id,
+           r.job,
+           coalesce(r.host, '(до 0044)') AS host,
+           r.trigger,
+           r.status,
+           r.started_at,
+           r.finished_at,
+           r.error,
+           row_number() OVER (
+               PARTITION BY coalesce(r.host, '(до 0044)'), r.job
+               ORDER BY r.started_at DESC
+           ) AS nth
+      FROM job_runs r
+     WHERE r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+)
+SELECT runs.host,
+       runs.job,
+       runs.nth                                              AS "№",
+       to_char(runs.started_at AT TIME ZONE 'Europe/London',
+               'DD Mon HH24:MI:SS')                          AS "когда (Лондон)",
+       runs.trigger                                          AS "запуск",
+       runs.status                                           AS "статус",
+       round(extract(epoch FROM runs.finished_at - runs.started_at))::int
+                                                             AS "сек",
+       (s.counters->>'districts')::int                       AS "районов",
+       (s.counters->>'seen')::int                            AS "увидел",
+       (s.counters->>'new')::int                             AS "новых",
+       (s.counters->>'stored')::int                          AS "записал",
+       (s.counters->>'announced')::int                       AS "отправил",
+       pg_size_pretty((s.counters->>'bytes')::bigint)        AS "трафик",
+       pg_size_pretty(
+           nullif((s.counters->>'proxy_bytes')::bigint, 0))   AS "через прокси",
+       (s.counters->>'requests')::int                        AS "запросов",
+       nullif((s.counters->>'refused')::int, 0)              AS "отказов",
+       nullif((s.counters->>'district_partial')::int, 0)     AS "недочитано",
+       s.counters->'refused_this_address'                    AS "адрес отвергли",
+       left(coalesce(runs.error, ''), 120)                   AS "ошибка"
+  FROM runs
+  -- LATERAL, а не GROUP BY: у портальной задачи одна стадия 'scrape' на прогон,
+  -- а у `portals` их три, и брать надо ту, что совпала с именем задачи.
+  LEFT JOIN LATERAL (
+      SELECT js.counters
+        FROM job_stages js
+       WHERE js.run_id = runs.id
+         AND js.stage = 'scrape'
+         AND (runs.job = 'portals' OR js.source_key = runs.job)
+       ORDER BY js.started_at
+       LIMIT 1
+  ) AS s ON true
+ WHERE runs.nth <= 10
+ ORDER BY runs.host, runs.job, runs.nth;
+
+
+-- ═══════════════ B. сводка по этим же 10 прогонам ═══════════════════════════
+--
+-- Одна строка на хост и задачу: сколько из последних десяти прошло чисто,
+-- сколько трафика и когда последний раз. Это ответ на «как проходят».
+WITH runs AS (
+    SELECT r.id, r.job, coalesce(r.host, '(до 0044)') AS host,
+           r.status, r.started_at, r.finished_at,
+           row_number() OVER (
+               PARTITION BY coalesce(r.host, '(до 0044)'), r.job
+               ORDER BY r.started_at DESC
+           ) AS nth
+      FROM job_runs r
+     WHERE r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+),
+last10 AS (SELECT * FROM runs WHERE nth <= 10)
+SELECT l.host,
+       l.job,
+       count(*)                                              AS "прогонов",
+       count(*) FILTER (WHERE l.status = 'ok')               AS "чисто",
+       count(*) FILTER (WHERE l.status = 'degraded')         AS "с ошибками",
+       count(*) FILTER (WHERE l.status = 'failed')           AS "упало",
+       count(*) FILTER (WHERE l.status = 'skipped_locked')   AS "пропущено",
+       round(percentile_cont(0.5) WITHIN GROUP (
+           ORDER BY extract(epoch FROM l.finished_at - l.started_at)
+       ))::int                                               AS "медиана, сек",
+       pg_size_pretty(sum((s.counters->>'bytes')::bigint))   AS "трафик всего",
+       sum((s.counters->>'announced')::int)                  AS "отправлено",
+       to_char(max(l.started_at) AT TIME ZONE 'Europe/London',
+               'DD Mon HH24:MI')                             AS "последний"
+  FROM last10 l
+  LEFT JOIN LATERAL (
+      SELECT js.counters
+        FROM job_stages js
+       WHERE js.run_id = l.id AND js.stage = 'scrape'
+         AND (l.job = 'portals' OR js.source_key = l.job)
+       ORDER BY js.started_at
+       LIMIT 1
+  ) AS s ON true
+ GROUP BY l.host, l.job
+ ORDER BY l.host, l.job;
+
+
+-- ═══════════════ C. одну задачу гоняют с двух машин? ════════════════════════
+--
+-- То, ради чего в 0044 и появилась колонка host: когда трафик удваивается,
+-- первый вопрос — не запущены ли оба расписания одновременно. Раньше это
+-- выводили арифметикой по промежуткам между прогонами.
+SELECT job,
+       count(DISTINCT coalesce(host, '(до 0044)'))           AS "хостов",
+       string_agg(DISTINCT coalesce(host, '(до 0044)'), ', ' ORDER BY
+                  coalesce(host, '(до 0044)'))               AS "какие",
+       count(*)                                              AS "прогонов за сутки"
+  FROM job_runs
+ WHERE started_at > now() - interval '24 hours'
+ GROUP BY job
+ -- Без HAVING: видеть надо все задачи, а не только сдвоенные. Больше одного
+ -- хоста — первым делом.
+ ORDER BY 2 DESC, job;
+```
+
 ## Осмотр базы
 
 ```sql

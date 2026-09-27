@@ -1,7 +1,10 @@
 @echo off
 REM Runs one worker job, logs it, and shouts if it failed.
 REM
-REM   run-job.cmd ingest | scrape | drain | rollup
+REM   run-job.cmd ingest | drain | rollup | rightmove | zoopla | openrent_v2
+REM
+REM For a run you are watching, use scrape.cmd instead: this one hides the
+REM output in a log and spends the hour's Telegram alert on failure.
 REM
 REM ── why this file exists at all ─────────────────────────────────────────────
 REM
@@ -27,7 +30,9 @@ REM neither Python nor a working venv — so it still fires when those are the f
 
 setlocal EnableDelayedExpansion
 if "%~1"=="" (
-  echo Usage: run-job.cmd ingest ^| scrape ^| drain ^| rollup
+  echo Usage: run-job.cmd ^<job^>
+  echo Jobs: ingest, drain, rollup, rightmove, zoopla, openrent_v2, portals
+  echo       scrape ^(the old sitemap reader; superseded by openrent_v2^)
   exit /b 2
 )
 set JOB=%~1
@@ -53,7 +58,7 @@ REM error rather than "something went wrong".
 set OUT=%TEMP%\home-%JOB%-run.out
 
 if not exist "%PY%" (
-  echo Virtualenv missing: "%PY%"  -- run: uv sync --extra ingest --extra dev> "%OUT%"
+  echo Virtualenv missing: "%PY%"  -- run: uv sync --extra ingest --extra scrape --extra dev> "%OUT%"
   set CODE=1
 ) else (
   "%PY%" -m worker %JOB% --trigger schedule > "%OUT%" 2>&1
