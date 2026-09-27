@@ -69,9 +69,10 @@ def run_job(
 
     if job == "scrape":
 
-        # The one portal the Telegram feed does not publish, so it is fetched
-        # from the site. Everything after this is the same path a feed listing
-        # takes — which is why there is nothing here but collect and queue.
+        # The original OpenRent reader, which discovers from the nationwide
+        # sitemap. Left exactly as it was: `portals` below reads the same site
+        # from its search pages for about a fiftieth of the traffic, and the
+        # two can be compared before this one is switched off.
         from worker.sources.openrent import collect as scrape_openrent
 
         sweep = scrape_openrent(conn, run, dry_run=cfg.dry_run)
@@ -84,6 +85,50 @@ def run_job(
                 conn, run, source_key="openrent", listing_ids=sweep.announce
             )
         return "ok"
+
+    if job == "portals":
+
+        # Every portal read from its own search pages, through one engine.
+        # Everything after this is the same path a feed listing takes, which is
+        # why there is nothing here but collect and queue.
+        from worker.sources.openrent_v2 import OpenRentV2
+        from worker.sources.rightmove import Rightmove
+        from worker.sources.sweep import collect as sweep_portal
+        from worker.sources.zoopla import Zoopla
+
+        portals = {
+            one.key: one for one in (Rightmove(), Zoopla(), OpenRentV2())
+        }
+        if source_key is not None:
+            if source_key not in portals:
+                run.event(
+                    "error",
+                    f"{source_key!r} is not a portal this job reads; "
+                    f"try one of {sorted(portals)}",
+                )
+                return "failed"
+            portals = {source_key: portals[source_key]}
+
+        status = "ok"
+        for key, portal in portals.items():
+            try:
+                sweep = sweep_portal(conn, run, portal, dry_run=cfg.dry_run)
+            except Exception as exc:
+                # One portal must not take the others' listings with it. The
+                # stage is already marked failed by `run.stage`; this keeps the
+                # job going and reports honestly at the end.
+                run.event(
+                    "error", f"{key} failed: {type(exc).__name__}: {exc}"
+                )
+                status = "degraded"
+                continue
+            # Only what the engine is willing to call new — see the note on
+            # the first run in worker.sources.sweep.
+            if sweep.announce:
+                queue_matches(
+                    conn, run, source_key=key, listing_ids=sweep.announce
+                )
+        return status
 
     run.event("error", f"unknown job {job!r}")
     return "failed"

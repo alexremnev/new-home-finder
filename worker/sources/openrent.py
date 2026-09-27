@@ -51,12 +51,13 @@ from datetime import date
 from typing import Any
 
 import psycopg
+from pydantic import ValidationError
 
 from worker import store
 from worker.contracts.listing import Listing
 from worker.ingest.photo import image_in
-from worker.units import sqft_from
 from worker.obs import Run
+from worker.units import sqft_from
 
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
@@ -448,7 +449,24 @@ def collect(
             refused = 0
             stage.count("bytes", weigh(page))
 
-            listing = as_listing(one, page)
+            try:
+                listing = as_listing(one, page)
+            except ValidationError as error:
+                # One listing the contract refuses must not end the run. A
+                # scrape died here on a url that said `21-bed` — the ceiling
+                # has since been raised, but the lesson is the crash, not the
+                # number: forty districts went unread because of one house.
+                #
+                # Only validation, deliberately. That is a judgement about
+                # their data and skipping it is right; a database error is a
+                # problem with ours and should still stop the run.
+                stage.count("invalid")
+                stage.log(
+                    "warn",
+                    f"{one.external_id}: refused by the listing contract — "
+                    f"{str(error).splitlines()[0]}",
+                )
+                continue
             if listing is None:
                 stage.count("no_price")
                 continue

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import secrets
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from typing import Any
 
 import psycopg
@@ -237,6 +238,58 @@ def settled_districts(conn: Conn, source_key: str) -> set[str]:
             "SELECT district FROM source_sweeps WHERE source_key = %s", (source_key,)
         ).fetchall()
     }
+
+@dataclass(frozen=True)
+class Watch:
+    """What we know about our own reading of one district on one source."""
+
+    #: When watching began. Fixed. Decides what counts as news.
+    settled_at: datetime
+    #: When it was last read. Moves. Decides how far back to page.
+    swept_at: datetime | None
+
+
+def district_watch(conn: Conn, source_key: str) -> dict[str, Watch]:
+    """Per district: since when we have watched it, and when we last read it.
+
+    Two timestamps because they answer two different questions, and conflating
+    them made the scrapers pay for their own history — see 0050.
+    """
+
+    return {
+        str(row["district"]): Watch(
+            settled_at=row["settled_at"], swept_at=row["swept_at"]
+        )
+        for row in conn.execute(
+            "SELECT district, settled_at, swept_at FROM source_sweeps "
+            "WHERE source_key = %s",
+            (source_key,),
+        ).fetchall()
+    }
+
+
+def mark_swept(conn: Conn, source_key: str, district: str) -> None:
+    """Record that this district has just been read."""
+
+    conn.execute(
+        "UPDATE source_sweeps SET swept_at = now() "
+        "WHERE source_key = %s AND district = %s",
+        (source_key, district.upper()),
+    )
+
+
+def watching_since(conn: Conn, source_key: str) -> dict[str, datetime]:
+    """When each district started being watched on this source.
+
+    Kept as its own function because the undated sources only ever need this
+    half of it. See `district_watch` for both timestamps.
+    """
+
+    return {
+        district: watch.settled_at
+        for district, watch in district_watch(conn, source_key).items()
+    }
+
 
 def settle_district(conn: Conn, source_key: str, district: str) -> None:
 

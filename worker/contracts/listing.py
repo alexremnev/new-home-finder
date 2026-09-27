@@ -30,7 +30,11 @@ class Listing(BaseModel):
     url: str
 
     price_pcm: int = Field(ge=100, le=100_000)
-    bedrooms: int = Field(ge=0, le=20, description="a studio is 0")
+    # Up to 50, not 20. A scrape run died on an OpenRent url that said
+    # `21-bed`: large shared houses genuinely have that many rooms, and the
+    # ceiling is here to catch a parse that read some other number as a bedroom
+    # count — not to decide what anybody is allowed to rent. See 0049.
+    bedrooms: int = Field(ge=0, le=50, description="a studio is 0")
     bathrooms: int | None = Field(default=None, ge=0, le=20)
     property_type: str | None = None
     furnished: Furnished = "unknown"

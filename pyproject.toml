@@ -15,11 +15,22 @@ dependencies = [
 ingest = [
     "telethon>=1.36,<2",
 ]
+# Reading the portals' own pages. curl_cffi rather than requests or httpx
+# because the block is on the TLS and HTTP/2 fingerprint: measured on
+# 26 September 2026, Rightmove answers urllib 403 under any User-Agent and
+# answers curl_cffi 200 from the same address, once the handshake looks like
+# Chrome's. It is also what gives us the wire byte count that residential proxy
+# billing has to be checked against. See worker/sources/fetch.py.
+scrape = [
+    "curl_cffi>=0.7",
+]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",
     "mypy>=1.13",
     "ruff>=0.8",
+    # The scraper's tests read a saved page, but they import its transport.
+    "curl_cffi>=0.7",
 ]
 
 [build-system]

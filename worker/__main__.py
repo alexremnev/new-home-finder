@@ -13,7 +13,11 @@ from worker.pipeline.run import run_job
 
 Row = dict[str, Any]
 
-JOBS = ("ingest", "scrape", "drain", "rollup")
+# `scrape` is the original OpenRent reader, which discovers from the sitemap.
+# `portals` is the newer set that reads each site's own search pages —
+# Rightmove, Zoopla and OpenRent again — through one engine. They are separate
+# jobs so that either can be run, timed or turned off without the other.
+JOBS = ("ingest", "scrape", "portals", "drain", "rollup")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="worker")

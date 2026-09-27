@@ -1,9 +1,10 @@
 import Link from "next/link";
 
+import type { PortalRun } from "@/lib/admin-queries";
 import {
   delivery, duplicates, intakePoints, jobStates, knownJobs, logPage,
-  messagePoints, problems, recentRuns, runPoints, scrapeBytes, sourceFeeds,
-  unparseablePoints,
+  messagePoints, portalRuns, problems, recentRuns, runPoints, scrapeBytes,
+  sourceFeeds, unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
 
@@ -232,6 +233,88 @@ export async function Feeds({ span }: { span: string }) {
         );
       })}
     </div>
+  );
+}
+
+// The readers that fetch a portal's own pages, one row each. Named and
+// ordered here rather than taken from the database, so that a reader which has
+// not run at all still gets a panel — a silent scraper is the thing worth
+// seeing, and it cannot show itself.
+const PORTALS: { source: string; label: string; why: string }[] = [
+  {
+    source: "rightmove",
+    label: "Rightmove",
+    why: "Читает страницу поиска по каждому району: все поля берутся из встроенного JSON, отдельные страницы объявлений не запрашиваются. Около 120 КБ на район за прогон. Сортировка — «самые новые», листание останавливается, как только доходит до объявлений старше прошлого обхода, поэтому в обычном режиме это одна страница.",
+  },
+  {
+    source: "zoopla",
+    label: "Zoopla",
+    why: "То же, но данные лежат в RSC-потоке страницы, а не в __NEXT_DATA__. Читается только массив собственных объявлений района: рядом лежат ещё два — продвинутые и из соседних районов, — и второй заведомо не наш. Около 63 КБ на район, вдвое дешевле Rightmove.",
+  },
+  {
+    source: "openrent_v2",
+    label: "OpenRent (поиск)",
+    why: "Новый читатель OpenRent. Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу.",
+  },
+  {
+    source: "openrent",
+    label: "OpenRent (карта сайта)",
+    why: "Старый читатель. Выключен установщиком: он качал карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх объявлений, — а на страницы объявлений OpenRent отвечает этому серверу 405. Пустая строка здесь — это норма, а не поломка. Оставлен рядом, чтобы было с чем сравнить новый.",
+  },
+];
+
+function portalTone(row: PortalRun | undefined, expected: boolean): "good" | "warn" | "bad" {
+  // A reader that is deliberately off is not a fault, so it stays neutral.
+  if (!row || row.runs === 0) return expected ? "bad" : "warn";
+  if (row.bad > 0 || row.refused > 0) return "bad";
+  // A district left half-read means the page cap stopped a sweep early. Not
+  // broken, but it will not settle until a run finishes the district.
+  if (row.partial > 0 || row.invalid > 0) return "warn";
+  return "good";
+}
+
+export async function Portals({ span }: { span: string }) {
+  const win = spanFrom(span);
+  const rows = await portalRuns(win);
+
+  const billable = rows.reduce((sum, row) => sum + Number(row.proxy_bytes ?? 0), 0);
+  const total = rows.reduce((sum, row) => sum + Number(row.bytes ?? 0), 0);
+
+  return (
+    <>
+      <div className="tiles">
+        {PORTALS.map((one) => {
+          const row = rows.find((r) => r.source === one.source);
+          const expected = one.source !== "openrent";
+          return (
+            <Metric
+              key={one.source}
+              label={one.label}
+              value={row?.stored ?? 0}
+              tone={portalTone(row, expected)}
+              note={[
+                row ? `${row.runs} прогонов` : "не запускался",
+                row ? weight(Number(row.bytes ?? 0)) : null,
+                row && row.requests > 0 ? `${row.requests} запросов` : null,
+                row?.last_at ? `последний ${ago(row.last_at)}` : null,
+                row && row.refused > 0 ? `отказов: ${row.refused}` : null,
+                row && row.invalid > 0 ? `брак: ${row.invalid}` : null,
+                row && row.partial > 0 ? `недочитано районов: ${row.partial}` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+              why={one.why}
+            />
+          );
+        })}
+      </div>
+      <p className="hint">
+        {`сохранено объявлений ${spanWords(win)} · трафик ${weight(total)}`}
+        {billable > 0
+          ? ` · через прокси ${weight(billable)} — это и есть счёт DataImpulse`
+          : " · прокси не используется, всё идёт напрямую с сервера"}
+      </p>
+    </>
   );
 }
 

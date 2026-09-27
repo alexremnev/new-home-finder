@@ -490,7 +490,12 @@ export type JobState = {
 // Every job that has run in the window, plus the ones that should have. A job
 // missing from job_runs is the interesting case — silence, not health — and a
 // name that stopped existing should not haunt the page forever.
-export const EXPECTED_JOBS = ["ingest", "scrape", "drain", "rollup", "report"] as const;
+// `portals` rather than `scrape`. The old sitemap reader is disabled by the
+// installer — it downloaded the whole country each run and OpenRent answers
+// this server 405 on listing pages anyway — so expecting it would paint a
+// permanent red panel for a job nobody wants running. If it is ever enabled
+// again it appears here anyway, through `seen`.
+export const EXPECTED_JOBS = ["ingest", "portals", "drain", "rollup", "report"] as const;
 
 export async function jobStates(win: Win): Promise<JobState[]> {
   return query<JobState>(
@@ -1053,6 +1058,78 @@ export async function visitorsBy(
 //
 // The guard on `jsonb_typeof` is there so a counter that is somehow not a
 // number cannot break the page with a cast error.
+export type PortalRun = {
+  source: string;
+  runs: number;
+  bad: number;
+  bytes: number;
+  proxy_bytes: number;
+  requests: number;
+  stored: number;
+  seen: number;
+  invalid: number;
+  refused: number;
+  partial: number;
+  last_at: string | null;
+  last_status: string | null;
+};
+
+// One row per portal reader, from the counters each scrape stage already
+// writes. There is no table for this on purpose: `job_stages` is per stage and
+// timestamped, so it answers "over this period" without anything to keep in
+// step.
+//
+// `bytes` is what crossed the wire, from libcurl's own transfer counter, and
+// `proxy_bytes` is the part of it that went through the residential proxy —
+// which is the number a DataImpulse invoice should be checked against. Every
+// cast is guarded by `jsonb_typeof` so that a counter which is somehow not a
+// number cannot break the page.
+export async function portalRuns(win: Win): Promise<PortalRun[]> {
+  return query<PortalRun>(
+    `WITH windowed AS (
+       SELECT source_key, status, counters, started_at
+         FROM job_stages
+        WHERE stage = 'scrape'
+          AND source_key IS NOT NULL
+          AND started_at >  now() - make_interval(mins => $1::int)
+          AND started_at <= now() - make_interval(mins => $2::int)
+     )
+     SELECT source_key AS source,
+            count(*)::int AS runs,
+            count(*) FILTER (WHERE status IN ('failed', 'degraded'))::int AS bad,
+            coalesce(sum((counters->>'bytes')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'bytes') = 'number'), 0)
+              AS bytes,
+            coalesce(sum((counters->>'proxy_bytes')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'proxy_bytes') = 'number'), 0)
+              AS proxy_bytes,
+            coalesce(sum((counters->>'requests')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'requests') = 'number'), 0)::int
+              AS requests,
+            coalesce(sum((counters->>'stored')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'stored') = 'number'), 0)::int
+              AS stored,
+            coalesce(sum((counters->>'seen')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'seen') = 'number'), 0)::int
+              AS seen,
+            coalesce(sum((counters->>'invalid')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'invalid') = 'number'), 0)::int
+              AS invalid,
+            coalesce(sum((counters->>'refused')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'refused') = 'number'), 0)::int
+              AS refused,
+            coalesce(sum((counters->>'district_partial')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'district_partial') = 'number'), 0)::int
+              AS partial,
+            max(started_at)::text AS last_at,
+            (array_agg(status ORDER BY started_at DESC))[1] AS last_status
+       FROM windowed
+      GROUP BY source_key
+      ORDER BY source_key`,
+    [Math.round(win.mins), Math.round(win.endMins)],
+  ).catch(() => []);
+}
+
 export async function scrapeBytes(win: Win, source: string): Promise<number> {
   const rows = await query<{ bytes: string | number | null }>(
     `SELECT coalesce(sum((counters->>'bytes')::bigint), 0) AS bytes

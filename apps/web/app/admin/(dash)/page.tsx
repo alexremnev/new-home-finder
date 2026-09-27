@@ -2,12 +2,14 @@ import { Suspense } from "react";
 
 import {
   Duplicates, Faults, Feeds, Health, Jobs, LastRuns, ListingsCreated, LogLines,
+  Portals,
   MessagesRead, QueueTiles, RunsChart,
 } from "./bodies";
 import { Panel, PanelWait } from "./panel";
 import { DEFAULT_SPAN, spanFrom } from "./span";
 import {
   refreshDuplicates, refreshFaults, refreshFeeds, refreshHealth, refreshJobs,
+  refreshPortals,
   refreshLastRuns, refreshListings, refreshLog, refreshMessages, refreshQueue,
   refreshRuns,
 } from "./actions";
@@ -52,6 +54,17 @@ export default async function SystemPage({
       <Panel wide refresh={refreshFeeds.bind(null, span)}>
         <Suspense fallback={<PanelWait />}>
           <Feeds span={span} />
+        </Suspense>
+      </Panel>
+
+      <Panel
+        wide
+        title="Portal scrapers"
+        why="Читатели, которые сами ходят на сайты порталов. Цифра — сколько объявлений сохранено за выбранный сверху период; рядом — сколько было прогонов и сколько скачано. Трафик берётся из счётчика самого libcurl, то есть это ровно то, что прошло по сети в сжатом виде, а не размер распакованных страниц: разница десятикратная. Строка под плитками отдельно показывает, сколько из этого ушло через резидентский прокси — именно эту цифру нужно сверять со счётом DataImpulse. Жёлтый — район недочитан до конца (сработал предел на число страниц) или были объявления, отвергнутые контрактом. Красный — прогон упал или портал отказал."
+        refresh={refreshPortals.bind(null, span)}
+      >
+        <Suspense fallback={<PanelWait />}>
+          <Portals span={span} />
         </Suspense>
       </Panel>
 

@@ -44,7 +44,10 @@ cd "$DIR"
 # --frozen: install exactly what uv.lock says and never re-resolve here. Without
 # it a deploy can quietly change the dependency set on the server, which is how
 # telethon went missing once and took ingest down with it.
-uv sync --frozen --no-dev --extra ingest
+# `scrape` brings curl_cffi, which the portal readers need: Rightmove and
+# Zoopla both answer a plain client 403 and the same request 200 once the TLS
+# handshake looks like a browser's. Without it the portals job cannot import.
+uv sync --frozen --no-dev --extra ingest --extra scrape
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
 echo "== settings"
@@ -75,13 +78,24 @@ done
 echo "== timers"
 cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
-# `scrape` is deliberately absent. OpenRent answers 405 to this server's address
-# on listing pages while leaving the sitemap open, so every run would download a
-# nationwide sitemap only to be refused — pointless load on both ends. Enable it
-# the day there is access, and nothing else needs changing:
+
+# The old OpenRent reader, off. It discovers from the nationwide sitemap, which
+# costs about 950MB a day to find two or three listings, and OpenRent answers
+# this server's address 405 on listing pages anyway — so every run would
+# download the whole country only to be refused.
 #
-#     systemctl enable --now london-home-finder-scrape.timer
-for job in ingest drain rollup report; do
+# Disabled here rather than merely left un-enabled, so that a deploy undoes it
+# if somebody turned it on by hand. `portals` below reads the same site from its
+# search pages instead, for about a fiftieth of the traffic, and does not need
+# the sitemap at all.
+#
+# --now stops a run already in flight; both failures are ignored because a
+# timer that was never enabled is not an error.
+systemctl disable --now london-home-finder-scrape.timer 2>/dev/null || true
+
+# Everything else on, `portals` included: Rightmove, Zoopla and OpenRent read
+# from their own search pages.
+for job in ingest portals drain rollup report; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 

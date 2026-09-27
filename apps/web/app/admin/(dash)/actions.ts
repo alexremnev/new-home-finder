@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 
 import {
   Duplicates, Faults, Feeds, Health, Jobs, LastRuns, ListingsCreated, LogLines,
-  MessagesRead, QueueTiles, RunsChart,
+  MessagesRead, Portals, QueueTiles, RunsChart,
 } from "./bodies";
 
 // One card each on the System tab. Every argument is a plain string or number,
@@ -20,6 +20,10 @@ export async function refreshFaults(): Promise<ReactNode> {
 
 export async function refreshFeeds(span: string): Promise<ReactNode> {
   return Feeds({ span });
+}
+
+export async function refreshPortals(span: string): Promise<ReactNode> {
+  return Portals({ span });
 }
 
 export async function refreshDuplicates(span: string): Promise<ReactNode> {
