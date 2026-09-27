@@ -46,6 +46,30 @@ TIMEOUT = 30.0
 # TLS-fingerprint rule gives.
 ROTATE = (401, 403, 429)
 
+# ── the rule that makes a reused handle safe ────────────────────────────────
+#
+# curl_cffi's `setopt(WRITEDATA, f)` and `setopt(HEADERDATA, f)` wrap `f` in a
+# cffi handle and hand libcurl the raw pointer. At the END of every `perform()`
+# it runs `clean_handles_and_buffers()`, which drops the Python references that
+# were keeping those handles alive — while libcurl still holds the pointers and
+# still has the callbacks installed.
+#
+# So on a reused handle, any `perform()` that does not re-set a callback target
+# it installed earlier will call that callback with a dangling pointer, and
+# cffi kills the interpreter outright:
+#
+#     Fatal Python error: b_from_handle: ffi.from_handle() detected that the
+#     address passed points to garbage
+#
+# That is not catchable. It happened here: `head()` installed HEADERDATA, and
+# the second ordinary `get()` after it — the first one re-registered by
+# accident — fired the header callback into freed memory and took the whole run
+# with it. Windows reported exit -1073740791.
+#
+# Hence: EVERY request sets EVERY callback target, on every path. Add a third
+# one and it has to be set in both `_once` and `head` too.
+CALLBACK_TARGETS = ("WRITEDATA", "HEADERDATA")
+
 # Worth trying from a different address. Everything in ROTATE, plus 405:
 # OpenRent answers 405 Method Not Allowed to a plain GET from a datacentre
 # address while serving the identical request from a home connection, which is
@@ -281,12 +305,19 @@ class Fetcher:
             curl.close()
             raise
         finally:
-            # A handle is reused, and both of these would otherwise persist
-            # and turn the next ordinary `get` into a bodiless request that
-            # silently stops following redirects.
+            # A reused handle remembers these, and a bodiless request that
+            # stops following redirects is not what the next `get` wants.
+            # `_once` sets them too, belt and braces, because a `head()` that
+            # raised never reaches this block.
+            #
+            # HEADERDATA is deliberately NOT reset to a fresh buffer here. That
+            # is what the first version did, and it was the bug: the throwaway
+            # was registered, then freed after the next perform, and the perform
+            # after that called the header callback on the dead pointer and
+            # killed the interpreter. Nothing needs resetting — `_once` sets a
+            # live buffer before every perform. See CALLBACK_TARGETS.
             curl.setopt(CurlOpt.NOBODY, 0)
             curl.setopt(CurlOpt.FOLLOWLOCATION, 1)
-            curl.setopt(CurlOpt.HEADERDATA, io.BytesIO())
 
         self.requests += 1
         self.wire += wire
@@ -325,6 +356,12 @@ class Fetcher:
         self, url: str, target: str, accept: str, through_proxy: bool
     ) -> Reply:
         body = io.BytesIO()
+        # Set even though nothing reads it here. A previous `head()` on this
+        # handle left the header callback installed, and curl_cffi drops the
+        # reference that kept its target alive at the end of every perform —
+        # so not setting it means firing that callback into freed memory. See
+        # CALLBACK_TARGETS.
+        headers = io.BytesIO()
         curl = self._handle(target)
 
         # Every option is set on every request, none left to carry over. A
@@ -334,9 +371,14 @@ class Fetcher:
         # than left unsaid.
         curl.setopt(CurlOpt.URL, url.encode())
         curl.setopt(CurlOpt.WRITEDATA, body)
+        curl.setopt(CurlOpt.HEADERDATA, headers)
         curl.setopt(CurlOpt.ACCEPT_ENCODING, accept.encode())
         curl.setopt(CurlOpt.TIMEOUT_MS, int(self.timeout * 1000))
         curl.setopt(CurlOpt.FOLLOWLOCATION, 1)
+        # Undone here rather than trusted to have been undone by whoever set
+        # it: a `head()` that raised part-way leaves the handle bodiless, and
+        # every page after it would come back empty with no error at all.
+        curl.setopt(CurlOpt.NOBODY, 0)
         curl.setopt(CurlOpt.PROXY, (self.proxy or "").encode() if through_proxy else b"")
 
         try:
@@ -369,6 +411,6 @@ class Fetcher:
 
 
 __all__ = [
-    "BLOCKED", "IMPERSONATE", "ROTATE", "TIMEOUT", "Fetcher", "Refused",
-    "Reply", "host_of",
+    "BLOCKED", "CALLBACK_TARGETS", "IMPERSONATE", "ROTATE", "TIMEOUT",
+    "Fetcher", "Refused", "Reply", "host_of",
 ]

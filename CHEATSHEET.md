@@ -280,89 +280,159 @@ UPDATE source_locations SET enabled = true
    AND location_id IN (SELECT id FROM locations WHERE code IN ('E1', 'SE1'));
 ```
 
-## Как проходят скраперы, на сервере и локально
+## Как работают скраперы — семь запросов по порядку
 
-Четыре запроса. Выполнять в Supabase → SQL Editor; только читают, ничего не меняют.
+Выполнять в Supabase → SQL Editor. Только читают, ничего не меняют.
+Период там, где он есть, задаётся одним `interval` внутри запроса.
 
-Период задаётся в одном месте каждого запроса — `interval '24 hours'`. Меняйте
-на `'7 days'`, `'30 days'`, как нужно.
-
-`job_runs.host` пишется с миграции 0044 и пуст для прогонов, записанных раньше —
-такие помечены `(до 0044)`, а не спрятаны: «неизвестно откуда» и «не запускался»
-это разные вещи.
-
-Задачи с 27 сентября — по одной на портал: `rightmove`, `zoopla`, `openrent_v2`.
-`portals` гоняет все три и по расписанию не стоит, `scrape` — старый читатель по
-карте сайта, выключенный установщиком.
+Запросы идут в том порядке, в котором двигаются данные, и каждый объясняет
+свой участок. Если читать их сверху вниз, получается устройство целиком:
+от того, какие районы вообще запрашиваются, до того, что дошло до людей.
 
 ```sql
--- ═══════════════ A. каждый прогон: где, когда, чем кончился ════════════════
+-- ╔══════════════════════════════════════════════════════════════════════════╗
+-- ║  КАК РАБОТАЮТ СКРАПЕРЫ — семь запросов в том порядке, в котором идут     ║
+-- ║  данные. Каждый только читает, ничего не меняет.                        ║
+-- ╚══════════════════════════════════════════════════════════════════════════╝
 --
--- Одна строка на прогон, новые сверху. Период — в единственном месте, в
--- `interval` ниже: поставьте '24 hours', '7 days', '30 days'.
+-- Путь одного объявления, целиком:
 --
--- `job_runs.host` пишется с миграции 0044 и пуст для прогонов, записанных
--- раньше — такие помечены «(до 0044)», а не спрятаны: «неизвестно откуда» и
--- «не запускался» это разные вещи.
+--   subscriptions            кто-то выбрал район E14
+--        ↓                   → только выбранные районы вообще запрашиваются
+--   source_sweeps            с какого момента следим за E14 на этом портале
+--        ↓                   → всё, что было до этого момента, не новость
+--   job_runs / job_stages    прогон: хост, статус, трафик, счётчики
+--        ↓
+--   listings                 сама квартира (UNIQUE source_key + external_id)
+--        ↓
+--   listing_sightings        кто её увидел и когда — фид или скрапер
+--        ↓
+--   listings.duplicate_of    та же квартира с другого портала гасится
+--        ↓
+--   notifications            что реально ушло людям (UNIQUE user_id + listing_id)
+
+
+-- ═════════════════ 1. Что вообще запрашивается ═══════════════════════════
 --
--- Счётчики берутся из стадии, а не из прогона: у портальных задач стадия
--- называется 'scrape' и несёт source_key, и весь учёт трафика — там.
+-- Скраперы читают НЕ весь Лондон. Список районов берётся из живых подписок:
+-- район, который никто не выбрал, не стоит ни одного запроса. Поэтому если
+-- объявлений нет — первым делом смотреть сюда, а не в логи.
+--
+-- Тот же запрос, что worker выполняет перед каждым обходом.
+SELECT upper(area) AS district,
+       count(DISTINCT s.user_id) AS subscribers
+  FROM subscriptions s
+  CROSS JOIN LATERAL jsonb_array_elements_text(
+      coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+  ) AS area
+ WHERE s.active
+ GROUP BY 1
+ ORDER BY 2 DESC, 1;
+
+
+-- ═════════════════ 2. Состояние наблюдения по районам ════════════════════
+--
+-- Две даты на район, и они отвечают на РАЗНЫЕ вопросы. Это центральная идея
+-- всей конструкции:
+--
+--   settled_at — с какого момента мы следим. Не двигается. Решает, что
+--                считать новостью: объявление, появившееся раньше этой даты,
+--                не анонсируется никогда. Именно поэтому первый взгляд на
+--                район молчит — иначе новый подписчик получил бы весь
+--                стоячий рынок сразу.
+--
+--   swept_at   — когда читали в последний раз. Двигается каждый прогон.
+--                Решает, насколько глубоко листать. Пока это было одной
+--                колонкой, район, отслеживаемый с августа, пролистывал
+--                август заново на каждом прогоне.
+--
+-- Что смотреть: «ещё не анонсирует» — нормально для района, добавленного
+-- минуту назад, и ненормально для района, который в списке неделю.
+-- «Не читался давно» при работающем таймере означает, что район не попал в
+-- бюджет прогона (25 районов за раз) или портал отказывает.
+SELECT sw.source_key,
+       sw.district,
+       to_char(sw.settled_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI')
+           AS watching_since,
+       to_char(sw.swept_at   AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI')
+           AS last_read,
+       CASE WHEN sw.swept_at IS NULL THEN 'ни разу'
+            ELSE age(now(), sw.swept_at)::text END          AS read_ago,
+       -- Сколько объявлений этого района уже лежит от этого источника.
+       (SELECT count(*) FROM listings l
+         WHERE l.source_key = sw.source_key
+           AND upper(l.postcode_district) = sw.district)     AS listings_stored
+  FROM source_sweeps sw
+ ORDER BY sw.source_key, sw.district;
+
+
+-- ═════════════════ 3. Прогоны: где, чем кончились, сколько мегабайт ══════
+--
+-- job_runs — один прогон задачи. job_stages — стадия внутри него; у портальных
+-- читателей стадия называется 'scrape' и несёт source_key, и ВСЕ счётчики
+-- трафика лежат там, а не в прогоне.
+--
+-- Что значат счётчики:
+--   districts  сколько районов взято в этот прогон (бюджет — 25)
+--   seen       сколько объявлений портал показал всего
+--   new        из них незнакомых нам
+--   stored     сколько строк реально записано (new минус копии)
+--   sent       сколько поставлено в очередь на отправку — и вот это главное:
+--              stored без sent означает район, который ещё дочитывается
+--   mb         ровно то, что прошло по сети в сжатом виде (счётчик libcurl),
+--              а не размер распакованных страниц — разница десятикратная
+--   mb_proxy   сколько из этого ушло через резидентский прокси: эту цифру
+--              сверять со счётом DataImpulse
+--   refused    портал отказал; смотреть address_refused рядом
+--   part_read  район недочитан до конца (сработал предел на число страниц) —
+--              такой район НЕ отмечается прочитанным, иначе пропущенное
+--              ушло бы как новое на следующем прогоне
+--
+-- Период — в `interval` ниже.
 SELECT coalesce(r.host, '(до 0044)')                        AS host,
        r.job,
-       to_char(r.started_at AT TIME ZONE 'Europe/London',
-               'DD Mon HH24:MI:SS')                         AS started_london,
+       to_char(r.started_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI:SS')
+           AS started_london,
        r.trigger,
        r.status,
        round(extract(epoch FROM r.finished_at - r.started_at))::int AS secs,
-       -- Мегабайты, а не байты: вопрос был про мегабайты, и 4.9 читается, а
-       -- 5138022 нет.
-       round((s.counters->>'bytes')::numeric / 1048576, 2)   AS mb,
+       round((s.counters->>'bytes')::numeric / 1048576, 2)  AS mb,
        round((s.counters->>'proxy_bytes')::numeric / 1048576, 2) AS mb_proxy,
-       (s.counters->>'requests')::int                        AS requests,
-       (s.counters->>'districts')::int                       AS districts,
-       (s.counters->>'seen')::int                            AS seen,
-       (s.counters->>'new')::int                             AS new,
-       (s.counters->>'stored')::int                          AS stored,
-       (s.counters->>'announced')::int                        AS sent,
-       nullif((s.counters->>'duplicate')::int, 0)            AS duplicates,
-       nullif((s.counters->>'refused')::int, 0)              AS refused,
-       nullif((s.counters->>'invalid')::int, 0)              AS rejected,
-       nullif((s.counters->>'district_partial')::int, 0)     AS part_read,
-       nullif((s.counters->>'no_photo')::int, 0)             AS no_photo,
-       s.counters->'refused_this_address'                    AS address_refused,
-       -- Ошибка прогона, а если её нет — последнее, что стадия сказала в лог.
-       -- Прогон может закончиться «degraded» без r.error: причина тогда только
-       -- в job_events, и без этого поля пришлось бы искать её отдельным запросом.
-       coalesce(nullif(left(r.error, 200), ''), e.message)   AS error
+       (s.counters->>'districts')::int                      AS districts,
+       (s.counters->>'seen')::int                           AS seen,
+       (s.counters->>'new')::int                            AS new,
+       (s.counters->>'stored')::int                         AS stored,
+       (s.counters->>'announced')::int                       AS sent,
+       nullif((s.counters->>'duplicate')::int, 0)           AS duplicates,
+       nullif((s.counters->>'refused')::int, 0)             AS refused,
+       nullif((s.counters->>'district_partial')::int, 0)    AS part_read,
+       s.counters->'refused_this_address'                   AS address_refused,
+       -- Прогон может кончиться degraded и не записать r.error — причина тогда
+       -- только в job_events. Без второго LATERAL вы видели бы «degraded» без
+       -- объяснения.
+       coalesce(nullif(left(r.error, 200), ''), e.message)  AS error
   FROM job_runs r
-  -- LATERAL, а не GROUP BY: у портальной задачи одна стадия 'scrape' на прогон,
-  -- а у `portals` их три, и нужна та, что совпала с именем задачи.
   LEFT JOIN LATERAL (
-      SELECT js.counters
-        FROM job_stages js
-       WHERE js.run_id = r.id
-         AND js.stage = 'scrape'
+      SELECT js.counters FROM job_stages js
+       WHERE js.run_id = r.id AND js.stage = 'scrape'
          AND (r.job = 'portals' OR js.source_key = r.job)
-       ORDER BY js.started_at
-       LIMIT 1
+       ORDER BY js.started_at LIMIT 1
   ) AS s ON true
   LEFT JOIN LATERAL (
-      SELECT je.message
-        FROM job_events je
-       WHERE je.run_id = r.id
-         AND je.level IN ('error', 'warn')
-       ORDER BY je.id DESC
-       LIMIT 1
+      SELECT je.message FROM job_events je
+       WHERE je.run_id = r.id AND je.level IN ('error', 'warn')
+       ORDER BY je.id DESC LIMIT 1
   ) AS e ON true
  WHERE r.started_at > now() - interval '24 hours'
    AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
  ORDER BY r.started_at DESC;
 
 
--- ═══════════════ B. сводка: как себя ведёт каждый читатель на каждой машине ═
+-- ═════════════════ 4. Сводка по машинам и читателям ══════════════════════
 --
--- Это ответ на «как проходит»: доля чистых прогонов, трафик, сколько дошло до
--- людей, и когда последний раз что-то было.
+-- Rightmove отдаёт серверу напрямую. Zoopla отвечает адресу сервера 403, а
+-- OpenRent — 405, поэтому они либо стоят в планировщике на Windows, либо идут
+-- через резидентский прокси. Здесь видно, что где крутится и во что обходится.
 SELECT coalesce(r.host, '(до 0044)')                        AS host,
        r.job,
        count(*)                                              AS runs,
@@ -370,28 +440,21 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        count(*) FILTER (WHERE r.status = 'degraded')         AS degraded,
        count(*) FILTER (WHERE r.status = 'failed')           AS failed,
        count(*) FILTER (WHERE r.status = 'skipped_locked')   AS skipped,
-       count(*) FILTER (WHERE r.status = 'running')          AS running,
        round(100.0 * count(*) FILTER (WHERE r.status = 'ok')
                    / nullif(count(*), 0))                    AS ok_pct,
-       round(percentile_cont(0.5) WITHIN GROUP (
-           ORDER BY extract(epoch FROM r.finished_at - r.started_at)
-       ))::int                                               AS median_secs,
        round(sum((s.counters->>'bytes')::numeric) / 1048576, 1)       AS mb_total,
        round(sum((s.counters->>'proxy_bytes')::numeric) / 1048576, 1) AS mb_proxy,
        round(avg((s.counters->>'bytes')::numeric) / 1048576, 2)       AS mb_per_run,
        sum((s.counters->>'stored')::int)                     AS stored,
        sum((s.counters->>'announced')::int)                  AS sent,
-       sum((s.counters->>'refused')::int)                    AS refused,
-       to_char(max(r.started_at) AT TIME ZONE 'Europe/London',
-               'DD Mon HH24:MI')                             AS last_run
+       to_char(max(r.started_at) AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI')
+           AS last_run
   FROM job_runs r
   LEFT JOIN LATERAL (
-      SELECT js.counters
-        FROM job_stages js
+      SELECT js.counters FROM job_stages js
        WHERE js.run_id = r.id AND js.stage = 'scrape'
          AND (r.job = 'portals' OR js.source_key = r.job)
-       ORDER BY js.started_at
-       LIMIT 1
+       ORDER BY js.started_at LIMIT 1
   ) AS s ON true
  WHERE r.started_at > now() - interval '24 hours'
    AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
@@ -399,40 +462,126 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
  ORDER BY 1, 2;
 
 
--- ═══════════════ C. только то, что пошло не так ════════════════════════════
+-- ═════════════════ 5. Жизнь одного объявления ════════════════════════════
 --
--- Каждая жалоба с текстом, а не только код возврата. Стадия может пройти как
--- degraded и оставить причину в job_events — тогда в запросе A её видно одной
--- строкой, а здесь целиком.
-SELECT coalesce(r.host, '(до 0044)')                        AS host,
-       r.job,
-       to_char(je.ts AT TIME ZONE 'Europe/London',
-               'DD Mon HH24:MI:SS')                         AS at_london,
-       je.level,
-       je.source_key,
-       je.message
-  FROM job_events je
-  JOIN job_runs r ON r.id = je.run_id
- WHERE je.ts > now() - interval '24 hours'
-   AND je.level IN ('error', 'warn')
-   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
- ORDER BY je.ts DESC
- LIMIT 200;
+-- Самый наглядный запрос: берёт последние 30 объявлений и показывает, кто их
+-- увидел, кто первым, копия ли это и ушло ли кому-нибудь.
+--
+-- Тонкость, без которой ничего не понять: для Rightmove и Zoopla фид и скрапер
+-- пишут в ОДНУ строку. У listings есть UNIQUE (source_key, external_id), а
+-- Telegram-фид и скрапер извлекают один и тот же id — фид из ссылки
+-- rightmove.co.uk/properties/93625473, скрапер из поля id на странице поиска.
+-- Вставка идёт ON CONFLICT DO UPDATE, поэтому второй, кто пришёл, ничего не
+-- создаёт. Отсюда же следует, что двойного уведомления быть не может.
+--
+-- Именно поэтому существует listing_sightings: строка не помнит, кто её нашёл.
+SELECT l.id,
+       l.source_key,
+       l.postcode_district                                  AS district,
+       l.price_pcm,
+       l.bedrooms,
+       to_char(l.first_seen_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI')
+           AS first_seen,
+       -- Кто её видел, в порядке появления.
+       (SELECT string_agg(g.reader || ' ' ||
+                to_char(g.first_at AT TIME ZONE 'Europe/London', 'HH24:MI:SS'),
+                ' → ' ORDER BY g.first_at)
+          FROM listing_sightings g WHERE g.listing_id = l.id)  AS who_saw_it,
+       -- Копия с другого портала? Тогда никому не отправляется.
+       l.duplicate_of,
+       CASE WHEN l.image_url IS NULL THEN 'нет' ELSE 'есть' END AS photo,
+       (SELECT count(*) FROM notifications n WHERE n.listing_id = l.id)
+           AS queued_for,
+       (SELECT count(*) FROM notifications n
+         WHERE n.listing_id = l.id AND n.status = 'sent')    AS actually_sent
+  FROM listings l
+ ORDER BY l.first_seen_at DESC
+ LIMIT 30;
 
 
--- ═══════════════ D. одну задачу гоняют с двух машин? ═══════════════════════
+-- ═════════════════ 6. Фид против скраперов ═══════════════════════════════
 --
--- То, ради чего в 0044 и появилась колонка host: когда трафик удваивается,
--- первый вопрос — не запущены ли оба расписания. Раньше это выводили
--- арифметикой по промежуткам между прогонами.
-SELECT job,
-       count(DISTINCT coalesce(host, '(до 0044)'))           AS hosts,
-       string_agg(DISTINCT coalesce(host, '(до 0044)'), ', ') AS which,
-       count(*)                                              AS runs
-  FROM job_runs
- WHERE started_at > now() - interval '24 hours'
- GROUP BY job
- ORDER BY 2 DESC, job;
+-- Можно ли выключить Telegram-источник. Группировка по id объявления НА
+-- ПОРТАЛЕ, а не по строке в базе: у Rightmove и Zoopla это одна строка, а у
+-- OpenRent старый и новый читатели — две строки с одним номером.
+--
+-- Решает дело колонка missed_in_our_districts. «Только фид» само по себе
+-- ничего не значит: объявление в районе, который никто не выбрал, скрапер не
+-- смотрит по замыслу. Промах — это то, что фид нашёл, а скрапер нет, в районе,
+-- который скрапер читает. Устойчивый ноль там — основание выключать фид.
+--
+-- Задним числом ничего не восстановлено: до появления listing_sightings никто
+-- не записывал, кто увидел объявление, поэтому период раньше начала учёта
+-- покажет ноль не потому, что промахов не было.
+WITH covered AS (
+    SELECT DISTINCT upper(area) AS code
+      FROM subscriptions s
+      CROSS JOIN LATERAL jsonb_array_elements_text(
+          coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+      ) AS area
+     WHERE s.active
+),
+fam AS (
+    SELECT l.id, l.external_id,
+           CASE WHEN l.source_key = 'openrent_v2' THEN 'openrent'
+                ELSE l.source_key END                       AS portal,
+           upper(l.postcode_district)                       AS district
+      FROM listings l
+     WHERE l.first_seen_at > now() - interval '24 hours'
+),
+saw AS (
+    SELECT f.portal, f.external_id,
+           bool_or(f.district IN (SELECT code FROM covered)) AS in_covered,
+           min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
+           min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
+      FROM fam f
+      LEFT JOIN listing_sightings g ON g.listing_id = f.id
+     GROUP BY f.portal, f.external_id
+)
+SELECT portal,
+       count(*)                                              AS listings,
+       count(*) FILTER (WHERE feed_at IS NOT NULL AND scraper_at IS NOT NULL)
+           AS both_saw,
+       count(*) FILTER (WHERE feed_at IS NOT NULL AND scraper_at IS NULL)
+           AS feed_only,
+       count(*) FILTER (WHERE feed_at IS NOT NULL AND scraper_at IS NULL
+                          AND in_covered)                    AS missed_in_our_districts,
+       count(*) FILTER (WHERE feed_at IS NULL AND scraper_at IS NOT NULL)
+           AS scraper_only,
+       count(*) FILTER (WHERE scraper_at < feed_at)          AS scraper_was_first,
+       count(*) FILTER (WHERE feed_at < scraper_at)           AS feed_was_first,
+       -- Положительное значение — скрапер позже. Читатель, который находит
+       -- всё, но на пять минут позже, для уведомлений заменой не является.
+       round(percentile_cont(0.5) WITHIN GROUP (
+           ORDER BY extract(epoch FROM scraper_at - feed_at)
+       ))::int                                               AS median_lead_secs
+  FROM saw
+ WHERE feed_at IS NOT NULL OR scraper_at IS NOT NULL
+ GROUP BY portal
+ ORDER BY portal;
+
+
+-- ═════════════════ 7. Что дошло до людей, и от кого ══════════════════════
+--
+-- Конец пути. notifications имеет UNIQUE (user_id, listing_id) и вставку с
+-- ON CONFLICT DO NOTHING — это и есть гарантия, что одна квартира не уйдёт
+-- человеку дважды, даже если её нашли и фид, и скрапер.
+--
+-- Копии между порталами сюда не попадают вовсе: listings_for_matching
+-- отсекает duplicate_of IS NOT NULL ещё до постановки в очередь.
+SELECT l.source_key,
+       n.channel,
+       n.status,
+       count(*)                                              AS notifications,
+       count(DISTINCT n.user_id)                             AS people,
+       count(DISTINCT n.listing_id)                          AS listings,
+       to_char(max(n.sent_at) AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI')
+           AS last_sent
+  FROM notifications n
+  JOIN listings l ON l.id = n.listing_id
+ WHERE n.created_at > now() - interval '24 hours'
+ GROUP BY 1, 2, 3
+ ORDER BY 1, 2, 3;
 ```
 
 ## Осмотр базы
