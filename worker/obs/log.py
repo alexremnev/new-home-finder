@@ -17,6 +17,11 @@ _FORBIDDEN_CTX_KEYS = frozenset(
     {"chat_id", "phone", "phone_e164", "email", "address", "criteria", "token"}
 )
 
+# How bad each outcome is. ok is fine, degraded means something was lost,
+# failed means it stopped. `skipped_locked` sits with ok: another run holds the
+# lock, which is the lock doing its job.
+SEVERITY = {"ok": 0, "skipped_locked": 0, "degraded": 1, "failed": 2}
+
 class Run:
 
     def __init__(
@@ -34,6 +39,15 @@ class Run:
         self.trigger = trigger
         self.dry_run = dry_run
         self.counters: dict[str, int] = {}
+        # The worst thing any stage of this run reported.
+        #
+        # Without it a run was recorded as whatever the job function returned,
+        # and a stage could degrade itself — a portal refusing us three times
+        # running, a district left unread — while the run still said "ok" and
+        # the dashboard showed a green tile and 0 failed. The stage knew; the
+        # run did not ask. See `finish`.
+        self.worst: str = "ok"
+        self._stage_note: str | None = None
         # Which machine this is. The scrape job runs both from the server and
         # from a desk — OpenRent answers the server 405 for content pages — and
         # without this the run log cannot say which of them made a request.
@@ -98,12 +112,34 @@ class Run:
             yield st
         except Exception as exc:
             st.finish("failed")
+            self._note(name, "failed")
             self.event("error", f"{name} failed: {exc}", stage=name, source_key=source_key)
             raise
         else:
             st.finish(st.status)
+            self._note(name, st.status)
+
+    def _note(self, stage: str, status: str) -> None:
+        if SEVERITY.get(status, 0) > SEVERITY.get(self.worst, 0):
+            self.worst = status
+            self._stage_note = stage
 
     def finish(self, status: str, error: str | None = None) -> None:
+        # A run is no better than its worst stage. The job function returns
+        # "ok" when it did not itself raise, which is not the same thing as
+        # nothing having gone wrong: `stage.degrade()` is the normal way a
+        # portal reports that it was refused, and that used to leave the run
+        # green.
+        if SEVERITY.get(self.worst, 0) > SEVERITY.get(status, 0):
+            self.event(
+                "warn",
+                f"run reported {status} but its {self._stage_note} stage was "
+                f"{self.worst}; recording {self.worst}",
+            )
+            status = self.worst
+            if error is None:
+                error = f"{self._stage_note} stage was {self.worst}"
+
         self.conn.execute(
             """
             UPDATE job_runs

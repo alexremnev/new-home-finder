@@ -484,8 +484,20 @@ export type JobState = {
   ok: number;
   bad: number;
   skipped: number;
+  //: Runs still marked 'running' long after they started.
+  //:
+  //: A process killed outright — a fatal cffi error, an OOM, a machine going
+  //: to sleep — cannot come back to write its own result, so its row stays
+  //: 'running' for ever and is counted in none of the three above. That is
+  //: how a job that died eleven times showed 0 failed.
+  stuck: number;
   median_secs: number | null;
 };
+
+// Beyond this a run marked 'running' is not running. The longest job here
+// finishes inside a couple of minutes; fifteen is generous enough that a slow
+// sweep is never mislabelled.
+export const STUCK_AFTER_MINUTES = 15;
 
 // Every job that has run in the window, plus the ones that should have. A job
 // missing from job_runs is the interesting case — silence, not health — and a
@@ -532,6 +544,10 @@ export async function jobStates(win: Win): Promise<JobState[]> {
             count(w.*) FILTER (WHERE w.status = 'ok')::int AS ok,
             count(w.*) FILTER (WHERE w.status IN ('failed', 'degraded'))::int AS bad,
             count(w.*) FILTER (WHERE w.status = 'skipped_locked')::int AS skipped,
+            count(w.*) FILTER (
+              WHERE w.status = 'running'
+                AND w.started_at < now() - make_interval(mins => $4::int)
+            )::int AS stuck,
             round(
               percentile_cont(0.5) WITHIN GROUP (
                 ORDER BY extract(epoch FROM w.finished_at - w.started_at)
@@ -541,7 +557,12 @@ export async function jobStates(win: Win): Promise<JobState[]> {
        LEFT JOIN windowed w ON w.job = a.job
       GROUP BY a.job
       ORDER BY a.job`,
-    [Math.round(win.mins), [...EXPECTED_JOBS], Math.round(win.endMins)],
+    [
+      Math.round(win.mins),
+      [...EXPECTED_JOBS],
+      Math.round(win.endMins),
+      STUCK_AFTER_MINUTES,
+    ],
   ).catch(() => []);
 }
 

@@ -134,12 +134,30 @@ class Harvest:
     pages: int = 1
 
 
-#: Which of these external ids we have already stored. Handed to `harvest`
-#: because a portal whose discovery is "ids first, details later" has to know
-#: before it decides what to fetch: OpenRent publishes every id in a district
-#: in one page, and resolving all 328 of them when 325 are already stored
-#: would be the most expensive way to learn nothing.
-Known = Callable[[list[str]], set[str]]
+@dataclass(frozen=True)
+class Memory:
+    """What the engine can tell a portal about what we already have.
+
+    One object rather than a callback per question, because a portal whose
+    discovery is "ids first, details later" needs several and the list will
+    grow: OpenRent publishes every id in a district on one page, and deciding
+    what to fetch means knowing which of them are already stored, which have
+    already been resolved to somewhere else, and then writing down what this
+    pass learned.
+    """
+
+    #: Which of these external ids are already in `listings` for this source.
+    stored: Callable[[list[str]], set[str]]
+
+    #: Which have already been resolved, and to which district — including the
+    #: ones deliberately not stored because they turned out to belong to a
+    #: neighbouring district. See 0053: without this, a radius search
+    #: re-resolves a third of its results on every run, for ever.
+    resolved: Callable[[list[str]], dict[str, str | None]]
+
+    #: Write down what this pass resolved. District None means the slug could
+    #: not be read, which is still worth not asking about twice.
+    remember: Callable[[dict[str, str | None]], None]
 
 
 class Portal(Protocol):
@@ -155,7 +173,7 @@ class Portal(Protocol):
         get: Fetcher,
         stage: Stage,
         since: datetime | None,
-        known: Known,
+        memory: Memory,
     ) -> Harvest: ...
 
 
@@ -299,9 +317,27 @@ def _collect(
                     conn, source_key=portal.key, external_ids=ids
                 )
 
+            memory = Memory(
+                stored=already,
+                resolved=lambda ids: store.seen_ids(
+                    conn, source_key=portal.key, external_ids=ids
+                ),
+                remember=lambda learned: store.remember_seen(
+                    conn, portal.key, learned
+                ),
+            )
+
+            # A dated portal is asked to read back to when we last swept; an
+            # undated one gets the date watching began, because its own rule is
+            # "has this district been read through at all". Handing it
+            # `swept_at` would tell it nothing it can use.
             try:
                 harvest = portal.harvest(
-                    district, fetcher, stage, read_since, already
+                    district,
+                    fetcher,
+                    stage,
+                    read_since if portal.dated else news_since,
+                    memory,
                 )
             except Refused as exc:
                 refused += 1
@@ -429,5 +465,5 @@ def _announceable(portal: Portal, catch: Catch, since: datetime | None) -> bool:
 
 __all__ = [
     "DISTRICT_BUDGET", "PAUSE_SECONDS", "REFUSALS_ALLOWED", "Catch", "Harvest",
-    "Kept", "Known", "Portal", "Sweep", "collect", "keep",
+    "Kept", "Memory", "Portal", "Sweep", "collect", "keep",
 ]

@@ -75,7 +75,7 @@ from pydantic import ValidationError
 from worker.obs.log import Stage
 from worker.sources.fetch import Fetcher, Refused
 from worker.sources.openrent import as_listing, read_slug
-from worker.sources.sweep import Catch, Harvest, Known
+from worker.sources.sweep import Catch, Harvest, Memory
 
 SOURCE_KEY = "openrent_v2"
 BASE = "https://www.openrent.co.uk"
@@ -225,10 +225,13 @@ class OpenRentV2:
         get: Fetcher,
         stage: Stage,
         since: Any = None,
-        known: Known | None = None,
+        memory: Memory | None = None,
     ) -> Harvest:
         self._start()
-        del since  # undated: the engine's read-through rule decides, not a date
+        # For an undated portal the engine passes `settled_at`, so None here
+        # means this district has never been read through. That distinction is
+        # what makes the first pass cheap — see `backfill` below.
+        settled = since is not None
 
         reply = get.get(search_url(district))
         ids = ids_in(reply.body)
@@ -251,10 +254,21 @@ class OpenRentV2:
 
         # Asked once for the whole list, not once per id: this is a database
         # round trip, and a district is hundreds of ids.
-        stored = known(ids) if known else set()
-        unknown = [one for one in ids if one not in stored]
+        stored = memory.stored(ids) if memory else set()
+        # And separately: ids we have already resolved but did NOT store,
+        # because their slug put them in a neighbouring district. The search is
+        # a two-kilometre radius, so that is about a third of what comes back.
+        # Without this they were re-resolved on every run for ever. See 0053.
+        resolved = memory.resolved(ids) if memory else {}
+        unknown = [
+            one for one in ids if one not in stored and one not in resolved
+        ]
         stage.count("in_radius", len(ids))
         stage.count("already_known", len(ids) - len(unknown))
+        stage.count("already_resolved", sum(1 for one in ids if one in resolved))
+
+        # Everything learned this pass, written once at the end.
+        learned: dict[str, str | None] = {}
 
         slugs = slugs_in(reply.body)
         pictures = images_in(reply.body)
@@ -297,14 +311,30 @@ class OpenRentV2:
             read = read_slug(slug)
             if read is None:
                 # A slug shape the original reader does not recognise. Counted
-                # rather than guessed at.
+                # rather than guessed at, and remembered so we do not ask about
+                # this id again.
                 stage.count("unreadable_slug")
+                learned[listing_id] = None
                 continue
             where_it_is, _beds, _kind = read
+            learned[listing_id] = where_it_is
             if where_it_is != district.upper():
                 # The two-kilometre radius, doing what it does. Not an error,
                 # and not ours to store under this district.
                 stage.count("outside_district")
+                continue
+
+            if not settled:
+                # This district has never been read through, so nothing found
+                # in it will be announced whatever we do — see the read-through
+                # rule in worker.sources.sweep. Resolving the id is enough to
+                # stop it looking new tomorrow, and the 300KB listing page
+                # would be spent on a listing nobody is ever told about.
+                #
+                # This is what makes the first pass affordable: a district of
+                # 328 ids costs 328 redirects at 3KB instead of 150 listing
+                # pages at 300KB, and it settles in one run instead of four.
+                stage.count("backfilled")
                 continue
 
             if self._details <= 0:
@@ -333,7 +363,8 @@ class OpenRentV2:
 
             found = _found(listing_id, url, where_it_is, read)
             try:
-                listing = as_listing(found, detail.body)
+                # This reader's own key, not the parser's. See 0053.
+                listing = as_listing(found, detail.body, source_key=self.key)
             except ValidationError as error:
                 # Never fatal — the same guard as the original reader, for the
                 # same reason: one listing the contract refuses cost a whole
@@ -353,6 +384,8 @@ class OpenRentV2:
                 Catch(listing=listing, image=pictures.get(listing_id) or _og(detail.body))
             )
 
+        if memory is not None and learned:
+            memory.remember(learned)
         stage.count("resolved", len(caught))
         return Harvest(caught=caught, complete=complete, pages=pages)
 

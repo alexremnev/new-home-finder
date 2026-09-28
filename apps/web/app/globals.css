@@ -1571,6 +1571,11 @@ form p.error {
    the border rather than a second layer of padding. */
 .tiles > .card { margin: 0; }
 
+/* Tiles that carry a row of figures rather than one number. 11rem fits a
+   label and a value; it does not fit five of them, and the difference showed
+   as a job card with its numbers hanging off the side. */
+.tiles-roomy { grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+
 .card > h2,
 .card > h3 {
   margin: 0 0 0.6rem;
@@ -1741,9 +1746,13 @@ form p.error {
 .pill-bad  { background: var(--d-bad-wash);  color: #a12126; }
 .pill-idle { background: #eef0f3; color: var(--d-soft); }
 
+/* Five figures in a card that can be 11rem wide, so it has to wrap rather
+   than overflow. Without this the row ran out of the card and over whatever
+   was beside it. */
 .job-numbers {
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
   margin-top: 0.5rem;
   font-size: 12px;
 }

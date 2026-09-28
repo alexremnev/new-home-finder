@@ -59,7 +59,7 @@ from pydantic import ValidationError
 from worker.contracts.listing import Furnished, Listing
 from worker.obs.log import Stage
 from worker.sources.fetch import Fetcher
-from worker.sources.sweep import Catch, Harvest, Known
+from worker.sources.sweep import Catch, Harvest, Memory
 from worker.units import sqft_from
 
 SOURCE_KEY = "rightmove"
@@ -483,11 +483,11 @@ class Rightmove:
         get: Fetcher,
         stage: Stage,
         since: datetime | None,
-        known: Known | None = None,
+        memory: Memory | None = None,
     ) -> Harvest:
-        # `known` is unused here: this portal's search page carries the
-        # listings themselves, so there is nothing to decide before fetching.
-        del known
+        # Unused here: this portal's search page carries the listings
+        # themselves, so there is nothing to decide before fetching them.
+        del memory
         caught: list[Catch] = []
         seen: set[str] = set()
         pages = 0

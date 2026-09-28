@@ -357,6 +357,59 @@ def listing_ids_for(
     }
 
 
+def seen_ids(
+    conn: Conn, *, source_key: str, external_ids: list[str]
+) -> dict[str, str | None]:
+    """Which of these ids this source has already resolved, and to where.
+
+    Separate from `listing_ids_for` because a listing we decided not to store
+    is still a listing we resolved. OpenRent's district search is a
+    two-kilometre radius, so a third of what it returns belongs to a
+    neighbouring district: those are correctly absent from `listings`, and
+    without this table every run would spend a redirect lookup rediscovering
+    that they are somebody else's. See 0053.
+
+    The value is the district the id turned out to be in, or None when its slug
+    could not be read.
+    """
+
+    if not external_ids:
+        return {}
+    return {
+        str(row["external_id"]): (
+            None if row["district"] is None else str(row["district"])
+        )
+        for row in conn.execute(
+            "SELECT external_id, district FROM source_seen_ids "
+            "WHERE source_key = %s AND external_id = ANY(%s)",
+            (source_key, external_ids),
+        ).fetchall()
+    }
+
+
+def remember_seen(
+    conn: Conn, source_key: str, resolved: dict[str, str | None]
+) -> None:
+    """Note which district each of these ids turned out to be in.
+
+    One statement for the batch: a district resolves hundreds of ids on its
+    first pass, and a round trip each would cost more than the fetching does.
+    """
+
+    if not resolved:
+        return
+    ids = list(resolved)
+    conn.execute(
+        """
+        INSERT INTO source_seen_ids (source_key, external_id, district)
+        SELECT %s, one.id, one.district
+          FROM unnest(%s::text[], %s::text[]) AS one(id, district)
+        ON CONFLICT (source_key, external_id) DO NOTHING
+        """,
+        (source_key, ids, [resolved[one] for one in ids]),
+    )
+
+
 def record_sightings(conn: Conn, listing_ids: list[int], reader: str) -> None:
     """Note that this reader has seen these listings.
 

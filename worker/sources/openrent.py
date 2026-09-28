@@ -262,8 +262,18 @@ def when(raw: str) -> date | None:
             return None
     return None
 
-def as_listing(found: Found, html: str) -> Listing | None:
-    """A listing, or nothing if the page did not give a price."""
+def as_listing(
+    found: Found, html: str, *, source_key: str = SOURCE_KEY
+) -> Listing | None:
+    """A listing, or nothing if the page did not give a price.
+
+    `source_key` is a parameter because `openrent_v2` reuses this parser and
+    is a different source. It was hard-coded to this module's own key, and the
+    newer reader therefore stored everything under `openrent` while asking
+    whether it had seen an id under `openrent_v2` — so the answer was always
+    no, every id looked new on every run, and it re-fetched the same hundreds
+    of pages every twenty minutes without ever announcing anything. See 0053.
+    """
 
     # Before stripping: the postcode exists only inside a link.
     postcode = None
@@ -297,7 +307,7 @@ def as_listing(found: Found, html: str) -> Listing | None:
             break
 
     return Listing(
-        source_key=SOURCE_KEY,
+        source_key=source_key,
         external_id=found.external_id,
         url=found.url,
         price_pcm=int(round(price)),

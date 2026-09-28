@@ -11,6 +11,7 @@ Nothing here touches the network.
 from __future__ import annotations
 
 import pathlib
+from datetime import UTC, datetime
 
 from worker.sources.fetch import Reply
 from worker.sources.openrent_v2 import (
@@ -24,6 +25,7 @@ from worker.sources.openrent_v2 import (
     slug_from_path,
     slugs_in,
 )
+from worker.sources.sweep import Memory
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "openrent_e14_search.html"
 PAGE = FIXTURE.read_text(encoding="utf-8")
@@ -165,6 +167,27 @@ class Quiet:
     def degrade(self, *_: object, **__: object) -> None: ...
 
 
+def remember(
+    stored: object = (), resolved: dict[str, str | None] | None = None
+) -> tuple[Memory, dict[str, str | None]]:
+    """A Memory over fixed answers, plus the dict it writes what it learned to."""
+
+    written: dict[str, str | None] = {}
+    return (
+        Memory(
+            stored=lambda ids: set(stored),  # type: ignore[arg-type]
+            resolved=lambda ids: dict(resolved or {}),
+            remember=written.update,
+        ),
+        written,
+    )
+
+
+# `since` is the district's settled_at for an undated portal, so a real value
+# means "already read through" and None means "never".
+SETTLED = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+
+
 def test_nothing_is_fetched_for_ids_we_already_have() -> None:
     # The steady state, and the saving that matters: a district is hundreds of
     # ids and almost all of them are already stored. Resolving them again would
@@ -172,9 +195,8 @@ def test_nothing_is_fetched_for_ids_we_already_have() -> None:
     ids = ids_in(PAGE)
     fetch = Fake(PAGE)
     stage = Quiet()
-    harvest = OpenRentV2().harvest(
-        "E14", fetch, stage, None, lambda _: set(ids)  # type: ignore[arg-type]
-    )
+    mem, _ = remember(stored=ids)
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
 
     assert harvest.caught == []
     assert harvest.complete is True
@@ -182,6 +204,71 @@ def test_nothing_is_fetched_for_ids_we_already_have() -> None:
     assert len(fetch.got) == 1
     assert fetch.headed == []
     assert stage.counts["already_known"] == len(ids)
+
+
+def test_an_id_already_known_to_be_elsewhere_costs_nothing() -> None:
+    # The whole point of 0053. OpenRent's district page is a two-kilometre
+    # radius, so about a third of it belongs to a neighbouring district. Those
+    # are correctly never stored — and before this they were therefore looked
+    # up again on every single run, for ever.
+    ids = ids_in(PAGE)
+    fetch = Fake(PAGE)
+    stage = Quiet()
+    mem, _ = remember(resolved={one: "SE16" for one in ids})
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.caught == []
+    assert harvest.complete is True
+    assert fetch.headed == [], "a resolved id must not be resolved again"
+    assert stage.counts["already_resolved"] == len(ids)
+
+
+def test_what_a_pass_resolved_is_written_down() -> None:
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    elsewhere = next(one for one in ids if one not in carded)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            elsewhere: f"/property-to-rent/london/2-bed-flat-somewhere-se16/{elsewhere}"
+        },
+    )
+    mem, written = remember(stored={one for one in ids if one != elsewhere})
+    OpenRentV2().harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+
+    # Its real district, not the one we searched — that is what makes it
+    # skippable next time.
+    assert written == {elsewhere: "SE16"}
+
+
+def test_a_district_never_read_through_costs_no_listing_pages() -> None:
+    # Nothing found in an unsettled district will be announced whatever we do,
+    # so a 300KB listing page would be spent on a listing nobody is ever told
+    # about. Resolving the id is enough to stop it looking new tomorrow.
+    #
+    # This is what makes the first pass affordable, and what was wrong before:
+    # the district could not be read through within one run's budget, so it
+    # never settled, so it never announced anything at all.
+    ids = ids_in(PAGE)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            one: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{one}"
+            for one in ids
+        },
+    )
+    stage = Quiet()
+    mem, written = remember()
+    harvest = OpenRentV2().harvest("E14", fetch, stage, None, mem)  # type: ignore[arg-type]
+
+    assert harvest.complete is True, "so that the engine can settle it"
+    assert harvest.caught == [], "nothing stored, because nothing would be sent"
+    # The search page only. Every id was resolved by redirect, and not one
+    # listing page was fetched.
+    assert [one for one in fetch.got if "/property-to-rent/" in one] == []
+    assert len(fetch.headed) == len(ids) - len(slugs_in(PAGE))
+    assert stage.counts["backfilled"] == len(ids)
+    assert set(written) == set(ids)
 
 
 def test_a_listing_outside_the_district_is_not_stored_under_it() -> None:
@@ -201,13 +288,8 @@ def test_a_listing_outside_the_district_is_not_stored_under_it() -> None:
         },
     )
     stage = Quiet()
-    harvest = OpenRentV2().harvest(
-        "E14",
-        fetch,
-        stage,
-        None,
-        lambda _: {one for one in ids if one != elsewhere},  # type: ignore[arg-type]
-    )
+    mem, _ = remember(stored={one for one in ids if one != elsewhere})
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
 
     assert harvest.caught == []
     assert stage.counts.get("outside_district") == 1
@@ -224,22 +306,17 @@ def test_an_unresolvable_id_leaves_the_district_incomplete() -> None:
     unrendered = next(one for one in ids if one not in carded)
     fetch = Fake(PAGE)  # every redirect answers 404
     stage = Quiet()
-    harvest = OpenRentV2().harvest(
-        "E14",
-        fetch,
-        stage,
-        None,
-        lambda _: {one for one in ids if one != unrendered},  # type: ignore[arg-type]
-    )
+    mem, _ = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
 
     assert harvest.complete is False
     assert stage.counts.get("no_slug", 0) >= 1
 
 
 def test_the_detail_budget_stops_a_run_rather_than_the_district() -> None:
-    # A first look at a busy district finds hundreds of unknown ids. The run
-    # takes a slice and reports itself incomplete, so the district converges
-    # over several runs without ever settling early.
+    # A settled district that produces more new listings than one run's budget
+    # takes a slice and reports itself incomplete, so the rest is read next
+    # time rather than skipped.
     ids = ids_in(PAGE)
     fetch = Fake(
         PAGE,
@@ -249,14 +326,35 @@ def test_the_detail_budget_stops_a_run_rather_than_the_district() -> None:
         },
     )
     stage = Quiet()
+    mem, _ = remember()
     harvest = OpenRentV2(detail_budget=0).harvest(
-        "E14", fetch, stage, None, lambda _: set()  # type: ignore[arg-type]
+        "E14", fetch, stage, SETTLED, mem  # type: ignore[arg-type]
     )
 
     assert harvest.complete is False
     assert harvest.caught == []
     # No listing page was fetched: the budget was spent before the first one.
-    assert len(fetch.got) == 1
+    assert [one for one in fetch.got if "/property-to-rent/" in one] == []
+
+
+def test_a_stored_listing_carries_this_readers_own_source_key() -> None:
+    # It carried `openrent` — the parser module's key — because this reader
+    # reuses that parser. Its own "have I seen this id?" check asked about
+    # `openrent_v2`, so the answer was always no: every id looked new on every
+    # run, the same pages were fetched every twenty minutes, the budget was
+    # always exhausted, no district ever settled, and nobody was ever sent
+    # anything. One wrong constant, and that was the whole of it. See 0053.
+    ids = ids_in(PAGE)
+    one = ids[0]
+    fetch = Fake(
+        PAGE,
+        redirects={one: f"/property-to-rent/london/1-bed-flat-hale-street-e14/{one}"},
+    )
+    mem, _ = remember(stored={other for other in ids if other != one})
+    harvest = OpenRentV2().harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+
+    assert len(harvest.caught) == 1
+    assert harvest.caught[0].listing.source_key == "openrent_v2"
 
 
 def test_an_empty_district_is_complete_so_that_it_can_settle() -> None:
@@ -264,9 +362,8 @@ def test_an_empty_district_is_complete_so_that_it_can_settle() -> None:
     # it would never settle and so would never announce its first real listing.
     fetch = Fake("<html><body>no properties</body></html>")
     stage = Quiet()
-    harvest = OpenRentV2().harvest(
-        "E14", fetch, stage, None, lambda _: set()  # type: ignore[arg-type]
-    )
+    mem, _ = remember()
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
 
     assert harvest.caught == []
     assert harvest.complete is True
@@ -282,15 +379,14 @@ def test_the_budget_is_shared_across_districts_in_one_run() -> None:
     }
     portal = OpenRentV2(detail_budget=2)
     fetch = Fake(PAGE, redirects=redirects)
+    mem, _ = remember()
 
-    portal.harvest("E14", fetch, Quiet(), None, lambda _: set())  # type: ignore[arg-type]
-    spent_first = len(fetch.got)
-    portal.harvest("SE16", fetch, Quiet(), None, lambda _: set())  # type: ignore[arg-type]
+    portal.harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+    portal.harvest("SE16", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
 
     # Two listing pages in total across both districts, not two each.
     listing_pages = [one for one in fetch.got if "/property-to-rent/" in one]
     assert len(listing_pages) == 2
-    assert spent_first > 1
 
 
 def test_this_reader_is_undated() -> None:

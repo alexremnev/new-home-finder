@@ -484,10 +484,18 @@ export async function Jobs({ span }: { span: string }) {
   }
 
   return (
-    <div className="tiles">
+    <div className="tiles tiles-roomy">
       {jobs.map((job) => {
+        // A run that died outright never wrote its own result, so its row is
+        // still 'running' and `last_status` looks healthy. Judging the tile by
+        // that alone is how a job that was killed eleven times showed a green
+        // pill and 0 failed.
         const state =
-          job.runs === 0 ? "idle" : JOB_TONE[job.last_status ?? ""] ?? "bad";
+          job.runs === 0
+            ? "idle"
+            : job.stuck > 0
+              ? "bad"
+              : JOB_TONE[job.last_status ?? ""] ?? "bad";
         return (
           <div key={job.job} className={`card job job-${state}`}>
             <div className="job-name">
@@ -503,15 +511,25 @@ export async function Jobs({ span }: { span: string }) {
                 : `last run ${ago(job.last_at)}`}
             </div>
 
+            {/* Four or five short figures. The labels were words like
+                "successful", which at four across overflowed an 11rem tile
+                and spilled out of the card — hence `tiles-roomy` above and
+                one word each here. */}
             <div className="job-numbers">
               <span>
                 <b className={job.ok > 0 ? "good" : undefined}>{job.ok}</b>
-                <span>successful</span>
+                <span>ok</span>
               </span>
               <span>
                 <b className={job.bad > 0 ? "bad" : undefined}>{job.bad}</b>
                 <span>failed</span>
               </span>
+              {job.stuck > 0 && (
+                <span>
+                  <b className="bad">{job.stuck}</b>
+                  <span>died</span>
+                </span>
+              )}
               <span>
                 <b>{job.skipped}</b>
                 <span>locked</span>
@@ -521,6 +539,14 @@ export async function Jobs({ span }: { span: string }) {
                 <span>median</span>
               </span>
             </div>
+
+            {job.stuck > 0 && (
+              <div className="job-error">
+                {job.stuck} run{job.stuck === 1 ? "" : "s"} never reported a
+                result — the process was killed before it could. Neither ok nor
+                failed counts them.
+              </div>
+            )}
 
             {state !== "ok" && state !== "run" && job.last_error && (
               <div className="job-error">{job.last_error.slice(0, 300)}</div>
