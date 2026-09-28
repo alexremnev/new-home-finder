@@ -98,12 +98,18 @@ systemctl disable --now london-home-finder-scrape.timer 2>/dev/null || true
 # firing a fourth sweep nobody is watching.
 systemctl disable --now london-home-finder-portals.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-portals.timer
-systemctl daemon-reload
 
+systemctl disable --now london-home-finder-zoopla.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-zoopla.timer
+
+systemctl disable --now london-home-finder-openrent_v2.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-openrent_v2.timer
+
+systemctl daemon-reload
 # Everything on. The three portal readers are separate jobs with separate
 # timers, offset from each other by seven minutes so the sweeps do not land on
 # this machine in the same minute — see the header of each timer.
-for job in ingest rightmove zoopla openrent_v2 drain rollup report; do
+for job in ingest rightmove drain rollup report; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 
