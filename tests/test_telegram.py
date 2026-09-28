@@ -34,6 +34,50 @@ def view(**overrides: Any) -> ListingView:
     values.update(overrides)
     return ListingView(**values)
 
+# ── the property type, when we have one ─────────────────────────────────────
+#
+# A listing from a scraper carries its type: the portal states it and the
+# adapter maps it to one of four words. A listing that arrived through the
+# Telegram feed usually does not — the feed says "2 bedroom" and stops, so
+# `tg_feed.bedrooms_of` returns no type for anything that is not a studio or a
+# room. So the line has to read well both ways.
+
+def test_a_scraped_listing_names_its_type() -> None:
+    assert "🛏️ 2 Bedrooms · Flat" in render_listing(view(property_type="flat"))
+    assert "🛏️ 2 Bedrooms · House" in render_listing(view(property_type="house"))
+
+
+def test_a_feed_listing_with_no_type_simply_omits_it() -> None:
+    # Not "Unknown", and not a blank after the separator: the absence of a
+    # fact is better said by silence than by a word for it.
+    text = render_listing(view(property_type=None))
+    assert "🛏️ 2 Bedrooms" in text
+    assert "·" not in text.split("🛏️")[1].split("\n")[0]
+
+
+def test_a_type_we_do_not_recognise_is_left_out_rather_than_printed() -> None:
+    # Rightmove alone publishes "Not Specified" and "House Boat". Neither is
+    # one of the four words the filter offers, and printing the portal's raw
+    # word would put a type in the alert that the filter cannot match.
+    text = render_listing(view(property_type="Not Specified"))
+    assert "🛏️ 2 Bedrooms" in text
+    assert "Not Specified" not in text
+
+
+def test_a_room_keeps_its_own_line() -> None:
+    text = render_listing(view(property_type="room", bedrooms=1))
+    assert "🛏️ Room in a shared flat" in text
+    assert "1 Bedroom" not in text
+
+
+def test_a_studio_does_not_say_flat_twice() -> None:
+    # A studio is a flat with no separate bedroom, so the word already carries
+    # the type.
+    text = render_listing(view(property_type="flat", bedrooms=0))
+    assert "🛏️ Studio" in text
+    assert "Studio · Flat" not in text
+
+
 def test_a_full_listing_renders_every_line() -> None:
     text = render_listing(view())
     print(text)

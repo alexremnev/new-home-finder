@@ -52,7 +52,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 import psycopg
@@ -73,6 +73,11 @@ DISTRICT_BUDGET = 25
 # Between districts. No portal here publishes a crawl delay, so this is manners
 # rather than obedience — and cheap, at a request or two per district.
 PAUSE_SECONDS = 1.0
+
+# A district unread for this long has a gap we cannot account for, so its
+# watch is void — see the note in `collect`. Must exceed the schedule's own
+# overnight pause: nine hours on a weekday, fourteen at the weekend.
+GAP_HOURS = 24
 
 # Consecutive refusals before a run gives up. A portal that has declined three
 # times running is not having a bad moment, and the honest answer is to stop
@@ -208,6 +213,66 @@ class Kept:
     duplicate: bool
 
 
+def stale_watches(
+    wanted: list[str],
+    watching: dict[str, store.Watch],
+    *,
+    now: datetime | None = None,
+    hours: int = GAP_HOURS,
+) -> list[str]:
+    """Districts whose watch has a hole in it, and so cannot be trusted.
+
+    `settled_at` means "everything after this moment, we saw". That is only
+    true while we kept looking. A district drops out of the wanted list the
+    moment it leaves the last subscription naming it — the list is read fresh
+    every run — and if somebody adds it back a week later the marks still
+    claim a week of coverage that never happened. Every listing published in
+    the gap then looks like news, and the subscriber gets a week of it at once.
+
+    The same hole opens without anybody touching a filter: a machine asleep for
+    a day, a portal refusing us for two, a district starved by the run budget.
+
+    The threshold has to clear the schedule's own overnight pause — nine hours
+    on a weekday, fourteen at the weekend — so a day is comfortably past both
+    and still short enough that the flood never reaches anybody.
+    """
+
+    cutoff = (now or datetime.now(UTC)) - timedelta(hours=hours)
+    return [
+        one
+        for one in sorted(wanted)
+        if one in watching
+        and (watching[one].swept_at is None or watching[one].swept_at < cutoff)
+    ]
+
+
+def sweep_order(
+    wanted: list[str], watching: dict[str, store.Watch]
+) -> list[str]:
+    """Which districts to read first.
+
+    Unwatched ones lead: they are the ones a waiting subscriber needs read
+    before they hear anything at all, and on a budget that matters more than an
+    even sweep.
+
+    After them, least recently read — NOT alphabetically. With more subscribed
+    districts than the budget, sorting by name meant the same first
+    twenty-five were read every run and everything past them was never read at
+    all. Which, now that an unread district has its watch voided, would also
+    have left them permanently restarting.
+    """
+
+    far_past = datetime.min.replace(tzinfo=UTC)
+    return sorted(
+        wanted,
+        key=lambda one: (
+            one in watching,
+            (watching[one].swept_at or far_past) if one in watching else far_past,
+            one,
+        ),
+    )
+
+
 def keep(conn: Conn, stage: Stage, catch: Catch) -> Kept:
     """Store one listing.
 
@@ -298,10 +363,20 @@ def _collect(
         watching = store.district_watch(conn, portal.key)
         stage.set("settled_districts", len(watching))
 
-        # Districts we are not yet watching first. They are the ones a waiting
-        # subscriber needs read before they hear anything at all, and on a
-        # budget that matters more than an even sweep.
-        order = sorted(wanted, key=lambda one: (one in watching, one))
+        stale = stale_watches(wanted, watching)
+        if stale:
+            store.void_watch(conn, portal.key, stale)
+            stage.set("watch_restarted", stale)
+            stage.log(
+                "warn",
+                f"{', '.join(stale)} had not been read for over {GAP_HOURS}h, so "
+                f"what was missed in between cannot be told from what is new; "
+                f"starting those watches again, which costs one silent pass",
+            )
+            for one in stale:
+                del watching[one]
+
+        order = sweep_order(wanted, watching)
 
         refused = 0
         for nth, district in enumerate(order[:budget]):
@@ -464,6 +539,8 @@ def _announceable(portal: Portal, catch: Catch, since: datetime | None) -> bool:
 
 
 __all__ = [
-    "DISTRICT_BUDGET", "PAUSE_SECONDS", "REFUSALS_ALLOWED", "Catch", "Harvest",
-    "Kept", "Memory", "Portal", "Sweep", "collect", "keep",
+    "DISTRICT_BUDGET", "GAP_HOURS", "PAUSE_SECONDS", "REFUSALS_ALLOWED",
+    "Catch", "Harvest",
+    "Kept", "Memory", "Portal", "Sweep", "collect", "keep", "stale_watches",
+    "sweep_order",
 ]

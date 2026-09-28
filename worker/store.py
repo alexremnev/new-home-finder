@@ -268,6 +268,29 @@ def district_watch(conn: Conn, source_key: str) -> dict[str, Watch]:
     }
 
 
+def void_watch(conn: Conn, source_key: str, districts: list[str]) -> None:
+    """Forget that we were ever watching these districts.
+
+    `settled_at` is a claim that everything after it was seen, and that claim
+    is only true while we kept looking. A district that fell out of every
+    subscription, or that a sleeping machine or a refusing portal left unread,
+    has a gap — and the next run cannot tell what appeared during the gap from
+    what appeared a minute ago. Announcing the difference means a week of
+    listings arriving at once.
+
+    Deleting the row puts the district back to never-watched, so the next run
+    reads it silently and starts again from now. One quiet pass is the whole
+    cost, and the alternative is a flood.
+    """
+
+    if not districts:
+        return
+    conn.execute(
+        "DELETE FROM source_sweeps WHERE source_key = %s AND district = ANY(%s)",
+        (source_key, [one.upper() for one in districts]),
+    )
+
+
 def mark_swept(conn: Conn, source_key: str, district: str) -> None:
     """Record that this district has just been read."""
 
