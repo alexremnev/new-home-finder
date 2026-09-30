@@ -29,6 +29,28 @@ watermark. The district's search is `radius=0.0`, confirmed from
 around it — which is why the searched district can be trusted as the listing's
 district even when the address does not state an outcode.
 
+── why the full postcode is not fetched ─────────────────────────────────────
+
+Rightmove states one in `displayAddress` for about a third of its search
+results and stops at the outward code for the rest. The rest cannot be had
+reliably. Measured on 30 September 2026: the detail page ships an empty
+`pageProps`, carries no `postcode`, `outcode` or `incode` field under any
+name, and has no `ld+json` block — so the only source is the markup, where a
+six-character hex colour has a postcode's shape.
+
+Constraining the search to the outward code we already know removes the hex
+colours, but on three of six pages checked there were still several candidates
+— the page lists similar properties nearby — with nothing to tell the
+listing's own from a neighbour's. A wrong postcode goes into the alert *and*
+into the duplicate fingerprint that decides whether the same flat on two
+portals is sent twice, so guessing is worse than abstaining.
+
+And abstaining still costs: 100KB a page to learn nothing half the time, which
+would consume the run's whole postcode budget and starve Zoopla, where the
+same request works every time and costs half as much. So this portal spends
+nothing on it, and a listing with no stated postcode gets its map link from
+the coordinates instead — see worker.notify.fields.maps_link.
+
 ── what this costs, and where the pictures come from ────────────────────────
 
 The preview picture is published as an already-resized CDN variant

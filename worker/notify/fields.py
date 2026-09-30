@@ -27,10 +27,34 @@ def long_date(value: date) -> str:
     return f"{value.day} {value:%B %Y}"
 
 def maps_link(view: ListingView) -> str | None:
+    """Somewhere to tap to see where the flat is, or None if we cannot say.
 
-    if not view.postcode:
-        return None
-    return "https://www.google.com/maps/search/?api=1&query=" + quote(view.postcode)
+    The full postcode first: it names a real place, and a postcode search
+    lands on the street rather than on a bare pin.
+
+    Then the coordinates. This is what most scraped listings have to use,
+    because most of them have no full postcode — Rightmove states one in about
+    a third of its search results, Zoopla states none at all on a search page,
+    and both give latitude and longitude for every single listing. Before this,
+    those alerts showed a bare "E14" with nothing to tap.
+
+    The pin is the portal's own, so it is exactly as precise as the map on
+    their site — which is to say approximate on purpose, since they offset it.
+    That is the right thing to show: it is the same place the person will see
+    when they follow the listing link.
+
+    No postcode and no coordinates means no link. A map of "E14" is a map of
+    two square miles, and a link that answers nothing is worse than none.
+    """
+
+    if view.postcode:
+        return "https://www.google.com/maps/search/?api=1&query=" + quote(view.postcode)
+    if view.lat is not None and view.lng is not None:
+        return (
+            "https://www.google.com/maps/search/?api=1&query="
+            f"{view.lat:.6f},{view.lng:.6f}"
+        )
+    return None
 
 def size_of(text: str | None) -> str | None:
 
@@ -63,11 +87,20 @@ def listing_fields(view: ListingView) -> list[Line]:
     if where:
         lines.append(Line("📍", where))
 
+    # The most precise thing we can name, linked to wherever we can point.
+    #
+    # The two are independent: a listing can have a full postcode and no
+    # coordinates, or — far more often, on both scraped portals — coordinates
+    # and only an outward code. Tying the link to the postcode meant the
+    # commoner case showed "E14" with nothing to tap.
+    #
+    # Only Telegram renders the link; WhatsApp deliberately leaves the line
+    # plain so that its own preview of the message is the flat rather than a
+    # map. See notify.whatsapp.
     link = maps_link(view)
-    if view.postcode and link:
-        lines.append(Line("📮", view.postcode, link=link))
-    elif view.district:
-        lines.append(Line("📮", view.district))
+    where_text = view.postcode or view.district
+    if where_text:
+        lines.append(Line("📮", where_text, link=link))
 
     lines.append(Line("💷", f"{money(view.price_pcm)}/month", bold=True))
 

@@ -53,6 +53,9 @@ _LISTING_VIEW_COLUMNS = (
     "min_tenancy_months", "is_landlord_direct", "url",
 
     "bathrooms", "deposit_pcm", "raw", "image_url", "floor_area_sqft",
+    # For the map link on a listing whose portal never stated a full postcode,
+    # which is most of Rightmove and all of Zoopla.
+    "lat", "lng",
 )
 
 def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:

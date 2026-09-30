@@ -51,7 +51,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -73,6 +73,16 @@ DISTRICT_BUDGET = 25
 # Between districts. No portal here publishes a crawl delay, so this is manners
 # rather than obedience — and cheap, at a request or two per district.
 PAUSE_SECONDS = 1.0
+
+# Listing pages fetched per run to fill in a missing postcode. Only for
+# listings we are about to store, so in the steady state this is a handful.
+#
+# It costs about 47KB on Zoopla and 100KB on Rightmove, and it buys two
+# things: an alert that names the street rather than two square miles, and a
+# duplicate rule that works at all — `store.mark_duplicate` compares on the
+# full postcode and skips any listing without one, so the same flat on both
+# portals was being sent twice. See worker.sources.postcode.
+POSTCODE_BUDGET = 40
 
 # A district unread for this long has a gap we cannot account for, so its
 # watch is void — see the note in `collect`. Must exceed the schedule's own
@@ -171,6 +181,16 @@ class Portal(Protocol):
     key: str
     #: True when every listing carries a trustworthy first-appeared date.
     dated: bool
+
+    def postcode_for(
+        self, catch: Catch, get: Fetcher, stage: Stage
+    ) -> str | None:
+        """The full postcode for a listing whose search page withheld it.
+
+        Optional: a portal that always states one — or that has nowhere to
+        look — returns None and costs nothing. See worker.sources.postcode for
+        why this is worth a request per stored listing.
+        """
 
     def harvest(
         self,
@@ -271,6 +291,37 @@ def sweep_order(
             one,
         ),
     )
+
+
+def _fill_postcode(
+    portal: Portal, catch: Catch, get: Fetcher, stage: Stage
+) -> Catch:
+    """The same catch with its postcode filled in, if the portal could say.
+
+    Returns the catch unchanged when it could not — which is the common case
+    for a portal with no detail page worth reading, and the honest answer when
+    the page was ambiguous. A guessed postcode would go into the alert and into
+    the duplicate fingerprint, so a wrong one is worse than none.
+    """
+
+    ask = getattr(portal, "postcode_for", None)
+    if ask is None:
+        return catch
+    try:
+        found = ask(catch, get, stage)
+    except (Refused, OSError) as error:
+        # One unreadable page is not worth losing the listing over: it is
+        # stored with the outward code, exactly as before this existed.
+        stage.count("postcode_unreachable")
+        stage.log(
+            "info",
+            f"{catch.listing.external_id}: could not read a postcode — "
+            f"{type(error).__name__}",
+        )
+        return catch
+    if not found:
+        return catch
+    return replace(catch, listing=catch.listing.model_copy(update={"postcode": found}))
 
 
 def keep(conn: Conn, stage: Stage, catch: Catch) -> Kept:
@@ -379,6 +430,7 @@ def _collect(
         order = sweep_order(wanted, watching)
 
         refused = 0
+        postcodes = POSTCODE_BUDGET
         for nth, district in enumerate(order[:budget]):
             if nth:
                 time.sleep(pause)
@@ -447,6 +499,18 @@ def _collect(
             stage.count("new", len(fresh))
 
             for one in fresh:
+                # Before storing, not after: the postcode is what the
+                # duplicate rule compares on, and filling it in afterwards
+                # would mean the comparison had already been made without it.
+                if one.listing.postcode is None and postcodes > 0:
+                    filled = _fill_postcode(portal, one, fetcher, stage)
+                    if filled is not one:
+                        one = filled
+                        stage.count("postcode_found")
+                    else:
+                        stage.count("postcode_missing")
+                    postcodes -= 1
+
                 kept = keep(conn, stage, one)
                 # Recorded either way, so that a copy still counts as seen.
                 have[one.listing.external_id] = kept.listing_id
@@ -547,8 +611,8 @@ def _announceable(portal: Portal, catch: Catch, since: datetime | None) -> bool:
 
 
 __all__ = [
-    "DISTRICT_BUDGET", "GAP_HOURS", "PAUSE_SECONDS", "REFUSALS_ALLOWED",
-    "Catch", "Harvest",
+    "DISTRICT_BUDGET", "GAP_HOURS", "PAUSE_SECONDS", "POSTCODE_BUDGET",
+    "REFUSALS_ALLOWED", "Catch", "Harvest",
     "Kept", "Memory", "Portal", "Sweep", "collect", "keep", "stale_watches",
     "sweep_order",
 ]

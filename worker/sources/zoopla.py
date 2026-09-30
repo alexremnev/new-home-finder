@@ -70,6 +70,7 @@ from pydantic import ValidationError
 
 from worker.contracts.listing import Furnished, Listing
 from worker.obs.log import Stage
+from worker.sources import postcode
 from worker.sources.fetch import Fetcher
 from worker.sources.sweep import Catch, Harvest, Memory
 
@@ -588,6 +589,24 @@ class Zoopla:
     #: module note on why it is stored as the end of its day.
     dated: bool = True
     max_pages: int = MAX_PAGES
+
+    def postcode_for(
+        self, catch: Catch, get: Fetcher, stage: Stage
+    ) -> str | None:
+        """The full postcode, from the listing's own page.
+
+        Zoopla states none at all on a search page — every address ends at the
+        outward code — so without this every Zoopla listing went out saying
+        only "E14", and `store.mark_duplicate` could never recognise one as
+        the same flat Rightmove had already sent.
+
+        Its page carries the halves as structured fields, `"outcode": "E14"`
+        and `"incode": "0UY"`, so there is nothing to guess. About 47KB.
+        """
+
+        del stage
+        reply = get.get(catch.listing.url)
+        return postcode.from_fields(reply.body, catch.listing.postcode_district)
 
     def harvest(
         self,

@@ -45,6 +45,12 @@ class ListingView(BaseModel):
     district: str | None = None
 
     postcode: str | None = None
+    # Where the portal put its own pin. Every Rightmove and Zoopla listing
+    # carries these, and most carry no full postcode — Zoopla publishes none at
+    # all on a search page — so this is the only thing that can put a map link
+    # on those alerts. See `fields.maps_link`.
+    lat: float | None = None
+    lng: float | None = None
     zone: int | None = None
     available_from: date | None = None
     furnished: str = "unknown"

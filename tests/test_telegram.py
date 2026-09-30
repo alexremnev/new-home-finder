@@ -34,6 +34,48 @@ def view(**overrides: Any) -> ListingView:
     values.update(overrides)
     return ListingView(**values)
 
+# ── where the flat is, and something to tap ─────────────────────────────────
+#
+# Most scraped listings have no full postcode: Rightmove states one in about a
+# third of its search results and Zoopla in none at all. Both give coordinates
+# for every listing, so the line can always be linked even when it can only
+# name the outward code.
+
+def test_a_full_postcode_links_to_itself() -> None:
+    # A postcode search lands on the street rather than on a bare pin, so it
+    # is preferred over the coordinates even when both are known.
+    text = render_listing(view(postcode="E14 0UY", lat=51.5135, lng=-0.0089))
+    assert "E14%200UY" in text
+    assert "51.5135" not in text
+
+
+def test_an_outward_code_alone_still_gets_a_link_from_the_coordinates() -> None:
+    # The commonest case on both scraped portals, and the one that used to
+    # show a bare "E14" with nothing to tap.
+    text = render_listing(view(postcode=None, district="E14", lat=51.5135, lng=-0.0089))
+    assert "query=51.513500,-0.008900" in text
+    assert ">E14</a>" in text
+
+
+def test_with_neither_there_is_no_link_at_all() -> None:
+    # A map of "E14" is a map of two square miles, and a link that answers
+    # nothing is worse than none. This is the Telegram feed's shape.
+    text = render_listing(view(postcode=None, district="E14", lat=None, lng=None))
+    assert "📮 E14" in text
+    assert "maps" not in text
+
+
+def test_whatsapp_leaves_the_line_plain() -> None:
+    # Deliberate, and not an oversight: WhatsApp renders its own preview of
+    # the message, and a map link there would make the preview a map instead
+    # of the flat.
+    from worker.notify.whatsapp import render_listing as render_wa
+
+    text = render_wa(view(postcode=None, district="E14", lat=51.5135, lng=-0.0089))
+    assert "📮 E14" in text
+    assert "maps" not in text
+
+
 # ── the property type, when we have one ─────────────────────────────────────
 #
 # A listing from a scraper carries its type: the portal states it and the
