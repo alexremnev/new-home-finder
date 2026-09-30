@@ -137,14 +137,30 @@ export async function problems(): Promise<Problem[]> {
       GROUP BY 1, 2
 
      UNION ALL
-     -- The column here is ts, not created_at. Every other table uses created_at,
-     -- which is exactly why this one is easy to get wrong.
+     -- One row per job, not one per distinct message.
+     --
+     -- Grouped by message it read as thirty-eight separate problems when it
+     -- was one problem happening on thirty-eight runs, and the list is capped,
+     -- so a single persistent fault pushed every other kind of problem off the
+     -- panel. What you need to know is which job is unhappy and what it last
+     -- said; the run log carries the rest.
+     --
+     -- The column here is ts, not created_at. Every other table uses
+     -- created_at, which is exactly why this one is easy to get wrong.
      SELECT 'error logged',
-            coalesce(stage || ': ', '') || left(message, 110),
-            count(*)::int, max(ts)::text
-       FROM job_events
-      WHERE level IN ('warn', 'error') AND ts > now() - interval '48 hours'
-      GROUP BY 1, 2
+            r.job
+              || coalesce(' · ' || e.stage, '')
+              || ' · ' || left(
+                   (array_agg(e.message ORDER BY e.id DESC))[1], 110
+                 )
+              || CASE WHEN count(DISTINCT e.message) > 1
+                      THEN ' (+' || (count(DISTINCT e.message) - 1) || ' other)'
+                      ELSE '' END,
+            count(*)::int, max(e.ts)::text
+       FROM job_events e
+       JOIN job_runs r ON r.id = e.run_id
+      WHERE e.level IN ('warn', 'error') AND e.ts > now() - interval '48 hours'
+      GROUP BY 1, r.job, e.stage
 
      UNION ALL
      SELECT 'unparseable', coalesce(left(parse_error, 110), 'no reason recorded'),
@@ -593,6 +609,110 @@ export async function runPoints(win: Win, minutes: number): Promise<RunPoint[]> 
 }
 
 export type LogPage = { rows: Event[]; total: number };
+
+export type RunLine = {
+  id: number;
+  job: string;
+  host: string | null;
+  started_at: string;
+  secs: number | null;
+  status: string;
+  trigger: string;
+  counters: Record<string, unknown> | null;
+  error: string | null;
+  //: How many warn or error lines this run logged.
+  notes: number;
+  //: The worst of them, errors before warnings, most recent first.
+  worst: string | null;
+  worst_level: string | null;
+  worst_stage: string | null;
+};
+
+export type RunLog = { rows: RunLine[]; total: number };
+
+// One row per run, not one per log line.
+//
+// The event log is the right shape for reading a single run closely and the
+// wrong shape for seeing how things are going: a district sweep writes a line
+// per portal per problem, so a fault that persists fills the page with the
+// same sentence and pushes everything else off it. One line that says "this
+// job ran, here is how long it took, here is what it did, here is the worst
+// thing it said" is what you actually want to scan.
+//
+// The detail is not lost — the message below is the worst line of the run, and
+// the run id leads to the rest.
+export async function runLog(
+  win: Win,
+  filter: { job?: string; bad?: boolean; q?: string },
+  page: number,
+  perPage = 12,
+): Promise<RunLog> {
+  const args = [
+    Math.round(win.mins),
+    filter.job ?? null,
+    filter.bad ? true : null,
+    filter.q ?? null,
+    Math.round(win.endMins),
+    STUCK_AFTER_MINUTES,
+  ];
+
+  // `bad` means the run is worth a look: it failed, it degraded, it logged
+  // something, or it never came back at all. A run killed outright cannot
+  // write its own result, so "still running long after it started" belongs
+  // here too — that is the shape a crash leaves behind.
+  const where = `r.started_at >  now() - make_interval(mins => $1::int)
+        AND r.started_at <= now() - make_interval(mins => $5::int)
+        AND ($2::text IS NULL OR r.job = $2)
+        AND ($4::text IS NULL OR r.error ILIKE '%' || $4 || '%'
+             OR EXISTS (SELECT 1 FROM job_events e
+                         WHERE e.run_id = r.id
+                           AND e.message ILIKE '%' || $4 || '%'))
+        AND ($3::bool IS NULL
+             OR r.status IN ('failed', 'degraded')
+             OR (r.status = 'running'
+                 AND r.started_at < now() - make_interval(mins => $6::int))
+             OR EXISTS (SELECT 1 FROM job_events e
+                         WHERE e.run_id = r.id
+                           AND e.level IN ('warn', 'error')))`;
+
+  const [rows, counted] = await Promise.all([
+    query<RunLine>(
+      `SELECT r.id,
+              r.job,
+              r.host,
+              r.started_at::text,
+              round(extract(epoch FROM r.finished_at - r.started_at))::int AS secs,
+              r.status,
+              r.trigger,
+              r.counters,
+              left(r.error, 300) AS error,
+              coalesce(n.notes, 0)::int AS notes,
+              left(n.message, 300) AS worst,
+              n.level AS worst_level,
+              n.stage AS worst_stage
+         FROM job_runs r
+         -- One pass over this run's complaints: how many, and the worst.
+         -- Errors before warnings, then most recent — so a run that failed
+         -- shows why rather than showing its last routine warning.
+         LEFT JOIN LATERAL (
+             SELECT count(*) OVER () AS notes, e.message, e.level, e.stage
+               FROM job_events e
+              WHERE e.run_id = r.id AND e.level IN ('warn', 'error')
+              ORDER BY CASE e.level WHEN 'error' THEN 0 ELSE 1 END, e.id DESC
+              LIMIT 1
+         ) AS n ON true
+        WHERE ${where}
+        ORDER BY r.started_at DESC
+        LIMIT $7 OFFSET $8`,
+      [...args, perPage, Math.max(0, page - 1) * perPage],
+    ).catch(() => []),
+    query<{ total: number }>(
+      `SELECT count(*)::int AS total FROM job_runs r WHERE ${where}`,
+      args,
+    ).catch(() => []),
+  ]);
+  return { rows, total: counted[0]?.total ?? 0 };
+}
 
 export async function logPage(
   win: Win,

@@ -472,17 +472,25 @@ def _collect(
                 if news_since is None:
                     store.settle_district(conn, portal.key, district)
                     stage.count("district_watched")
-                # Only on a complete read. A run that stopped at the page cap
-                # has not seen everything since the last sweep, and moving the
-                # mark would leave that gap unread for ever.
-                if harvest.complete:
-                    store.mark_swept(conn, portal.key, district)
             elif harvest.complete and not fresh and news_since is None:
                 # Nothing new left, and we saw all of it: read through. From
                 # the next run on, anything appearing here appeared after we
                 # looked.
                 store.settle_district(conn, portal.key, district)
                 stage.count("district_settled")
+
+            # For every portal, dated or not, and only on a complete read: a
+            # run that stopped at the page cap has not seen everything since
+            # the last sweep, and moving the mark would leave that gap unread
+            # for ever.
+            #
+            # This used to sit inside the `dated` branch, so an undated source
+            # never recorded a sweep at all. `swept_at` then stayed NULL, which
+            # `stale_watches` reads as a gap — so openrent_v2 had its watch
+            # voided on every single run and announced nothing, which is
+            # precisely the fault this rule exists to prevent.
+            if harvest.complete:
+                store.mark_swept(conn, portal.key, district)
             if not harvest.complete:
                 stage.count("district_partial")
 

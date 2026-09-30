@@ -55,6 +55,19 @@ def test_a_week_long_gap_is_voided_too() -> None:
     assert stale_watches(["SE16"], watching, now=NOW) == ["SE16"]
 
 
+def test_a_district_settled_this_run_is_not_stale_on_the_next() -> None:
+    # The loop this closes: `settle_district` left `swept_at` NULL, and NULL
+    # reads as a gap — so a district settled on one run was voided on the next,
+    # settled again, voided again, once per run for ever. Nothing was ever
+    # announced from it, and the warning fired thirty-eight times in a day
+    # before anybody looked.
+    #
+    # Settling happens because we have just read the district, so "when did we
+    # last read it" is now, and it is written at the same time.
+    just_settled = Watch(settled_at=NOW, swept_at=NOW)
+    assert stale_watches(["E14"], {"E14": just_settled}, now=NOW) == []
+
+
 def test_a_watch_that_never_recorded_a_sweep_is_voided() -> None:
     # `swept_at` is NULL for rows written before 0050. Not knowing when a
     # district was last read is the same as not knowing whether there is a

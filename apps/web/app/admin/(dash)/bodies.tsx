@@ -4,7 +4,8 @@ import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries"
 import {
   delivery, duplicates, intakePoints, jobStates, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
-  runPoints, scrapeBytes, sightingsSince, sourceFeeds, unparseablePoints,
+  runLog, runPoints, scrapeBytes, sightingsSince, sourceFeeds,
+  unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
 
@@ -695,6 +696,50 @@ export async function LastRuns() {
   );
 }
 
+// What a run did, folded out of its counters into one readable clause.
+//
+// Named keys in a fixed order rather than whatever the run happened to
+// record: a run writes two dozen counters and most of them are only
+// interesting when something is wrong, so printing them all is how a log line
+// becomes unreadable.
+const RUN_FIGURES: [string, string][] = [
+  ["districts", "districts"],
+  ["seen", "seen"],
+  ["new", "new"],
+  ["stored", "stored"],
+  ["queued", "queued"],
+  ["sent", "sent"],
+  ["duplicate", "copies"],
+  ["refused", "refused"],
+  ["invalid", "rejected"],
+  ["district_partial", "part-read"],
+];
+
+function whatItDid(counters: Record<string, unknown> | null): string {
+  if (!counters) return "";
+  const parts: string[] = [];
+  for (const [key, word] of RUN_FIGURES) {
+    const value = Number(counters[key]);
+    if (Number.isFinite(value) && value !== 0) parts.push(`${value} ${word}`);
+  }
+  return parts.join(" · ");
+}
+
+const RUN_TONE: Record<string, string> = {
+  ok: "good",
+  degraded: "warn",
+  failed: "bad",
+  running: "",
+  skipped_locked: "",
+};
+
+// One line per run, not one per log line.
+//
+// A district sweep writes a line per portal per problem, so a fault that
+// persists filled this panel with the same sentence thirty-eight times and
+// pushed everything else off it. A run is the unit somebody actually wants to
+// scan: it started, it took this long, it did this much, and this was the
+// worst thing it said.
 export async function LogLines({
   span,
   job,
@@ -703,17 +748,20 @@ export async function LogLines({
 }: {
   span: string;
   job?: string;
+  // Kept as the URL's own name for backwards compatibility with a bookmarked
+  // link: any value means "only runs worth a look".
   level?: string;
   page: number;
 }) {
   const win = spanFrom(span);
-  const filter = { job, level };
-  const [logs, jobNames] = await Promise.all([
-    logPage(win, filter, page),
+  const bad = Boolean(level);
+  const [runs, jobNames] = await Promise.all([
+    runLog(win, { job, bad }, page),
     knownJobs().catch(() => []),
   ]);
 
-  const totalPages = Math.max(1, Math.ceil(logs.total / 10));
+  const perPage = 12;
+  const totalPages = Math.max(1, Math.ceil(runs.total / perPage));
   const link = (over: Record<string, string | undefined>) => {
     const next = new URLSearchParams();
     for (const [name, value] of Object.entries({
@@ -743,34 +791,53 @@ export async function LogLines({
           ))}
         </div>
         <div className="window-picker">
-          {["error", "warn", "info"].map((one) => (
-            <Link
-              key={one}
-              className={level === one ? "win win-on" : "win"}
-              href={link({ level: level === one ? undefined : one, p: "1" })}
-            >
-              {one}
-            </Link>
-          ))}
+          <Link
+            className={bad ? "win win-on" : "win"}
+            href={link({ level: bad ? undefined : "bad", p: "1" })}
+          >
+            only with problems
+          </Link>
         </div>
       </div>
 
-      {logs.rows.length === 0 ? (
-        <p className="metric-note">Nothing logged in this range.</p>
+      {runs.rows.length === 0 ? (
+        <p className="metric-note">
+          {bad
+            ? "No run in this range had anything to complain about."
+            : "No job ran in this range."}
+        </p>
       ) : (
-        logs.rows.map((row) => (
-          <div key={row.id} className="log-line mono">
-            <span className="log-when">{at(row.ts)}</span>
-            <span className={`log-level ${LEVEL_TONE[row.level] ?? ""}`}>
-              {row.job}
-            </span>
-            <span className="log-message">
-              <span className={LEVEL_TONE[row.level] ?? ""}>{row.level}</span>{" "}
-              {row.stage ? `${row.stage} · ` : ""}
-              {row.message}
-            </span>
-          </div>
-        ))
+        runs.rows.map((run) => {
+          const did = whatItDid(run.counters);
+          const tone = RUN_TONE[run.status] ?? "";
+          return (
+            <div key={run.id} className="log-line mono">
+              <span className="log-when">{at(run.started_at)}</span>
+              <span className={`log-level ${tone}`}>{run.job}</span>
+              <span className="log-message">
+                <span className={tone}>{run.status}</span>
+                {run.secs !== null ? ` in ${run.secs}s` : " · no result recorded"}
+                {run.host ? ` · ${run.host}` : ""}
+                {run.trigger !== "schedule" ? ` · ${run.trigger}` : ""}
+                {did ? ` · ${did}` : ""}
+                {run.notes > 0 && (
+                  <>
+                    {" · "}
+                    <span className={run.worst_level === "error" ? "bad" : "warn"}>
+                      {run.notes} note{run.notes === 1 ? "" : "s"}
+                    </span>
+                  </>
+                )}
+                {(run.worst || run.error) && (
+                  <div className="job-error">
+                    {run.worst_stage ? `${run.worst_stage}: ` : ""}
+                    {run.worst ?? run.error}
+                  </div>
+                )}
+              </span>
+            </div>
+          );
+        })
       )}
 
       <div className="pager">
@@ -778,7 +845,7 @@ export async function LogLines({
           ← newer
         </Link>
         <span>
-          page {page} of {totalPages} · {logs.total} lines
+          page {page} of {totalPages} · {runs.total} runs
         </span>
         <Link
           className={page >= totalPages ? "off" : ""}

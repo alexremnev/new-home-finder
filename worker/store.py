@@ -315,11 +315,21 @@ def watching_since(conn: Conn, source_key: str) -> dict[str, datetime]:
 
 
 def settle_district(conn: Conn, source_key: str, district: str) -> None:
+    """Start watching a district: from now on, what appears here is news.
+
+    `swept_at` is set at the same time, and that is not decoration. Settling a
+    district happens because we have just read it, so "when did we last read
+    it" is now. Leaving it NULL meant a freshly settled district looked to
+    `sweep.stale_watches` exactly like one with a gap — so it was voided on the
+    very next run, settled again, voided again, once per run for ever, and
+    nothing was ever announced from it. NULL now means only what it was
+    supposed to mean: a row written before 0050.
+    """
 
     conn.execute(
         """
-        INSERT INTO source_sweeps (source_key, district)
-        VALUES (%s, %s)
+        INSERT INTO source_sweeps (source_key, district, swept_at)
+        VALUES (%s, %s, now())
         ON CONFLICT (source_key, district) DO NOTHING
         """,
         (source_key, district.upper()),
