@@ -22,9 +22,9 @@ scripts call is deliberately not used, even though it would be smaller. There
 is no `Crawl-delay` for `*`.
 
 `sortType=6` is newest first. That is what makes one page enough: with the
-delivery timer running every twenty minutes, 24 newest listings is far more
-than one outcode produces, and paging stops as soon as we are behind the
-watermark. The district's search is `radius=0.0`, confirmed from
+timer running every ten minutes in working hours, 24 newest listings is far
+more than one outcode produces, and paging stops as soon as we are behind
+the watermark. The district's search is `radius=0.0`, confirmed from
 `searchParameters` in the response, so the page holds that outcode and nothing
 around it — which is why the searched district can be trusted as the listing's
 district even when the address does not state an outcode.

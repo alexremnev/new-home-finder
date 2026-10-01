@@ -5,7 +5,7 @@
 #
 # ── the schedule, in London time ─────────────────────────────────────────
 #
-#   weekdays  07:20–17:00   every 20 minutes
+#   weekdays  07:20–17:00   every 10 minutes
 #   weekdays  17:00–22:00   hourly
 #   weekdays  22:00–07:20   not at all
 #   weekends  10:00–20:00   hourly
@@ -16,13 +16,19 @@
 #
 # ── why the three are offset from each other ─────────────────────────────
 #
-# Rightmove runs at the top of each interval — :00, :20, :40. Rightmove takes the top of the
-# interval, Zoopla seven minutes later, OpenRent fourteen — so the three sweeps
-# never land on the server in the same minute. Each still gets a full sweep
-# every twenty minutes; only the phase differs.
+# Rightmove runs every ten minutes — :00, :10, :20, :30, :40, :50 — while
+# Zoopla takes :07, :27, :47 and OpenRent :14, :34, :54. So the three still
+# never land on the server in the same minute; Rightmove simply fills twice
+# as many of the slots between them.
 #
-# The jitter below is 90 seconds against a seven-minute separation, so it
-# blurs the start without letting two jobs collide.
+# Ten rather than twenty because this is the reader the whole product rests
+# on while the Telegram feed is still the thing finding listings first: a
+# flat is let in hours, so ten minutes of lead is worth 3MB of search pages.
+# One page per district either way — the sweep stops as soon as it is behind
+# the watermark, and half the interval means half as much new stock above it.
+#
+# The jitter below is 90 seconds against a three-minute separation, so it
+# still blurs the start without letting two jobs collide.
 #
 # ── the zone is stated here, not taken from the machine ──────────────────
 #
@@ -33,7 +39,7 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..16:00/20 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..16:00/10 Europe/London'
 
 [Unit]
 Description=Read Rightmove search pages on London working hours
@@ -42,11 +48,11 @@ Description=Read Rightmove search pages on London working hours
 Unit=london-home-finder@rightmove.service
 
 # Weekdays, the working day. Two lines because the day does not start on the
-# hour: the first covers the two runs before 08:00, the second the whole hours
-# after it. Folded into one `07..16` line it would add a run at 07:00 that the
-# schedule deliberately excludes.
-OnCalendar=Mon..Fri 07:20,40 Europe/London
-OnCalendar=Mon..Fri 08..16:00/20 Europe/London
+# hour: the first covers the four runs before 08:00, the second the whole
+# hours after it. Folded into one `07..16` line it would add a run at 07:00
+# that the schedule deliberately excludes.
+OnCalendar=Mon..Fri 07:20,30,40,50 Europe/London
+OnCalendar=Mon..Fri 08..16:00/10 Europe/London
 # Weekday evenings: hourly.
 OnCalendar=Mon..Fri 17..21:00 Europe/London
 # Weekends, a shorter day: hourly.
