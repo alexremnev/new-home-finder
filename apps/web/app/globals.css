@@ -2642,3 +2642,161 @@ form p.error {
 }
 
 .panel-fold[open] > summary { margin-bottom: 0.6rem; }
+
+/* ── the area picker's own dropdown ───────────────────────────────────────── */
+
+/* A `datalist` was doing this, and a datalist cannot be styled: the browser
+   draws the popup, at its own width, in its own type, in its own colours. On a
+   form this deliberate it read as somebody else's dialog. So the list is
+   ordinary markup, and these rules are the whole reason it exists. */
+.combo { position: relative; }
+
+.combo-list {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 0.35rem);
+  left: 0;
+  right: 0;
+  max-height: 17.5rem;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0.3rem;
+  list-style: none;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: var(--shadow);
+}
+
+.combo-option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: calc(var(--radius) - 2px);
+  cursor: pointer;
+}
+
+/* One highlight, driven by the keyboard, and the mouse moves it rather than
+   lighting a second row: two highlighted rows and only one of them answering
+   Enter is the usual way these confuse people. */
+.combo-option.on { background: var(--accent-wash); }
+.combo-option.on .combo-name { color: var(--accent-dim); font-weight: 600; }
+
+.combo-name { min-width: 0; overflow-wrap: anywhere; }
+
+/* The outcode, quiet and to the right: it is how to confirm the row rather
+   than how to find it. */
+.combo-code {
+  flex: none;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.combo-empty,
+.combo-more {
+  padding: 0.55rem 0.7rem;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+}
+
+.combo-more { border-top: 1px solid var(--line); margin-top: 0.3rem; }
+
+/* ── numbers under the short sliders ──────────────────────────────────────── */
+
+/* Inset by half a thumb on each side, because that is the travel a native
+   range input gives its thumb: without it the first and last numbers sit a
+   thumb's width away from the handles they belong to. */
+.range2-ticks {
+  position: relative;
+  height: 1.1rem;
+  margin: 0.35rem 0.75rem 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.range2-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+/* Inside the chosen range. The same signal the filled track gives, repeated on
+   the numbers, so "1 — 3" can be read without looking back up at the figure. */
+.range2-tick.on { color: var(--ink); font-weight: 600; }
+
+/* ── what a live button says instead of being grey ────────────────────────── */
+
+.offer-needs {
+  margin: 0.5rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
+  text-align: center;
+}
+
+/* ── the header's call to action ──────────────────────────────────────────── */
+
+.site-head-row {
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.site-head-cta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* Shorter and lighter than the form's own `.cta`: this is the way to the
+   decision, not the decision. Making it the same size would set up two buttons
+   of equal weight saying the same words on one screen. */
+.head-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  height: 38px;
+  padding: 0 0.9rem;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 140ms ease, transform 140ms ease;
+}
+
+.head-cta:hover { color: #fff; text-decoration: none; transform: translateY(-1px); }
+.head-cta:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+.head-cta svg { width: 16px; height: 16px; }
+
+.head-cta-telegram { background: #229ed9; }
+.head-cta-telegram:hover { background: #1b87ba; }
+.head-cta-whatsapp { background: var(--wa); }
+.head-cta-whatsapp:hover { background: var(--wa-dim); }
+
+/* The anchor sits under a 64px bar, so the browser is told to stop short of it
+   rather than scrolling the button out of sight. */
+#start { scroll-margin-top: 84px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+}
+
+/* Narrow screens: the logos alone. Both buttons still fit beside the brand,
+   and each link carries its own aria-label, so the words are only missing from
+   the screen and not from the page. */
+@media (max-width: 44rem) {
+  .head-cta span { display: none; }
+  .head-cta { padding: 0 0.75rem; }
+}
+
+@media (max-width: 24rem) {
+  /* No room for the brand and two buttons at once; the brand is the thing that
+     says where you are. */
+  .site-head-cta { display: none; }
+}

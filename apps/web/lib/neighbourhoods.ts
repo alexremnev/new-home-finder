@@ -209,3 +209,46 @@ export function neighbourhoodAreas(
     .map(([name, code]) => ({ code, name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * The rows the area list should show for what has been typed.
+ *
+ * Out here rather than inside the form because it is the only part of that
+ * dropdown with a right answer — the rest is CSS — and because the order is
+ * the thing people notice: a list that puts "Canary Wharf" below "Wharf Road"
+ * for the word "wharf" reads as broken.
+ *
+ * Three ranks, best first: an exact name or outcode, then anything starting
+ * with what was typed, then anything containing it. Inside a rank the given
+ * order is kept, which for the named list is alphabetical.
+ */
+export function matchAreas(
+  options: Area[],
+  typed: string,
+  picked: Iterable<string> = [],
+): Area[] {
+  const said = typed.trim().toLowerCase();
+  const already = new Set([...picked]);
+
+  const rank = (one: Area) => {
+    const name = one.name.toLowerCase();
+    const code = one.code.toLowerCase();
+    if (name === said || code === said) return 0;
+    if (name.startsWith(said) || code.startsWith(said)) return 1;
+    return 2;
+  };
+
+  return options
+    .filter(
+      (one) =>
+        !already.has(one.code) &&
+        (said === "" ||
+          one.name.toLowerCase().includes(said) ||
+          one.code.toLowerCase().includes(said)),
+    )
+    .map((one, index) => ({ one, index, rank: rank(one) }))
+    // The index is the tiebreak, so the order inside a rank is the order the
+    // areas arrived in rather than whatever the sort decides.
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map((entry) => entry.one);
+}

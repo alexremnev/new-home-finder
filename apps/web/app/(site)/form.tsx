@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { pounds } from "@/lib/money";
-import { neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
+import { matchAreas, neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
 
 import { TelegramMark, WhatsAppMark } from "./logos";
 import { PhonePreview } from "./phone";
@@ -56,6 +56,11 @@ const BATHS_MIN = 1;
 const ROOMS_MAX = 5;
 
 const rooms = (value: number) => String(value);
+
+// Rows the list will show at once. London has 594 outcodes and the named
+// neighbourhoods are more; a list that long is a scrollbar rather than a
+// choice, so past this it asks for another letter instead.
+const LIST_MAX = 8;
 
 // "room" on its own reads as a bedroom count rather than as what it is.
 const TYPE_LABELS: Record<string, string> = {
@@ -111,6 +116,12 @@ export function SubscribeForm({
   const [chosen, setChosen] = useState<Area[]>([]);
   const [typed, setTyped] = useState("");
   const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(null);
+  // The list below the box, and which of its rows the keyboard is on. A
+  // `datalist` was doing this job and could not be styled at all — its width,
+  // type and colours are the browser's, so it landed on the page as somebody
+  // else's control. See `.combo` in globals.css.
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
 
   const [mode, setMode] = useState<"name" | "postcode">("name");
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
@@ -170,6 +181,15 @@ export function SubscribeForm({
     setChosen((current) => current.filter((one) => one.code !== code));
   }
 
+  function choose(area: Area) {
+    add(area);
+    setCursor(0);
+    // Left open while there is room for another, because most people pick two
+    // or three and reopening the list for each is three clicks nobody needs.
+    // The chip appearing below is the acknowledgement.
+    setOpen(chosen.length + 1 < maxDistricts);
+  }
+
   function commitTyped() {
     const text = typed.trim();
     if (!text) return;
@@ -188,6 +208,18 @@ export function SubscribeForm({
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+
+    // What used to be a greyed-out button. Checked here instead, so the answer
+    // arrives next to the field that is missing rather than as a control that
+    // will not respond.
+    if (chosen.length === 0) {
+      setAreaNote({
+        text: "Pick at least one area first — that is what the alerts are about.",
+        bad: true,
+      });
+      document.getElementById("area")?.focus();
+      return;
+    }
 
     // Which button was pressed. `new FormData(form)` does not include the
     // submitter, so it is read from the event — and it is read before the
@@ -267,19 +299,15 @@ export function SubscribeForm({
   const placeholder =
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
 
-  // What has been typed is a district in its own right, and also the start of
-  // another one. "E1" against "E14": the person may mean either, so nothing is
-  // committed until they say so.
-  const said = typed.trim().toLowerCase();
-  const stillAmbiguous =
-    said !== "" &&
-    options.some(
-      (one) => one.name.toLowerCase() === said || one.code.toLowerCase() === said,
-    ) &&
-    options.some(
-      (one) =>
-        one.name.toLowerCase().startsWith(said) && one.name.toLowerCase() !== said,
-    );
+  // What the list shows: everything that matches, minus what is already
+  // chosen, best match first.
+  //
+  // The "E1 against E14" problem this used to work around is gone with the
+  // list. Typing an exact district no longer commits it on the spot — which is
+  // what made E14 unreachable once E1 had been typed — because choosing is now
+  // a click or Enter on a row, and both districts are rows.
+  const matching = matchAreas(options, typed, chosen.map((one) => one.code));
+  const shown = matching.slice(0, LIST_MAX);
 
   return (
     <form onSubmit={submit} className="hero-form">
@@ -321,68 +349,106 @@ export function SubscribeForm({
           <input key={area.code} type="hidden" name="districts" value={area.code} />
         ))}
 
-        <input
-          id="area"
-          type="text"
-          list="area-list"
-          value={typed}
-          autoComplete="off"
-          placeholder={placeholder}
-          onChange={(event) => {
-            const value = event.target.value;
-            setAreaNote(null);
-
-            // Picking from the list is the choice. A datalist reports the pick
-            // as an ordinary change whose value is the option in full, so an
-            // exact match is a pick rather than someone halfway through typing
-            // — and nobody should have to press Enter after choosing.
-            //
-            // Except when the exact match is also the start of another option.
-            // "E1" is a district and so is "E14": committing on the exact match
-            // added E1 the moment it was typed and made E14 unreachable. In that
-            // case the typing is allowed to continue, and Enter or clicking away
-            // commits — which the hint below says while it is ambiguous.
-            const said = value.trim().toLowerCase();
-            const exact = options.find(
-              (one) =>
-                one.name.toLowerCase() === said || one.code.toLowerCase() === said,
-            );
-            const alsoAPrefix =
-              said !== "" &&
-              options.some(
-                (one) =>
-                  one.name.toLowerCase().startsWith(said) &&
-                  one.name.toLowerCase() !== said,
-              );
-
-            if (exact && !alsoAPrefix) {
-              add(exact);
-              return;
+        {/* A combobox, written out rather than a <datalist>: the native one
+            renders a dropdown the page cannot reach — its own width, its own
+            type, its own colours — so on a styled form it reads as a browser
+            dialog that wandered in. This one is ordinary markup, so it matches
+            the field it belongs to. */}
+        <div className="combo">
+          <input
+            id="area"
+            type="text"
+            role="combobox"
+            aria-expanded={open}
+            aria-controls="area-list"
+            aria-autocomplete="list"
+            aria-activedescendant={
+              open && shown[cursor] ? `area-option-${shown[cursor].code}` : undefined
             }
-            setTyped(value);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            value={typed}
+            autoComplete="off"
+            placeholder={placeholder}
+            onFocus={() => setOpen(true)}
+            onChange={(event) => {
+              setTyped(event.target.value);
+              setAreaNote(null);
+              // Back to the top of a list that has just changed under it:
+              // keeping the old index would leave the highlight on whatever
+              // row happens to be in that position now.
+              setCursor(0);
+              setOpen(true);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                setOpen(true);
+                if (shown.length === 0) return;
+                const step = event.key === "ArrowDown" ? 1 : -1;
+                setCursor((at) => (at + step + shown.length) % shown.length);
+                return;
+              }
+              if (event.key === "Enter") {
+                event.preventDefault();
+                // The highlighted row if the list is showing one, and
+                // otherwise whatever the text names — so typing a postcode in
+                // full and pressing Enter still works without looking down.
+                const pick = open ? shown[cursor] : undefined;
+                if (pick) choose(pick);
+                else commitTyped();
+                return;
+              }
+              if (event.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            // Closed, and nothing added: picking is a click or Enter on a row.
+            // Committing on blur meant clicking anywhere else on the page could
+            // add an area nobody had chosen.
+            onBlur={() => setOpen(false)}
+          />
 
-              event.preventDefault();
-              commitTyped();
-            }
-          }}
-          onBlur={commitTyped}
-        />
-
-        <datalist id="area-list">
-          {options.map((one) => (
-            <option key={`${one.name}-${one.code}`} value={one.name}>
-              {mode === "name" ? one.code : ""}
-            </option>
-          ))}
-        </datalist>
+          {open && (
+            <ul className="combo-list" id="area-list" role="listbox">
+              {shown.length === 0 && (
+                <li className="combo-empty">
+                  {typed.trim()
+                    ? `Nothing matches “${typed.trim()}”.`
+                    : "Every area is already on your list."}
+                </li>
+              )}
+              {shown.map((one, index) => (
+                <li
+                  key={one.code}
+                  id={`area-option-${one.code}`}
+                  role="option"
+                  aria-selected={index === cursor}
+                  className={index === cursor ? "combo-option on" : "combo-option"}
+                  // The input keeps focus, so the list does not close out from
+                  // under the click that is choosing from it.
+                  onMouseDown={(event) => event.preventDefault()}
+                  onMouseEnter={() => setCursor(index)}
+                  onClick={() => choose(one)}
+                >
+                  <span className="combo-name">{one.name}</span>
+                  {one.code !== one.name && (
+                    <span className="combo-code">{one.code}</span>
+                  )}
+                </li>
+              ))}
+              {matching.length > shown.length && (
+                <li className="combo-more">
+                  {matching.length - shown.length} more — keep typing to narrow it
+                  down
+                </li>
+              )}
+            </ul>
+          )}
+        </div>
 
         <p className="hint">
-          {stillAmbiguous
-            ? `Press Enter to add ${typed.trim().toUpperCase()}, or keep typing.`
-            : "Start typing and pick from the list."}
+          {full
+            ? `That is all ${maxDistricts} areas.`
+            : "Start typing, or pick from the list."}
         </p>
 
         {chosen.length > 0 && (
@@ -431,6 +497,7 @@ export function SubscribeForm({
           step={1}
           value={bedrooms}
           onChange={setBedrooms}
+          ticks
           format={beds}
           openTop="+"
           disabled={roomsOnly}
@@ -451,6 +518,7 @@ export function SubscribeForm({
           step={1}
           value={bathrooms}
           onChange={setBathrooms}
+          ticks
           format={rooms}
           openTop="+"
         />
@@ -475,10 +543,6 @@ export function SubscribeForm({
             ? "Any size"
             : `${sqft(area[0])} — ${sqft(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
         </p>
-        <small className="note">
-          Most listings never say how big they are, and those still come through —
-          this narrows the ones that do say.
-        </small>
       </div>
 
       <div>
@@ -585,7 +649,11 @@ export function SubscribeForm({
         <PhonePreview />
       </div>
 
-      <div className="hero-actions">
+      {/* What the header's buttons scroll to. On the actions rather than on the
+          form, because the thing somebody pressing "Start free trial" is
+          looking for is the button, and the filter above it is the part they
+          read on the way down. */}
+      <div className="hero-actions" id="start">
       {error && <p className="error">{error}</p>}
 
       {returning ? (
@@ -598,7 +666,10 @@ export function SubscribeForm({
         />
       ) : (
         <>
-          <p className="offers-lead">Start with a free trial. Cancel anytime.</p>
+          <p className="offers-lead">
+            Start with a free trial. Cancel anytime. No credit card required to
+            start.
+          </p>
 
           <div className={whatsappReady ? "offers" : "offers offers-one"}>
             <Choice
@@ -611,6 +682,8 @@ export function SubscribeForm({
               offer={offers.telegram}
               busy={busy}
               ready={chosen.length > 0}
+              // Free for us to deliver on, so there is nothing to meter.
+              allowance="Unlimited alerts"
               // Free to deliver on, so it is the one we would rather people use
               // — and saying so is more honest than pricing them towards it
               // quietly.
@@ -625,6 +698,8 @@ export function SubscribeForm({
                 offer={offers.whatsapp}
                 busy={busy}
                 ready={chosen.length > 0}
+                // Billed per message by Meta, so it is metered and says so.
+                allowance="900 alerts per month"
               />
             )}
           </div>
@@ -673,11 +748,18 @@ function Save({
           name="channel"
           value={channel}
           className={`cta cta-${channel}`}
-          disabled={busy !== null || !ready}
+          disabled={busy !== null}
+          aria-describedby={ready ? undefined : "needs-area-save"}
         >
           {channel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}
           {busy === channel ? "One moment…" : `Save and go back to ${where}`}
         </button>
+
+        {!ready && (
+          <p className="offer-needs" id="needs-area-save">
+            Pick at least one area above first.
+          </p>
+        )}
 
         {!full && (
           <p className="offer-lapsed">
@@ -703,15 +785,18 @@ function Save({
 // the only thing that differs — so they are written once and the length is
 // passed in.
 function Choice({
-  channel, label, mark, offer, busy, ready, flag,
+  channel, label, mark, offer, busy, ready, flag, allowance,
 }: {
   channel: Channel;
   label: string;
   mark: React.ReactNode;
   offer: Offer;
   busy: Channel | null;
+  /** Whether an area has been chosen. Not what disables the button — see below. */
   ready: boolean;
   flag?: string;
+  /** How many alerts this messenger allows, in its own words. */
+  allowance?: string;
 }) {
   const { trialDays, prices } = offer;
 
@@ -748,21 +833,38 @@ function Choice({
         <li>
           <Tick /> Real-time alerts
         </li>
-        <li>
-          <Tick /> No credit card required to start
-        </li>
+        {allowance && (
+          <li>
+            <Tick /> {allowance}
+          </li>
+        )}
       </ul>
 
+      {/* Lit, not greyed out, even with no area chosen yet.
+          A disabled button is the one thing on the page that cannot say why it
+          is disabled: it does not take a click, so it cannot answer one. The
+          button stays live, the line under it says what is missing, and
+          pressing it puts the cursor in the area box — which is the whole of
+          what a disabled button was trying to prevent, done where somebody can
+          read it. Still disabled while a submission is in flight, because that
+          is about this button rather than about the form. */}
       <button
         type="submit"
         name="channel"
         value={channel}
         className={`cta cta-${channel}`}
-        disabled={busy !== null || !ready}
+        disabled={busy !== null}
+        aria-describedby={ready ? undefined : `needs-area-${channel}`}
       >
         {mark}
         {busy === channel ? "One moment…" : label}
       </button>
+
+      {!ready && (
+        <p className="offer-needs" id={`needs-area-${channel}`}>
+          Pick at least one area above first.
+        </p>
+      )}
     </div>
   );
 }
@@ -778,7 +880,7 @@ function Tick() {
 
 function RangeSlider({
   min, max, step, value, onChange, format, openTop = "", disabled = false,
-  stops,
+  stops, ticks = false,
 }: {
   min: number;
   max: number;
@@ -801,6 +903,15 @@ function RangeSlider({
    * has to know about indices.
    */
   stops?: number[];
+  /**
+   * Print every stop under the track, not just the two ends.
+   *
+   * Only for a scale short enough to read: bedrooms and bathrooms are six
+   * positions each, and without the numbers the only way to find out which one
+   * a handle is on is to drag it and watch the figure above change. Rent and
+   * size have far too many stops for this and keep their two ends.
+   */
+  ticks?: boolean;
 }) {
   const [low, high] = value;
 
@@ -872,13 +983,39 @@ function RangeSlider({
         />
       </div>
 
-      <div className="range2-ends">
-        <span>{format(from(floor))}</span>
-        <span>
-          {format(from(ceiling))}
-          {openTop}
-        </span>
-      </div>
+      {ticks ? (
+        /* One label per stop, each centred on where its handle sits. The
+           strip is inset by half a thumb on both sides because that is the
+           travel a native range input gives its thumb — without the inset the
+           first and last labels sit a thumb's width away from their ends. */
+        <div className="range2-ticks">
+          {Array.from(
+            { length: Math.floor((ceiling - floor) / tick) + 1 },
+            (_, step) => floor + step * tick,
+          ).map((position) => {
+            const value = from(position);
+            const inside = position >= lowAt && position <= highAt;
+            return (
+              <span
+                key={position}
+                className={inside ? "range2-tick on" : "range2-tick"}
+                style={{ left: `${percent(position, floor, ceiling)}%` }}
+              >
+                {format(value)}
+                {position === ceiling ? openTop : ""}
+              </span>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="range2-ends">
+          <span>{format(from(floor))}</span>
+          <span>
+            {format(from(ceiling))}
+            {openTop}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
