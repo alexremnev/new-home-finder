@@ -322,12 +322,16 @@ def test_the_starter_batch_skips_whatsapp_but_still_settles_it(
     from worker.pipeline import outbox
 
     owed = [
-        {"id": 1, "user_id": 10, "criteria": {}, "channel": "whatsapp"},
-        {"id": 2, "user_id": 20, "criteria": {}, "channel": "telegram"},
+        {"id": 1, "user_id": 10, "criteria": {}, "channel": "whatsapp",
+         "plan": "trial", "plan_until": None, "filters": 1},
+        {"id": 2, "user_id": 20, "criteria": {}, "channel": "telegram",
+         "plan": "trial", "plan_until": None, "filters": 1},
     ]
     settled: list[int] = []
     queued: list[dict[str, Any]] = []
+    told: list[str] = []
 
+    monkeypatch.setattr(outbox, "tell_ops", lambda message: (told.append(message), True)[1])
     monkeypatch.setattr(store, "unseeded_subscriptions", lambda conn: owed)
     monkeypatch.setattr(
         store, "recent_listings",
@@ -347,6 +351,42 @@ def test_the_starter_batch_skips_whatsapp_but_still_settles_it(
     assert sorted(settled) == [1, 2]
     # Only the free channel was actually sent anything.
     assert {one["channel"] for one in queued} == {"telegram"}
+    # But both sign-ups are announced. WhatsApp gets no starter batch, so an
+    # announcement made from inside the batch would have skipped it too.
+    assert len(told) == 2
+    assert "#10 on whatsapp" in told[0]
+    assert "#20 on telegram" in told[1]
+
+def test_a_new_filter_and_a_replaced_one_read_differently() -> None:
+    # The sign-up form writes a new subscription row every time it is used, so
+    # this count is the only thing separating a new customer from somebody
+    # editing the search they already had.
+    from worker.pipeline.outbox import signup_notice
+
+    base = {"user_id": 7, "channel": "telegram", "criteria": {}, "plan": "trial",
+            "plan_until": None}
+
+    assert "New subscriber" in signup_notice({**base, "filters": 1})
+    assert "Filter replaced" in signup_notice({**base, "filters": 2})
+
+def test_a_filter_is_named_by_the_three_things_that_decide_it() -> None:
+    from worker.pipeline.outbox import criteria_line
+
+    line = criteria_line({
+        "price_pcm": {"max": 2000},
+        "bedrooms": {"min": 1, "max": 2},
+        "areas": {"postcode_districts": ["SE16", "SE1"]},
+        "landlord_direct_only": True,
+    })
+
+    assert line == "SE16, SE1 · £0-2000 · 1-2 bed · also landlord_direct_only"
+
+def test_an_empty_filter_says_so_rather_than_reading_as_a_bug() -> None:
+    from worker.pipeline.outbox import criteria_line
+
+    # It is a real state — the form allows it — and an empty line in the ops
+    # chat would look like a broken message rather than a wide search.
+    assert criteria_line({}) == "no filter set — matches everything"
 
 class FakeRun:
 

@@ -8,7 +8,9 @@ Type=oneshot
 User=finder
 WorkingDirectory=/opt/london-home-finder
 EnvironmentFile=/etc/london-home-finder.env
-ExecStart=/opt/london-home-finder/.venv/bin/python scripts/report.py
+# --trigger schedule, as the worker units pass: the run this records is a
+# timed one, and the run log distinguishes those from a hand-started run.
+ExecStart=/opt/london-home-finder/.venv/bin/python scripts/report.py --trigger schedule
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

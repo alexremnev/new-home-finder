@@ -20,6 +20,11 @@ try:
 except ModuleNotFoundError:
     sys.exit("report: psycopg is not installed. Run `uv sync` first.")
 
+# Imported after the guard above, not with `load_env`: this module reaches
+# psycopg too, and importing it first turns a missing dependency back into a
+# traceback instead of the sentence that explains it.
+from worker.obs import Run
+
 Row = dict[str, Any]
 
 DELIVERY_BY_DAY = """
@@ -222,7 +227,14 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
 
     return found
 
-def tell_ops(message: str) -> None:
+def tell_ops(message: str) -> bool:
+    """Send one line to the ops chat. False when it could not be sent.
+
+    Returns the outcome rather than swallowing it so the run can record
+    whether the alert actually went — an alert that was never delivered and
+    one that was look identical in the journal otherwise.
+    """
+
     token = os.environ.get("TELEGRAM_OPS_TOKEN") or os.environ.get("TELEGRAM_TOKEN")
     chat = os.environ.get("TELEGRAM_OPS_CHAT")
     if not token or not chat:
@@ -232,7 +244,7 @@ def tell_ops(message: str) -> None:
             "to reuse the one that serves users.",
             file=sys.stderr,
         )
-        return
+        return False
     request = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/sendMessage",
         data=json.dumps({
@@ -244,8 +256,11 @@ def tell_ops(message: str) -> None:
         with urllib.request.urlopen(request, timeout=20) as response:
             if response.status >= 300:
                 print(f"report: alert rejected with {response.status}", file=sys.stderr)
+                return False
     except (urllib.error.URLError, OSError) as error:
         print(f"report: could not alert — {type(error).__name__}: {error}", file=sys.stderr)
+        return False
+    return True
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Delivery statistics, and a check for silences.")
@@ -262,6 +277,9 @@ def main() -> int:
                         help="hours without a source message before that is a fault (default 6)")
     parser.add_argument("--stale-hours", type=int, default=2, metavar="H",
                         help="hours a message may sit unparsed or unsent (default 2)")
+    parser.add_argument(
+        "--trigger", default="manual", choices=("schedule", "manual", "retry"),
+        help="recorded on the run for auditing, as for `python -m worker`")
     args = parser.parse_args()
 
     load_env()
@@ -275,34 +293,77 @@ def main() -> int:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"report-{stamp}.txt"
 
-    with psycopg.connect(url, row_factory=dict_row) as conn:
-        sections = [
-            f"Report {datetime.now():%Y-%m-%d %H:%M} · window {args.days} day(s)\n",
-            table("DELIVERY BY DAY",
-                  conn.execute(DELIVERY_BY_DAY, {"days": args.days}).fetchall()),
-            table("PER SUBSCRIBER",
-                  conn.execute(DELIVERY_BY_USER, {"days": args.days}).fetchall()),
-            table("BY HOUR OF DAY",
-                  conn.execute(DELIVERY_BY_HOUR, {"days": args.days}).fetchall()),
-            table("INGEST", conn.execute(INGEST_BY_DAY, {"days": args.days}).fetchall()),
-            table("WHY MESSAGES DID NOT PARSE",
-                  conn.execute(UNPARSEABLE_BY_REASON).fetchall()),
-            table("LISTINGS", conn.execute(LISTINGS_BY_SOURCE).fetchall()),
-        ]
-        faults = problems(conn, quiet_hours=args.quiet_hours, stale_hours=args.stale_hours)
+    # autocommit, as every worker job connects: the run row has to be visible
+    # while the run is still going. Inside a transaction it would appear only
+    # at the end, and a report killed halfway would roll its own row away —
+    # leaving the dashboard unable to tell "it died" from "it never started".
+    with psycopg.connect(url, autocommit=True, row_factory=dict_row) as conn:
+        # This is why the job exists in `job_runs` at all: the admin dashboard
+        # expects a `report` row and painted the tile "silent" for ever without
+        # one, because the hourly check ran outside `python -m worker` and so
+        # recorded nothing. A check nobody can see has stopped is not a check.
+        #
+        # No advisory lock, unlike the worker's jobs. This one only reads, and
+        # two hourly reports overlapping costs a duplicate file and nothing
+        # else — a lock would add a second connection to guard nothing.
+        run = Run(conn, job="report", trigger=args.trigger)
+        try:
+            with run.stage("check") as stage:
+                sections = [
+                    f"Report {datetime.now():%Y-%m-%d %H:%M} · window {args.days} day(s)\n",
+                    table("DELIVERY BY DAY",
+                          conn.execute(DELIVERY_BY_DAY, {"days": args.days}).fetchall()),
+                    table("PER SUBSCRIBER",
+                          conn.execute(DELIVERY_BY_USER, {"days": args.days}).fetchall()),
+                    table("BY HOUR OF DAY",
+                          conn.execute(DELIVERY_BY_HOUR, {"days": args.days}).fetchall()),
+                    table("INGEST", conn.execute(INGEST_BY_DAY, {"days": args.days}).fetchall()),
+                    table("WHY MESSAGES DID NOT PARSE",
+                          conn.execute(UNPARSEABLE_BY_REASON).fetchall()),
+                    table("LISTINGS", conn.execute(LISTINGS_BY_SOURCE).fetchall()),
+                ]
+                faults = problems(
+                    conn, quiet_hours=args.quiet_hours, stale_hours=args.stale_hours
+                )
+                stage.set("problems", len(faults))
 
-    if faults:
-        sections.append("PROBLEMS\n" + "\n".join(f"  ! {f}" for f in faults) + "\n")
-    else:
-        sections.append("PROBLEMS\n  none\n")
+                if faults:
+                    sections.append(
+                        "PROBLEMS\n" + "\n".join(f"  ! {f}" for f in faults) + "\n"
+                    )
+                else:
+                    sections.append("PROBLEMS\n  none\n")
 
-    report = "\n".join(sections)
-    path.write_text(report, encoding="utf-8")
-    print(report)
-    print(f"report: written to {path}")
+                report = "\n".join(sections)
+                path.write_text(report, encoding="utf-8")
+                print(report)
+                print(f"report: written to {path}")
 
-    if faults and not args.no_alert:
-        tell_ops("⚠️ Something is stuck:\n\n" + "\n".join(f"• {f}" for f in faults))
+                # One warning per fault, and the run still finishes "ok".
+                #
+                # The status of this run answers "did the hourly check run",
+                # which is the only question its own tile can answer: the
+                # faults belong to the jobs that caused them and are already
+                # red on their own tiles. Recording them as the report's own
+                # degradation would paint two tiles for one fault and leave
+                # the report amber for something it found rather than
+                # something it did.
+                #
+                # As events, though, they put this run behind the run log's
+                # "only with problems" filter and give its line something to
+                # quote — which is where you would look for them.
+                for fault in faults:
+                    stage.log("warn", fault)
+
+                if faults and not args.no_alert:
+                    told = tell_ops(
+                        "⚠️ Something is stuck:\n\n" + "\n".join(f"• {f}" for f in faults)
+                    )
+                    stage.count("alerted" if told else "alert_failed")
+        except Exception as exc:
+            run.finish("failed", error=f"{type(exc).__name__}: {exc}")
+            raise
+        run.finish("ok")
 
     return 1 if faults and args.fail_on_problems else 0
 

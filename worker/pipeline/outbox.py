@@ -132,6 +132,70 @@ SEED_POOL = 400
 SEED_SKIPS = frozenset({"whatsapp"})
 
 
+# Which parts of a filter are named in the ops line, and what to call them.
+# The rest are counted by name without their values: these three decide whether
+# a filter will ever match anything, and a line read twenty at a time has room
+# for three.
+_FILTER_SHOWN = ("areas", "price_pcm", "bedrooms")
+
+def criteria_line(criteria: dict[str, Any]) -> str:
+    """One filter on one line. The subscriber's own card is the long version."""
+
+    parts: list[str] = []
+
+    areas = (criteria.get("areas") or {}).get("postcode_districts") or []
+    if areas:
+        shown = ", ".join(str(one) for one in areas[:6])
+        parts.append(shown + (f" +{len(areas) - 6}" if len(areas) > 6 else ""))
+
+    price = criteria.get("price_pcm") or {}
+    low, high = price.get("min"), price.get("max")
+    if high:
+        parts.append(f"£{low or 0}-{high}")
+    elif low:
+        parts.append(f"£{low}+")
+
+    beds = criteria.get("bedrooms") or {}
+    few, many = beds.get("min"), beds.get("max")
+    if few is not None and many is not None:
+        parts.append(f"{few}-{many} bed" if few != many else f"{few} bed")
+    elif few is not None:
+        parts.append(f"{few}+ bed")
+    elif many is not None:
+        parts.append(f"up to {many} bed")
+
+    # Named but not valued. A filter nobody can see is how a search that
+    # matches nothing stays mysterious, and the values are in the database.
+    rest = sorted(k for k in criteria if k not in _FILTER_SHOWN and criteria[k])
+    if rest:
+        parts.append("also " + ", ".join(rest))
+
+    return " · ".join(parts) if parts else "no filter set — matches everything"
+
+def signup_notice(row: Row) -> str:
+    """The ops line for a filter that has just appeared.
+
+    Says which account and what it is looking for, and never how to reach them:
+    this goes to a chat, and a chat is not where a phone number belongs.
+    """
+
+    # `.get` throughout: this line is commentary, and a column that is not
+    # there must never be the reason a new subscriber misses their first batch.
+    plan = str(row.get("plan") or "unknown plan")
+    until = row.get("plan_until")
+    when = f" until {until.strftime('%d %b')}" if until is not None else ""
+    # The form writes a new subscription row every time, so this is the only
+    # thing separating a new customer from somebody editing their search.
+    first = int(row.get("filters") or 1) <= 1
+
+    return "\n".join(
+        [
+            f"{'🎉 New subscriber' if first else '✏️ Filter replaced'} "
+            f"#{int(row['user_id'])} on {row['channel']} · {plan}{when}",
+            criteria_line(row["criteria"] or {}),
+        ]
+    )
+
 def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
     with run.stage("seed") as stage:
@@ -148,6 +212,15 @@ def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> No
 
         rows: list[dict[str, Any]] = []
         for subscription in owed:
+            # Said before the branch below, not after it: WhatsApp gets no
+            # starter batch, and sending the line from inside the batch would
+            # have made WhatsApp the one sign-up nobody heard about. A failed
+            # alert is counted and nothing more — the run is the thing that
+            # matters, and this is the commentary.
+            stage.count(
+                "announced" if tell_ops(signup_notice(subscription)) else "announce_failed"
+            )
+
             if str(subscription["channel"]) in SEED_SKIPS:
                 # Marked as settled rather than left alone: an unseeded row is
                 # reconsidered on every run, and this answer will not change.
@@ -663,10 +736,11 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 )
 
 __all__ = [
-    "alert_for", "ask_before_the_window_shuts", "checkout_for", "drain",
+    "alert_for", "ask_before_the_window_shuts", "checkout_for", "criteria_line", "drain",
     "watch_whatsapp_cost",
     "in_share", "interleave_by_user",
     "listing_view",
     "notify_plan_changes",
-    "outcome_for", "queue_matches", "withheld_share",
+    "outcome_for", "queue_matches", "seed_new_subscriptions", "signup_notice",
+    "withheld_share",
 ]

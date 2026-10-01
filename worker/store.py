@@ -1095,11 +1095,26 @@ def ensure_district(conn: Conn, code: str, *, source_key: str) -> bool:
     return created
 
 def unseeded_subscriptions(conn: Conn) -> list[Row]:
+    """New filters that have not had their starter batch considered yet.
+
+    `seeded_at` is the latch, so every new subscription passes through here
+    exactly once — which is also what makes this the one place that can tell
+    the ops chat somebody has signed up. No address is selected: the chat is
+    told who and what, never how to reach them.
+    """
 
     return list(
         conn.execute(
             """
-            SELECT s.id, s.user_id, s.criteria, uc.channel
+            SELECT s.id, s.user_id, s.criteria, uc.channel,
+                   u.plan, u.plan_until,
+                   -- How many filters this account has ever had, so the ops
+                   -- line can say "signed up" rather than guess. The sign-up
+                   -- form writes a new subscription every time it is used, so
+                   -- somebody coming back to change their search arrives here
+                   -- looking exactly like a new customer.
+                   (SELECT count(*) FROM subscriptions s2
+                     WHERE s2.user_id = s.user_id) AS filters
               FROM subscriptions s
               JOIN users u          ON u.id = s.user_id AND u.status = 'active'
               JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
