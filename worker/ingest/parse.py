@@ -32,11 +32,25 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
     # OpenRent only, because only its urls carry a slug. Imported from the
     # reader that owns that shape rather than copied, the same way
     # `openrent_v2` borrows `read_slug`.
-    if parsed.source_key == "openrent" and not raw.get("address"):
-        from worker.sources.openrent import place_in_slug
+    #
+    # The same slug also names the property type, and the feed states none at
+    # all: its Bedrooms field says "2 Bedrooms" and stops, so `bedrooms_of`
+    # returns a type only for a studio or a room. An untyped listing passes
+    # every property-type filter — `match._check_property_type` lets silence
+    # through, which is right — so somebody who asked for a flat was being sent
+    # whatever OpenRent had, houses and rooms included. The slug is the cheapest
+    # possible fix: no request, and `read_slug` already reads it.
+    property_type = parsed.property_type
+    if parsed.source_key == "openrent" and (not raw.get("address") or not property_type):
+        from worker.sources.openrent import place_in_slug, read_slug
 
         slug = parsed.url.rstrip("/").rsplit("/", 2)[-2] if "/" in parsed.url else ""
-        raw["address"] = place_in_slug(slug) or ""
+        if not raw.get("address"):
+            raw["address"] = place_in_slug(slug) or ""
+        if not property_type:
+            read = read_slug(slug)
+            # Whatever the message said wins; this only fills a blank.
+            property_type = read[2] if read else None
 
     return Listing(
         source_key=parsed.source_key,
@@ -45,7 +59,7 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
         price_pcm=parsed.price_pcm,
         bedrooms=parsed.bedrooms,
         bathrooms=parsed.bathrooms,
-        property_type=parsed.property_type,
+        property_type=property_type,
         furnished=parsed.furnished,
         available_from=parsed.available_from,
         deposit_pcm=parsed.deposit_pcm,

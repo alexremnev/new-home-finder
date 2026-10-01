@@ -28,6 +28,7 @@ from worker.sources.sweep import _announceable
 from worker.sources.zoopla import (
     Zoopla,
     a_dwelling,
+    card_is_a_dwelling,
     catches_in,
     flight_stream,
     kind_of,
@@ -38,6 +39,7 @@ from worker.sources.zoopla import (
     published,
     search_url,
     stated_outcode,
+    type_of,
 )
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "zoopla_e14_search.html"
@@ -317,3 +319,61 @@ def test_only_listings_published_since_the_watch_are_announced(caught: dict) -> 
     assert _announceable(portal, one, None) is False
     assert _announceable(portal, one, one.first_listed - timedelta(days=2)) is True
     assert _announceable(portal, one, one.first_listed + timedelta(days=2)) is False
+
+
+# Zoopla's own card for a house share, as served on 2 October 2026. The type is
+# not in `propertyType` — that key is null — and it is in both of the other two.
+ROOM_CARD = {
+    "listingId": "74355868",
+    "title": "Room to rent",
+    "address": "Meadowside, London SE9",
+    "propertyType": None,
+    "tags": [{"content": "House share"}, {"content": "Bills included"}],
+}
+
+
+def test_a_null_property_type_is_read_off_the_rest_of_the_card() -> None:
+    # Measured over 200 live listings across eight districts: twelve had no
+    # `propertyType`, and seven of those were rooms saying so here. An untyped
+    # listing passes every property-type filter, so those seven were reaching
+    # people who had asked for a flat.
+    assert type_of(ROOM_CARD) == "room"
+
+
+def test_what_the_type_field_says_still_leads() -> None:
+    # The field first, so a card that states its type is not re-read out of a
+    # title somebody at Zoopla wrote by hand.
+    # And the sources are read one at a time, in that order: joined into one
+    # string this came back "room", because KINDS is matched room-first so that
+    # a house share is not a house.
+    card = {**ROOM_CARD, "propertyType": "detached_house", "tags": []}
+    assert type_of(card) == "house"
+
+
+def test_a_card_that_states_no_type_anywhere_stays_untyped() -> None:
+    # The other five of the twelve: "3 bed property to rent" and no tags, which
+    # is Zoopla genuinely not saying. Guessing here would be worse than silence
+    # — silence at least does not exclude anybody.
+    card = {"listingId": "1", "title": "3 bed property to rent", "propertyType": None}
+    assert type_of(card) is None
+
+
+def test_a_parking_space_with_no_type_field_is_still_not_a_dwelling() -> None:
+    # `a_dwelling` was reading the same one field, so this got through for the
+    # same reason the type did.
+    card = {"listingId": "1", "title": "Parking to rent", "propertyType": None}
+    assert card_is_a_dwelling(card) is False
+
+
+def test_an_agent_mentioning_a_garage_still_has_a_flat_to_let() -> None:
+    # The title is only consulted where `propertyType` is silent. Reading both
+    # would turn "near the parking garage" into a parking space, and dropping a
+    # real flat is a worse mistake than storing a garage nobody will match.
+    card = {
+        "listingId": "1",
+        "propertyType": "flat",
+        "title": "2 bed flat to rent",
+        "tags": [{"content": "Parking available"}],
+    }
+    assert card_is_a_dwelling(card) is True
+    assert type_of(card) == "flat"

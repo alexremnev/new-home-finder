@@ -280,3 +280,33 @@ def test_what_the_message_states_beats_the_slug() -> None:
 
     parsed = parse(LISTING, [{"url": OPENRENT}], received_at=SENT)
     assert as_listing(parsed).raw["address"] == "Grove Green Road, Leyton E11"
+
+
+def test_the_feed_types_an_openrent_listing_from_its_slug() -> None:
+    # The feed states no property type at all — its Bedrooms field says
+    # "2 Bedrooms" and stops — and an untyped listing passes every
+    # property-type filter, because silence never excludes. So somebody who
+    # asked for a flat was being sent houses and rooms as well.
+    from worker.ingest.parse import as_listing
+
+    for slug, expected in (
+        ("2-bed-flat-discovery-dock-e14", "flat"),
+        ("4-bed-maisonette-smythe-st-e14", "flat"),
+        ("2-bed-terraced-house-rotherhithe-street-se16", "house"),
+        ("room-in-a-shared-flat-willis-house-e14", "room"),
+    ):
+        url = f"https://www.openrent.co.uk/property-to-rent/london/{slug}/3059105"
+        parsed = parse(LISTING, [{"url": url}], received_at=SENT)
+        assert as_listing(parsed).property_type == expected, slug
+
+
+def test_what_the_message_states_beats_the_slug_for_the_type_too() -> None:
+    from worker.ingest.parse import as_listing
+
+    # "Room" in the Bedrooms field is a type the message did state, and the
+    # slug must not overrule it.
+    text = LISTING.replace("🛏 **Bedrooms**: 2 Bedrooms", "🛏 **Bedrooms**: Room")
+    url = "https://www.openrent.co.uk/property-to-rent/london/2-bed-flat-x-e14/3059105"
+    parsed = parse(text, [{"url": url}], received_at=SENT)
+
+    assert as_listing(parsed).property_type == "room"
