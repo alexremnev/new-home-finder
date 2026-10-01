@@ -33,9 +33,14 @@ def _when(plan_until: datetime | None) -> str:
 
 def _falls_back_to(share: int | None) -> str:
 
-    # The share is read from `plans.delivery_share` on the lapsed tier, never
-    # written here: one row decides what is delivered and what is promised.
-    if share is None or share >= 100:
+    # The share is read from `user_entitlement`, never written here: one query
+    # decides what is delivered and what is promised.
+    #
+    # Nought is "they stop", not "you receive 0%". It is the real answer on
+    # WhatsApp, where a finished plan falls back to nothing because every
+    # message is billed — and a sentence offering nought per cent of anything
+    # reads as a fault rather than as a limit.
+    if not share or share >= 100:
         return "After that the alerts stop until you renew."
     return f"After that you receive {share}% of what matches, until you renew."
 
@@ -73,7 +78,7 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
     """
 
     what = "free trial" if plan == "trial" else "subscription"
-    if share is None or share >= 100:
+    if not share or share >= 100:
         opening = f"Your {what} has ended, so alerts have stopped."
     else:
         opening = (
@@ -91,13 +96,61 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
         ]
     )
 
+def spent_notice(
+    allowance: int | None, share: int | None = None, link: str | None = None
+) -> str:
+    """A month that ended on its allowance rather than on its calendar.
+
+    Deliberately the same shape as `expiry_notice`: what happened, what it
+    means, and the one tap that undoes it. The period has ended — that is the
+    whole point of an allowance, as against a cap that withholds quietly — so
+    saying it in different words would only make it read as a different and
+    worse thing.
+
+    What differs is the first line, which has to say that the days are not the
+    reason. Somebody looking at a subscription with three weeks left on it and
+    no alerts arriving will otherwise conclude the service is broken, and they
+    would be right to.
+
+    Three lines and no commands. Unused days and unused alerts do not carry
+    over, which was said here and is now not: it answers a question nobody has
+    yet asked at the moment they are deciding whether to pay again.
+    """
+
+    how_many = f"all {allowance}" if allowance else "all"
+    if not share or share >= 100:
+        opening = (
+            f"You have had {how_many} alerts included in this month, so alerts "
+            "have stopped."
+        )
+    else:
+        opening = (
+            f"You have had {how_many} alerts included in this month. You now "
+            f"receive {share}% of what matches your filter."
+        )
+
+    # Three lines, and the commands are not among them. What happened, that
+    # nothing has to be set up again, and the one tap that undoes it — anything
+    # else here sits between the person and the button, and /update and /stop
+    # are not what somebody reading this came to do.
+    return "\n".join(
+        [
+            f"🔔 {opening}",
+            KEPT,
+            f"Pay here and the alerts resume at once: {link}" if link
+            else "/pay — a payment link, and the alerts resume at once",
+        ]
+    )
+
 def notice_for(
     plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
-    link: str | None = None,
+    link: str | None = None, allowance: int | None = None,
 ) -> str:
 
     if stage == "expired":
         return expiry_notice(plan, share, link)
+    if stage == "spent":
+        return spent_notice(allowance, share, link)
     return expiring_notice(plan, plan_until, stage, share, link)
 
 def checkin_notice() -> str:

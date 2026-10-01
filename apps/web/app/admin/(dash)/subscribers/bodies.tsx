@@ -27,12 +27,25 @@ function state(row: {
   failed_window: number;
   channel: string | null;
   plan_until: string | null;
+  plan_live: boolean;
+  alert_allowance: number | null;
+  alerts_used: number;
 }): { dot: string; why: string } {
   if (row.status !== "active") return { dot: "idle", why: row.status };
   if (!row.channel) return { dot: "bad", why: "not connected" };
   if (row.failed_window > 0) return { dot: "bad", why: `${row.failed_window} failed` };
-  if (row.plan_until && new Date(row.plan_until.replace(" ", "T")) < new Date()) {
-    return { dot: "idle", why: "plan ended" };
+  // Read, not recomputed from the date. A WhatsApp month also ends at its
+  // allowance, and this row said "delivering" for somebody who had spent
+  // theirs — which is the one case where the page has to explain itself,
+  // because the date on the next column says the plan is fine.
+  if (!row.plan_live) {
+    return {
+      dot: "idle",
+      why:
+        row.alert_allowance !== null && row.alerts_used >= row.alert_allowance
+          ? `all ${row.alert_allowance} alerts used`
+          : "plan ended",
+    };
   }
   if (row.sent_window > 0) return { dot: "ok", why: "delivering" };
   return { dot: "idle", why: "nothing matched" };
@@ -157,6 +170,11 @@ export async function everyonePage(
             {row.plan}
             {row.plan_until && (
               <div className="metric-note">until {dayOf(row.plan_until)}</div>
+            )}
+            {row.alert_allowance !== null && (
+              <div className="metric-note">
+                {row.alerts_used} / {row.alert_allowance} alerts
+              </div>
             )}
           </td>
           <td>{row.channel ?? "—"}</td>

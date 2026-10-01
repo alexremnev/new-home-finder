@@ -13,12 +13,6 @@ from worker.contracts.listing import Listing
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
 
-# What a WhatsApp subscriber may cost in total. See 0048 for why a number and
-# not `max_alerts_per_day` returning.
-#
-# The daily figure is not here: it both stops delivery and raises the alert, so
-# it is one number in `delivery_limits` rather than two that can disagree.
-WA_LIFETIME_ALERT = 500
 
 _INSERT_COLUMNS = (
     "source_key", "external_id", "url", "price_pcm", "bedrooms", "bathrooms",
@@ -138,20 +132,15 @@ def active_subscriptions(conn: Conn) -> list[Row]:
             """
             SELECT s.id, s.user_id, s.criteria, s.backfill_from, uc.channel,
                    -- The plan's own share while it is live, the lapsed tier's once
-                   -- it is not. Resolved here so an expired plan steps down instead
-                   -- of dropping out, and so no job has to rewrite `users.plan`.
-                   CASE
-                       WHEN u.plan_until IS NULL OR u.plan_until > now()
-                           THEN p.delivery_share
-                       ELSE coalesce(lapsed.delivery_share, 0)
-                   END AS delivery_share
+                   -- it is not — and "live" is two questions now, days and
+                   -- alerts. Both are answered by `user_entitlement`; see 0057
+                   -- for why this is not written out here any more.
+                   e.delivery_share
               FROM subscriptions s
-              JOIN users u          ON u.id = s.user_id
-              JOIN plans p          ON p.key = u.plan
-              JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
-              JOIN channels c       ON c.key = uc.channel AND c.enabled
-              LEFT JOIN plan_settings ps ON ps.id
-              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
+              JOIN users u            ON u.id = s.user_id
+              JOIN user_entitlement e ON e.user_id = u.id
+              JOIN user_channels uc   ON uc.user_id = s.user_id AND uc.is_primary
+              JOIN channels c         ON c.key = uc.channel AND c.enabled
              WHERE s.active AND u.status = 'active'
              ORDER BY s.id
             """
@@ -222,21 +211,15 @@ def subscribed_districts(conn: Conn) -> list[str]:
             """
             SELECT DISTINCT upper(area) AS code
               FROM subscriptions s
-              JOIN users u          ON u.id = s.user_id AND u.status = 'active'
-              JOIN plans p          ON p.key = u.plan
-              JOIN user_channels uc ON uc.user_id = s.user_id AND uc.is_primary
-              JOIN channels c       ON c.key = uc.channel AND c.enabled
-              LEFT JOIN plan_settings ps ON ps.id
-              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
+              JOIN users u            ON u.id = s.user_id AND u.status = 'active'
+              JOIN user_entitlement e ON e.user_id = u.id
+              JOIN user_channels uc   ON uc.user_id = s.user_id AND uc.is_primary
+              JOIN channels c         ON c.key = uc.channel AND c.enabled
               CROSS JOIN LATERAL jsonb_array_elements_text(
                   coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
               ) AS area
              WHERE s.active
-               AND CASE
-                       WHEN u.plan_until IS NULL OR u.plan_until > now()
-                           THEN p.delivery_share
-                       ELSE coalesce(lapsed.delivery_share, 0)
-                   END > 0
+               AND e.delivery_share > 0
              ORDER BY code
             """
         ).fetchall()
@@ -514,7 +497,7 @@ def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None
     most = None if row is None else row["most"]
     return None if most is None else int(most)
 
-def costly_whatsapp(conn: Conn, *, lifetime: int = WA_LIFETIME_ALERT) -> list[Row]:
+def costly_whatsapp(conn: Conn) -> list[Row]:
     """WhatsApp subscribers who have crossed a volume threshold unannounced.
 
     One row per alert still owed, with `kind` saying which threshold and
@@ -542,12 +525,14 @@ def costly_whatsapp(conn: Conn, *, lifetime: int = WA_LIFETIME_ALERT) -> list[Ro
                 -- The threshold is the cap itself: the alert says "we have
                 -- stopped delivering to this person", so reading it from
                 -- anywhere else would let it announce the wrong thing.
+                --
+                -- The lifetime figure that used to sit beside this is gone. It
+                -- was a proxy for a bound on what one subscriber can cost, and
+                -- 0057 made that a real one: `plans.alert_allowance`, which
+                -- ends the period and tells the person rather than telling us.
                 SELECT t.user_id, 'daily' AS kind, t.today AS sent
                   FROM tally t
                  WHERE t.today >= (SELECT wa_daily_cap FROM delivery_limits)
-                UNION ALL
-                SELECT t.user_id, 'lifetime', t.ever
-                  FROM tally t WHERE t.ever >= %(lifetime)s
             ),
             claimed AS (
                 INSERT INTO whatsapp_cost_alerts (user_id, kind, day, sent)
@@ -558,15 +543,12 @@ def costly_whatsapp(conn: Conn, *, lifetime: int = WA_LIFETIME_ALERT) -> list[Ro
             )
             SELECT c.user_id, c.kind, c.sent,
                    EXISTS (
-                       SELECT 1 FROM users u JOIN plans p ON p.key = u.plan
-                        WHERE u.id = c.user_id
-                          AND p.price_pence > 0
-                          AND (u.plan_until IS NULL OR u.plan_until > now())
+                       SELECT 1 FROM user_entitlement e
+                        WHERE e.user_id = c.user_id AND e.priced AND e.live
                    ) AS paid
               FROM claimed c
              ORDER BY c.user_id, c.kind
-            """,
-            {"lifetime": lifetime},
+            """
         ).fetchall()
     )
 
@@ -676,15 +658,26 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
             """
             WITH due AS (
                 SELECT u.id AS user_id, u.plan, u.plan_until,
+                       e.alert_allowance, e.alerts_used,
+                       -- Out of days outranks out of alerts: when both are
+                       -- true the period is over either way, and "you have
+                       -- used all 900" would be answering the smaller
+                       -- question. Otherwise a spent allowance is its own
+                       -- stage, and it can fire with weeks still on the clock
+                       -- — which is why the window below is not only "within
+                       -- a day of the end".
                        CASE
                            WHEN u.plan_until <= now()                      THEN 'expired'
+                           WHEN e.out_of_alerts                            THEN 'spent'
                            WHEN u.plan_until <= now() + interval '1 hour'  THEN 'hour'
                            ELSE 'day'
                        END AS stage
                   FROM users u
+                  JOIN user_entitlement e ON e.user_id = u.id
                  WHERE u.status = 'active'
                    AND u.plan_until IS NOT NULL
-                   AND u.plan_until <= now() + interval '1 day'
+                   AND (u.plan_until <= now() + interval '1 day'
+                     OR e.out_of_alerts)
                  ORDER BY u.plan_until
                  LIMIT %s
             ),
@@ -695,15 +688,18 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                 RETURNING user_id, stage, plan_until, plan
             )
             SELECT c.user_id, c.stage, c.plan_until, c.plan, uc.channel, uc.address,
-                   -- What the alerts fall back to, so the notice can say so rather
-                   -- than claiming they stop. Nobody is cut off any more.
-                   (SELECT lapsed.delivery_share
-                      FROM plan_settings ps
-                      JOIN plans lapsed
-                        ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
-                     LIMIT 1) AS lapsed_share
+                   d.alert_allowance, d.alerts_used,
+                   -- What the alerts fall back to, so the notice can say so
+                   -- rather than guessing. Read from the entitlement view and
+                   -- not from the lapsed plan directly: the fallback depends on
+                   -- the channel — a fifth of the listings on Telegram, nothing
+                   -- on WhatsApp — and a notice promising a share that is not
+                   -- delivered is worse than one that promises nothing.
+                   e.delivery_share AS lapsed_share
               FROM claimed c
-              JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
+              JOIN due d              ON d.user_id = c.user_id
+              JOIN user_entitlement e ON e.user_id = c.user_id
+              JOIN user_channels uc   ON uc.user_id = c.user_id AND uc.is_primary
             """,
             (limit,),
         ).fetchall()
@@ -770,23 +766,15 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
             )
             SELECT d.user_id, d.matched, d.sent, d.withheld,
                    uc.channel, uc.address, uc.last_inbound_at,
-                   -- Paid means a plan that costs money and has not run out.
-                   -- A live trial is not paid: it is the thing the button is
-                   -- there to convert.
-                   (p.price_pence > 0
-                    AND (u.plan_until IS NULL OR u.plan_until > now())) AS paid,
-                   CASE
-                       WHEN u.plan_until IS NULL OR u.plan_until > now()
-                           THEN p.delivery_share
-                       ELSE coalesce(lapsed.delivery_share, 0)
-                   END AS delivery_share
+                   -- Paid means a plan that costs money and has not run out —
+                   -- of days or of alerts. A live trial is not paid: it is the
+                   -- thing the button is there to convert.
+                   (e.priced AND e.live) AS paid,
+                   e.delivery_share
               FROM claimed c
-              JOIN due d            ON d.user_id = c.user_id
-              JOIN users u          ON u.id = c.user_id
-              JOIN plans p          ON p.key = u.plan
-              LEFT JOIN plan_settings ps ON ps.id
-              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
-              JOIN user_channels uc ON uc.user_id = c.user_id AND uc.is_primary
+              JOIN due d              ON d.user_id = c.user_id
+              JOIN user_entitlement e ON e.user_id = c.user_id
+              JOIN user_channels uc   ON uc.user_id = c.user_id AND uc.is_primary
              ORDER BY d.user_id
             """,
             (limit,),
@@ -842,22 +830,15 @@ def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
                    (SELECT m.wa_media_id FROM source_messages m
                      WHERE m.listing_id = n.listing_id AND m.wa_media_id IS NOT NULL
                      LIMIT 1) AS wa_media_id,
-                   -- The same CASE as `active_subscriptions`, for the same reason:
-                   -- the live plan's share while it is live, the lapsed tier's once
-                   -- it is not. Selected here so the renderer can name the share in
-                   -- the message without a second query per notification.
-                   CASE
-                       WHEN u.plan_until IS NULL OR u.plan_until > now()
-                           THEN p.delivery_share
-                       ELSE coalesce(lapsed.delivery_share, 0)
-                   END AS delivery_share
+                   -- The same answer `active_subscriptions` reads, from the same
+                   -- view, so the share named in the message cannot disagree
+                   -- with the share that decided what was queued.
+                   e.delivery_share
               FROM notifications n
-              JOIN listings l  ON l.id = n.listing_id
-              JOIN sources src ON src.key = l.source_key
-              JOIN users u     ON u.id = n.user_id
-              JOIN plans p     ON p.key = u.plan
-              LEFT JOIN plan_settings ps ON ps.id
-              LEFT JOIN plans lapsed     ON lapsed.key = ps.lapsed_plan AND lapsed.enabled
+              JOIN listings l         ON l.id = n.listing_id
+              JOIN sources src        ON src.key = l.source_key
+              JOIN users u            ON u.id = n.user_id
+              JOIN user_entitlement e ON e.user_id = u.id
               LEFT JOIN user_channels uc
                      ON uc.user_id = n.user_id AND uc.channel = n.channel
              WHERE n.id = ANY(%s)

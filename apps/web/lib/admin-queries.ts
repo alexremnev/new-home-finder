@@ -355,6 +355,14 @@ export type Person = {
   plan: string;
   plan_display: string | null;
   plan_until: string | null;
+  plan_from: string | null;
+  // Why alerts stopped, when the date alone does not explain it: a WhatsApp
+  // month ends at thirty days or at nine hundred alerts. Without these two the
+  // commonest support question — "my subscription has weeks left and nothing
+  // is arriving" — has no answer on this page.
+  alert_allowance: number | null;
+  alerts_used: number;
+  plan_live: boolean;
   joined: string;
   consent_at: string | null;
   consent_source: string | null;
@@ -382,7 +390,9 @@ export type Person = {
 export async function person(userId: number): Promise<Person | null> {
   const rows = await query<Person>(
     `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
-            u.plan_until::text, u.created_at::text AS joined, u.consent_at::text,
+            u.plan_until::text, u.plan_from::text,
+            e.alert_allowance, e.alerts_used, e.live AS plan_live,
+            u.created_at::text AS joined, u.consent_at::text,
             u.consent_source, u.stopped_at::text, u.payment_ref,
             uc.channel, uc.address, uc.verified_at::text,
             s.id AS subscription_id, s.criteria,
@@ -410,9 +420,10 @@ export async function person(userId: number): Promise<Person | null> {
                FROM admin_actions a
               WHERE a.user_id = u.id AND a.action = 'extend_plan')      AS comped_days
        FROM users u
-       LEFT JOIN plans p          ON p.key = u.plan
-       LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
-       LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
+       LEFT JOIN plans p             ON p.key = u.plan
+       LEFT JOIN user_entitlement e  ON e.user_id = u.id
+       LEFT JOIN user_channels uc    ON uc.user_id = u.id AND uc.is_primary
+       LEFT JOIN subscriptions s     ON s.user_id = u.id AND s.active
       WHERE u.id = $1`,
     [userId],
   );
@@ -806,6 +817,10 @@ export type SubscriberRow = {
   status: string;
   plan: string;
   plan_until: string | null;
+  /** Whether the plan is live — days AND allowance. See 0057. */
+  plan_live: boolean;
+  alert_allowance: number | null;
+  alerts_used: number;
   channel: string | null;
   last_inbound_at: string | null;
   districts: string | null;
@@ -825,6 +840,7 @@ export async function subscriberPage(
     query<SubscriberRow>(
       `SELECT u.id AS user_id, u.status, u.plan,
               u.plan_until::text AS plan_until,
+              e.live AS plan_live, e.alert_allowance, e.alerts_used,
               uc.channel,
               uc.last_inbound_at::text AS last_inbound_at,
               s.label AS districts,
@@ -850,8 +866,9 @@ export async function subscriberPage(
                     = (now() AT TIME ZONE 'Europe/London')::date) AS wa_today,
               u.created_at::text AS created_at
          FROM users u
-         LEFT JOIN user_channels uc ON uc.user_id = u.id AND uc.is_primary
-         LEFT JOIN subscriptions s  ON s.user_id = u.id AND s.active
+         LEFT JOIN user_entitlement e ON e.user_id = u.id
+         LEFT JOIN user_channels uc   ON uc.user_id = u.id AND uc.is_primary
+         LEFT JOIN subscriptions s    ON s.user_id = u.id AND s.active
         WHERE u.status <> 'erased'
         ORDER BY u.created_at DESC
         LIMIT $3 OFFSET $4`,

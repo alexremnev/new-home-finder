@@ -58,8 +58,14 @@ export async function POST(request: Request) {
           throw new Error(`days must be 1-${MAX_DAYS}`);
         }
         const rows = await run(
+          // `plan_from` moves too, so this is a fresh period and not only more
+          // days on an old one. Without it, extending the plan of somebody
+          // whose WhatsApp allowance is spent would change nothing at all:
+          // they would still be out of alerts, and the grant would look like
+          // it had been applied and done nothing. See 0057.
           `UPDATE users
-              SET plan_until = greatest(now(), coalesce(plan_until, now()))
+              SET plan_from = now(),
+                  plan_until = greatest(now(), coalesce(plan_until, now()))
                              + make_interval(days => $2::int)
             WHERE id = $1
             RETURNING plan_until::text`,
@@ -79,6 +85,7 @@ export async function POST(request: Request) {
         const rows = await run(
           `UPDATE users
               SET plan = $2,
+                  plan_from = now(),
                   plan_until = CASE
                       WHEN $3::int IS NULL THEN NULL
                       ELSE now() + make_interval(days => $3::int)

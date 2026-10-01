@@ -46,6 +46,12 @@ export type Account = {
   // are the ones their channel is priced at. Null only for an account with no
   // channel connected yet, which cannot reach a paid page anyway.
   channel: Channel | null;
+  // Whether the plan is live, answered by `user_entitlement` rather than here.
+  // A WhatsApp month ends at thirty days OR at nine hundred alerts, so the
+  // date alone stopped being the answer — see 0057.
+  live: boolean;
+  alert_allowance: number | null;
+  alerts_used: number;
 };
 
 export type SignupPlan = Plan & { duration_days_whatsapp: number | null };
@@ -113,10 +119,45 @@ export async function channelPrices(channel: Channel): Promise<Price[]> {
   }));
 }
 
-// What an ended plan drops back to, as a percentage. Read rather than written
-// into the copy: the number is a product decision that lives in `plans`, and a
-// sentence repeating it is a sentence that will one day be wrong.
-export async function lapsedShare(): Promise<number | null> {
+/**
+ * How many alerts a messenger's paid plan includes, or null when it includes
+ * as many as there are.
+ *
+ * Read from `plans.alert_allowance` and never written into the copy, for the
+ * reason `lapsedShare` gives below: the number is a product decision that
+ * lives in the table, and a card repeating it is a card that will one day
+ * promise nine hundred to somebody whose plan says something else.
+ *
+ * The largest of a channel's plans, where there is more than one — the card
+ * speaks for the offer, and the offer is the best of them.
+ */
+export async function channelAllowance(channel: Channel): Promise<number | null> {
+  const rows = await query<{ allowance: number | null }>(
+    `SELECT max(alert_allowance) AS allowance
+       FROM plans
+      WHERE enabled AND price_pence > 0
+        AND ($1::text IS NULL OR channel IS NULL OR channel = $1)`,
+    [channel],
+  ).catch(() => []);
+  const allowance = rows[0]?.allowance;
+  return allowance === undefined || allowance === null ? null : Number(allowance);
+}
+
+/**
+ * What an ended plan drops back to, as a percentage, on this messenger.
+ *
+ * Read rather than written into the copy: the number is a product decision
+ * that lives in `plans`, and a sentence repeating it is a sentence that will
+ * one day be wrong.
+ *
+ * It is nought on WhatsApp, and the channel is therefore not optional. The
+ * fifth of the listings a finished plan keeps receiving costs nothing on
+ * Telegram and is a standing bill on a channel Meta charges per message for,
+ * so 0057 stops it there — and a page promising a share that is not delivered
+ * is exactly the drift that view exists to prevent.
+ */
+export async function lapsedShare(channel?: Channel | null): Promise<number | null> {
+  if (channel === "whatsapp") return 0;
   const rows = await query<{ share: number }>(
     `SELECT p.delivery_share AS share
        FROM plan_settings ps
@@ -135,10 +176,12 @@ export async function accountForChat(
     `SELECT u.id AS user_id, u.status, u.plan, u.plan_until, u.payment_ref,
             s.id AS subscription_id, s.criteria,
             p.display_name AS plan_name, p.max_districts, p.price_pence,
-            uc.channel AS channel
+            uc.channel AS channel,
+            e.live, e.alert_allowance, e.alerts_used
        FROM users u
-       JOIN user_channels uc ON uc.user_id = u.id
-       JOIN plans p          ON p.key = u.plan
+       JOIN user_channels uc    ON uc.user_id = u.id
+       JOIN plans p             ON p.key = u.plan
+       JOIN user_entitlement e  ON e.user_id = u.id
        LEFT JOIN subscriptions s ON s.user_id = u.id AND s.active
       WHERE uc.channel = $2 AND uc.address = $1
       ORDER BY s.id DESC
@@ -152,8 +195,11 @@ export function limitsOf(account: Account): Limits {
   return { maxDistricts: account.max_districts };
 }
 
+// Read, not worked out. The date was the whole answer until a WhatsApp month
+// gained an allowance as well, and a second copy of that rule in TypeScript is
+// a second place for it to drift from the one the worker delivers by.
 export function planIsLive(account: Account): boolean {
-  return account.plan_until === null || account.plan_until.getTime() > Date.now();
+  return account.live;
 }
 
 export async function enabledDistricts(): Promise<string[]> {
@@ -299,14 +345,16 @@ export async function returningFor(token: string): Promise<Returning | null> {
   const account = await accountForToken(token, "edit").catch(() => null);
   if (!account || !account.channel) return null;
 
-  const live = account.plan_until === null || account.plan_until.getTime() > Date.now();
+  // Both halves from the one place: whether the plan is live, and what share
+  // follows from that. Worked out here, the two could disagree with what the
+  // worker is actually delivering.
   const rows = await query<{ share: number | null }>(
-    `SELECT p.delivery_share AS share FROM plans p WHERE p.key = $1`,
-    [account.plan],
+    `SELECT e.delivery_share AS share FROM user_entitlement e WHERE e.user_id = $1`,
+    [account.user_id],
   ).catch(() => []);
   const share = Number(rows[0]?.share ?? 0);
 
-  const full = live && share >= 100;
+  const full = planIsLive(account) && share >= 100;
   if (full) return { channel: account.channel, full, upgradeUrl: null };
 
   // Its own token, because /upgrade needs one to know whose plan is being

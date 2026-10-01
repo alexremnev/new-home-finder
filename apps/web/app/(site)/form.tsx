@@ -36,6 +36,14 @@ type Props = {
 
 export type Offer = {
   trialDays: number | null;
+  /**
+   * Alerts included in a paid period, or null for as many as there are.
+   *
+   * From `plans.alert_allowance`, so the card cannot promise a number the
+   * delivery rules do not honour — which it did while this was a string typed
+   * into the list below.
+   */
+  allowance: number | null;
   // Every price this messenger is sold at, cheapest first. Telegram has two —
   // a week and a month — and WhatsApp one, so the band is a list rather than a
   // single figure.
@@ -682,8 +690,6 @@ export function SubscribeForm({
               offer={offers.telegram}
               busy={busy}
               ready={chosen.length > 0}
-              // Free for us to deliver on, so there is nothing to meter.
-              allowance="Unlimited alerts"
               // Free to deliver on, so it is the one we would rather people use
               // — and saying so is more honest than pricing them towards it
               // quietly.
@@ -698,8 +704,6 @@ export function SubscribeForm({
                 offer={offers.whatsapp}
                 busy={busy}
                 ready={chosen.length > 0}
-                // Billed per message by Meta, so it is metered and says so.
-                allowance="900 alerts per month"
               />
             )}
           </div>
@@ -785,7 +789,7 @@ function Save({
 // the only thing that differs — so they are written once and the length is
 // passed in.
 function Choice({
-  channel, label, mark, offer, busy, ready, flag, allowance,
+  channel, label, mark, offer, busy, ready, flag,
 }: {
   channel: Channel;
   label: string;
@@ -795,10 +799,8 @@ function Choice({
   /** Whether an area has been chosen. Not what disables the button — see below. */
   ready: boolean;
   flag?: string;
-  /** How many alerts this messenger allows, in its own words. */
-  allowance?: string;
 }) {
-  const { trialDays, prices } = offer;
+  const { trialDays, prices, allowance } = offer;
 
   return (
     <div className={flag ? "offer offer-best" : "offer"}>
@@ -833,11 +835,14 @@ function Choice({
         <li>
           <Tick /> Real-time alerts
         </li>
-        {allowance && (
-          <li>
-            <Tick /> {allowance}
-          </li>
-        )}
+        {/* Metered or not, said either way. "Unlimited" is worth a line of its
+            own next to a messenger that is not. */}
+        <li>
+          <Tick />{" "}
+          {allowance === null
+            ? "Unlimited alerts"
+            : `${allowance} alerts per month`}
+        </li>
       </ul>
 
       {/* Lit, not greyed out, even with no area chosen yet.

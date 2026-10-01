@@ -195,14 +195,18 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   // Only what their messenger is priced at. Listing the Telegram week to a
   // WhatsApp subscriber offers a price checkout will then refuse.
   const plans = await paidPlans(account.channel ?? undefined);
-  const share = await lapsedShare().catch(() => null);
+  const share = await lapsedShare(account.channel).catch(() => null);
   const lines = [
     planLine(account.plan_name, account.plan_until, true),
   ];
-  if (share !== null && share < 100) {
+  // Nought is "they stop", not "you receive 0%", and nought is what a finished
+  // WhatsApp plan falls back to.
+  if (share !== null && share > 0 && share < 100) {
     lines.push(
       `Once a plan ends you receive ${share}% of what matches. A paid plan sends all of it.`,
     );
+  } else if (share === 0) {
+    lines.push("Once a plan ends the alerts stop. A paid plan sends everything that matches.");
   }
   lines.push("");
   if (!plans.length) {

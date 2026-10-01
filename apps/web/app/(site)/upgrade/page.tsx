@@ -17,7 +17,8 @@ export default async function UpgradePage({
   const plans = account
     ? await paidPlans(account.channel ?? undefined).catch(() => [])
     : [];
-  const share = await lapsedShare().catch(() => null);
+  // Their messenger's fallback, not the table's: it is nought on WhatsApp.
+  const share = await lapsedShare(account?.channel).catch(() => null);
 
   if (!account) {
     return (
@@ -48,8 +49,13 @@ export default async function UpgradePage({
     <>
       <h1>Every listing, the moment it appears</h1>
       <p className="lede">
-        The free plan sends {share === null ? "a share" : `${share}%`} of what matches
-        your filter. A paid plan sends all of it — same filter, nothing else to set up.
+        {share === 0
+          ? "Without a plan the alerts stop. A paid plan sends everything that " +
+            "matches your filter — same filter, nothing else to set up."
+          : `The free plan sends ${
+              share === null ? "a share" : `${share}%`
+            } of what matches your filter. A paid plan sends all of it — same ` +
+            "filter, nothing else to set up."}
       </p>
 
       <div className="plans">
@@ -83,9 +89,15 @@ export default async function UpgradePage({
 
       <p className="footnote">
         One payment for one period — nothing recurring, and no card kept on file by
-        us. Payment is handled by Stripe; the card never touches this server. When it
-        ends the alerts drop back to {share === null ? "the free share" : `${share}%`}{" "}
-        rather than stopping, and your filter is kept either way.
+        us. Payment is handled by Stripe; the card never touches this server.{" "}
+        {/* Nought is not a share. On WhatsApp a finished plan stops, because
+            every message there is billed — see 0057 — and "drops back to 0%"
+            reads as a rounding error rather than as what happens. */}
+        {share === 0
+          ? "When it ends the alerts stop, and your filter is kept either way."
+          : `When it ends the alerts drop back to ${
+              share === null ? "the free share" : `${share}%`
+            } rather than stopping, and your filter is kept either way.`}
       </p>
     </>
   );

@@ -36,7 +36,11 @@ export async function beginSubscription(
   // then falls back to the one length.
   await run(
     `UPDATE users u
-        SET plan_until = now() + make_interval(days => days.count)
+        SET plan_until = now() + make_interval(days => days.count),
+            -- The period's start, for the allowance to count from. Written in
+            -- the same statement as its end so the two cannot disagree — see
+            -- 0057.
+            plan_from = now()
        FROM plans p
        CROSS JOIN LATERAL (
          SELECT CASE WHEN $2 = 'whatsapp'

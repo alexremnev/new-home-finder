@@ -330,6 +330,164 @@ def test_an_unimplemented_channel_fails_only_its_own_message(conn: Any, run: Run
     assert row["status"] == "failed"
     assert row["error"] is not None and "email" in row["error"]
 
+# ── the WhatsApp allowance: thirty days or nine hundred alerts ─────────────
+#
+# Every one of these asks the same question through `user_entitlement`, because
+# that is the point of the view: the share, the daily cap, the notice stage and
+# the dashboard all read one answer, and a test that bypassed it would be
+# testing a copy nobody uses.
+
+
+def wa_subscriber(conn: Any, *, allowance: int | None = 900,
+                  days_left: int = 20, used: int = 0) -> int:
+    """A paying WhatsApp account, this far into a period, having had `used`."""
+
+    user_id = make_user(conn, address="", plan="paid", plan_hours=days_left * 24)
+    conn.execute(
+        "UPDATE users SET plan_from = now() - interval '10 days' WHERE id = %s",
+        (user_id,),
+    )
+    conn.execute("UPDATE plans SET alert_allowance = %s WHERE key = 'paid'", (allowance,))
+    conn.execute(
+        "INSERT INTO user_channels (user_id, channel, address, verified_at, "
+        "last_inbound_at) VALUES (%s, 'whatsapp', %s, now(), now())",
+        (user_id, f"4477009{user_id:05d}"),
+    )
+    for n in range(used):
+        listing_id = make_listing(conn, f"used-{user_id}-{n}")
+        conn.execute(
+            "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
+            "sent_at) VALUES (%s, %s, 'whatsapp', 'new_listing', 'sent', now())",
+            (user_id, listing_id),
+        )
+    return user_id
+
+
+def entitlement(conn: Any, user_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        "SELECT * FROM user_entitlement WHERE user_id = %s", (user_id,)
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+def test_a_month_with_alerts_left_is_live(conn: Any) -> None:
+    one = entitlement(conn, wa_subscriber(conn, used=10))
+
+    assert one["live"] is True
+    assert (one["alerts_used"], one["alerts_left"]) == (10, 890)
+    assert one["delivery_share"] == 100
+
+
+def test_the_period_ends_on_the_allowance_with_days_still_left(conn: Any) -> None:
+    # The case the date cannot explain, and the reason none of this could stay
+    # as `plan_until > now()`.
+    one = entitlement(conn, wa_subscriber(conn, used=900, days_left=20))
+
+    assert one["live"] is False
+    assert one["out_of_alerts"] is True
+    assert one["out_of_days"] is False
+    # And to nothing, not to the lapsed fifth: this is WhatsApp, where the
+    # fallback would be a standing bill for somebody who has stopped paying.
+    assert one["delivery_share"] == 0
+
+
+def test_going_past_the_allowance_does_not_go_negative(conn: Any) -> None:
+    # Delivery is claimed in batches, so the count can overshoot by a batch.
+    # "-3 alerts left" on the dashboard would read as a bug in the counting.
+    one = entitlement(conn, wa_subscriber(conn, used=903))
+
+    assert one["alerts_left"] == 0
+    assert one["live"] is False
+
+
+def test_an_unmetered_plan_is_never_out_of_alerts(conn: Any) -> None:
+    # Telegram. Nothing is counted, so a busy month cannot end a plan that is
+    # free to deliver on.
+    one = entitlement(conn, wa_subscriber(conn, allowance=None, used=50))
+
+    assert one["out_of_alerts"] is False
+    assert one["live"] is True
+    assert one["alerts_left"] is None
+
+
+def test_only_what_was_sent_in_this_period_counts(conn: Any) -> None:
+    # Paying again moves `plan_from`, which is what makes the next month a
+    # fresh nine hundred rather than a continuation of the last one.
+    user_id = wa_subscriber(conn, used=900)
+    assert entitlement(conn, user_id)["live"] is False
+
+    conn.execute("UPDATE users SET plan_from = now() WHERE id = %s", (user_id,))
+    renewed = entitlement(conn, user_id)
+
+    assert (renewed["alerts_used"], renewed["live"]) == (0, True)
+
+
+def test_what_we_chose_to_send_is_not_charged_to_the_allowance(conn: Any) -> None:
+    # The evening digest is ours, not theirs. Counting it would bill somebody
+    # for our own habits.
+    user_id = wa_subscriber(conn, used=0)
+    listing_id = make_listing(conn, "digest")
+    conn.execute(
+        "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
+        "sent_at) VALUES (%s, %s, 'whatsapp', 'digest', 'sent', now())",
+        (user_id, listing_id),
+    )
+
+    assert entitlement(conn, user_id)["alerts_used"] == 0
+
+
+def test_a_spent_allowance_brings_the_daily_cap_back(conn: Any) -> None:
+    # "Paid" exempts somebody from the thirty-a-day cap, and a spent allowance
+    # has to stop meaning paid — or the period would end with no consequence
+    # for what it costs.
+    user_id = wa_subscriber(conn, used=900)
+    exempt = conn.execute(
+        "SELECT EXISTS (SELECT 1 FROM user_entitlement e "
+        "WHERE e.user_id = %s AND e.priced AND e.live) AS exempt",
+        (user_id,),
+    ).fetchone()
+
+    assert exempt is not None and exempt["exempt"] is False
+
+
+def test_a_finished_telegram_plan_still_gets_a_fifth(conn: Any) -> None:
+    # The free tier is the best argument for the paid one, and on Telegram it
+    # costs nothing to make — so the fallback stays where 0046 put it.
+    user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=None)
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 day' WHERE id = %s",
+        (user_id,),
+    )
+
+    assert entitlement(conn, user_id)["delivery_share"] == 20
+
+
+def test_the_notice_for_a_spent_allowance_is_claimed_once(conn: Any) -> None:
+    user_id = wa_subscriber(conn, used=900)
+    make_subscription(conn, user_id)
+
+    first = store.claim_plan_notices(conn)
+    assert [row["stage"] for row in first] == ["spent"]
+    assert int(first[0]["alert_allowance"]) == 900
+    # Said once per period: the unique key is (user, stage, plan_until), so a
+    # drain every two minutes does not say it thirty times an hour.
+    assert store.claim_plan_notices(conn) == []
+
+
+def test_out_of_days_outranks_out_of_alerts(conn: Any) -> None:
+    # Both true at once. "You have used all 900" would be answering the
+    # smaller question about a period that is over either way.
+    user_id = wa_subscriber(conn, used=900, days_left=20)
+    make_subscription(conn, user_id)
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 hour' WHERE id = %s",
+        (user_id,),
+    )
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
+
+
 def photo_pending(conn: Any, listing_id: int, *, looked: bool) -> None:
 
     # A source message carrying a photograph, which either has or has not been

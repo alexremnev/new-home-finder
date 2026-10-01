@@ -88,8 +88,14 @@ export async function POST(request: Request): Promise<NextResponse> {
       );
 
       await run(
+        // The days stack — paying with a week left gives a week plus a month
+        // — but the allowance does not: `plan_from` moves to now, so this is a
+        // fresh nine hundred. That is what buying another month means, and the
+        // alternative would be an allowance measured over a period that keeps
+        // growing. See 0057.
         `UPDATE users
             SET plan = $1,
+                plan_from = now(),
                 plan_until = CASE
                     WHEN $2::int IS NULL THEN NULL
                     ELSE greatest(coalesce(plan_until, now()), now())

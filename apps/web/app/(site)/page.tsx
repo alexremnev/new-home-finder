@@ -2,8 +2,8 @@ import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import {
-  channelPrices, districtNames, enabledDistricts, returningFor, signupPlan,
-  trialDaysOn,
+  channelAllowance, channelPrices, districtNames, enabledDistricts, returningFor,
+  signupPlan, trialDaysOn,
 } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
@@ -25,18 +25,23 @@ export default async function Page({
 
   // What each card says. Both numbers come from `plans`, so the page cannot
   // offer a trial the bot will not grant or a price checkout will not charge.
-  const [telegramPrices, whatsappPrices] = await Promise.all([
-    channelPrices("telegram"),
-    channelPrices("whatsapp"),
-  ]);
+  const [telegramPrices, whatsappPrices, telegramAllowance, whatsappAllowance] =
+    await Promise.all([
+      channelPrices("telegram"),
+      channelPrices("whatsapp"),
+      channelAllowance("telegram"),
+      channelAllowance("whatsapp"),
+    ]);
   const offers = {
     telegram: {
       trialDays: plan ? trialDaysOn(plan, "telegram") : null,
       prices: telegramPrices,
+      allowance: telegramAllowance,
     },
     whatsapp: {
       trialDays: plan ? trialDaysOn(plan, "whatsapp") : null,
       prices: whatsappPrices,
+      allowance: whatsappAllowance,
     },
   };
 

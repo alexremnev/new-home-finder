@@ -407,3 +407,60 @@ class FakeRun:
                 return False
 
         return Open()
+
+
+def test_a_spent_allowance_reads_as_an_ended_period_not_as_a_cap() -> None:
+    # The whole point of an allowance over a cap: the period is over, said in
+    # the same shape as running out of days, with the same button. A message
+    # that read as "we are holding your listings back" would be the one thing
+    # 0007 says this service exists not to do.
+    text = notice_for("wa_month", None, "spent", 100, None, allowance=900)
+
+    assert "all 900 alerts" in text
+    assert "stopped" in text
+    assert "/pay" in text
+    # And the filter survives it, which is the sentence that stops somebody
+    # setting their search up again from scratch.
+    assert "filter is kept" in text
+
+
+def test_a_spent_allowance_is_three_lines_and_a_link() -> None:
+    # The allowance exists on WhatsApp only, and a finished WhatsApp plan falls
+    # back to nothing — so this is the message as it will actually be read.
+    # Short on purpose: anything between the person and the button is in the
+    # way of the only thing this message is for.
+    text = notice_for("wa_month", None, "spent", 0, "https://pay.test/x", allowance=900)
+
+    assert text.splitlines() == [
+        "🔔 You have had all 900 alerts included in this month, so alerts have stopped.",
+        "Your filter is kept — paying turns the alerts back on with nothing to "
+        "set up again.",
+        "Pay here and the alerts resume at once: https://pay.test/x",
+    ]
+
+
+def test_nought_per_cent_is_said_as_stopped() -> None:
+    # A finished plan on WhatsApp falls back to nothing, because every message
+    # there is billed. "You now receive 0% of what matches" reads as a fault,
+    # and nought is the commonest share on that channel now.
+    assert "0%" not in notice_for("wa_month", None, "spent", 0, None, allowance=900)
+    assert "0%" not in notice_for("wa_month", None, "expired", 0, None)
+    assert "0%" not in notice_for("wa_month", None, "day", 0, None)
+
+
+def test_an_allowance_nobody_configured_still_produces_a_sentence() -> None:
+    # `alert_allowance` is NULL on every unmetered plan, and a notice is only
+    # reached for a metered one — but a stage arriving without the number must
+    # not render "all None alerts".
+    text = notice_for("wa_month", None, "spent", 100, None, allowance=None)
+    assert "None" not in text
+    assert "all alerts" in text
+
+
+def test_running_out_of_days_still_says_the_days() -> None:
+    # The two endings are different sentences on purpose: one is a date and the
+    # other is a count, and telling somebody with three weeks left that their
+    # subscription has ended would read as a billing fault.
+    expired = notice_for("wa_month", None, "expired", 100, None, allowance=900)
+    assert "900" not in expired
+    assert "has ended" in expired
