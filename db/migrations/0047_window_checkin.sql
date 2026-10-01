@@ -6,10 +6,15 @@
 -- last message. With no approved templates, that is the only way to reach them
 -- at all: outside the window nothing can be sent.
 --
--- So half an hour before it shuts we ask, while we still can, whether they want
--- the alerts to carry on. Tapping either button is an inbound message, which
--- opens a fresh 24 hours; everything held back while the window was closed then
--- goes out on the next run.
+-- So before it shuts we ask, while we still can, whether they want the alerts
+-- to carry on. Tapping either button is an inbound message, which opens a
+-- fresh 24 hours; everything held back while the window was closed then goes
+-- out on the next run.
+--
+-- (This said "half an hour before" when it was written. 0054 moved it to five
+-- minutes and held the alerts back from the moment it is asked, so that the
+-- question is the last message rather than one buried under half an hour of
+-- listings.)
 --
 -- ── why a column and not a table ─────────────────────────────────────────
 --

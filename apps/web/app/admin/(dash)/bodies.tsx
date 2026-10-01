@@ -629,7 +629,23 @@ export async function QueueTiles({ span }: { span: string }) {
         }
         tone={(queue?.oldest_queued_mins ?? 0) > 10 ? "bad" : "good"}
         note="a queue that stops moving looks like a small one"
-        why="Возраст самого старого сообщения в очереди. Число сообщений обманывает: если доставка встала, очередь выглядит маленькой, потому что в неё ничего не добавляется."
+        why="Возраст самого старого сообщения, которое прямо сейчас можно отправить. Число сообщений обманывает: если доставка встала, очередь выглядит маленькой, потому что в неё ничего не добавляется. Намеренно удержанные сюда не попадают — они в плитке Held."
+      />
+      <Metric
+        label="Held"
+        value={queue?.held_total ?? 0}
+        // Never red: holding is the system working. Amber only when something
+        // has been held longer than the backlog is supposed to live, which
+        // means the two-day trim has stopped running.
+        tone={
+          queue === null || queue.held_total === 0
+            ? undefined
+            : (queue.held_oldest_mins ?? 0) > 2 * 24 * 60
+              ? "warn"
+              : undefined
+        }
+        note={queue?.held_why ?? "nothing held"}
+        why="Сообщения, которые очередь держит намеренно: закрытое 24-часовое окно WhatsApp, неотвеченный чек-ин, ожидание фотографии или дневной лимит в 30 сообщений. Это не сбой — они уйдут сами, как только человек напишет или наступит полночь. Жёлтым становится, только если что-то держится дольше двух дней: значит перестала работать чистка бэклога."
       />
       <Metric
         label="Median latency"

@@ -186,9 +186,13 @@ export async function problems(): Promise<Problem[]> {
       HAVING max(stored_at) < now() - interval '6 hours'
 
      UNION ALL
-     SELECT 'delivery stalled', 'queued and waiting', count(*)::int, min(created_at)::text
-       FROM notifications
-      WHERE status = 'queued' AND created_at < now() - interval '1 hour'
+     -- held IS NULL, or this says "stalled" about a WhatsApp backlog that is
+     -- waiting for a shut window to reopen, which is the system working and
+     -- lasts up to two days. See 0055; the Held tile is where those are shown.
+     SELECT 'delivery stalled', 'queued with nothing holding them',
+            count(*)::int, min(created_at)::text
+       FROM queued_notifications
+      WHERE held IS NULL AND created_at < now() - interval '1 hour'
       HAVING count(*) > 0
 
       ORDER BY 4 DESC NULLS LAST
@@ -289,16 +293,39 @@ export async function knownJobs(): Promise<string[]> {
 
 export type Delivery = {
   oldest_queued_mins: number | null;
+  held_total: number;
+  held_oldest_mins: number | null;
+  held_why: string | null;
   median_latency_secs: number | null;
   failed_24h: number;
   skipped_24h: number;
 };
 
+// `oldest_queued_mins` asks one question: has delivery stopped? So it ages only
+// what delivery could send this minute. A WhatsApp message waiting for a shut
+// window, for an unanswered check-in, for a photograph or for midnight is held
+// on purpose and can be held for two days — counting those made the tile red
+// almost always, which is the same as having no tile.
+//
+// `held` is the other half of the same row, kept beside it so the dashboard
+// never has to choose between "nothing is wrong" and "nothing is moving". The
+// definition of held is `queued_notifications` in the database, which is also
+// what the worker claims against — see 0055.
 export async function delivery(): Promise<Delivery> {
   const rows = await query<Delivery>(
-    `SELECT
+    // Referenced four times, so Postgres materialises it and works the reasons
+    // out once. Inlined it would re-run the per-row subqueries for each column.
+    `WITH queued AS (SELECT created_at, held FROM queued_notifications)
+     SELECT
        (SELECT round(extract(epoch FROM now() - min(created_at)) / 60)::int
-          FROM notifications WHERE status = 'queued')            AS oldest_queued_mins,
+          FROM queued WHERE held IS NULL)                        AS oldest_queued_mins,
+       (SELECT count(*)::int FROM queued WHERE held IS NOT NULL) AS held_total,
+       (SELECT round(extract(epoch FROM now() - min(created_at)) / 60)::int
+          FROM queued WHERE held IS NOT NULL)                    AS held_oldest_mins,
+       (SELECT string_agg(reason, ' · ' ORDER BY reason)
+          FROM (SELECT held || ' ×' || count(*) AS reason
+                  FROM queued WHERE held IS NOT NULL
+                 GROUP BY held) breakdown)                       AS held_why,
        (SELECT round(
                  percentile_cont(0.5) WITHIN GROUP (
                    ORDER BY extract(epoch FROM sent_at - created_at)
@@ -316,7 +343,8 @@ export async function delivery(): Promise<Delivery> {
   );
   return (
     rows[0] ?? {
-      oldest_queued_mins: null, median_latency_secs: null, failed_24h: 0, skipped_24h: 0,
+      oldest_queued_mins: null, held_total: 0, held_oldest_mins: null, held_why: null,
+      median_latency_secs: null, failed_24h: 0, skipped_24h: 0,
     }
   );
 }

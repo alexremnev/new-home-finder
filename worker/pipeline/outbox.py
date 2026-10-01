@@ -431,10 +431,21 @@ def _apply(conn: Conn, stage: Any, notification_id: int, user_id: int, decision:
     store.leave_queued(conn, notification_id, decision.error)
     stage.count("retry_later")
 
-# How long before WhatsApp's window shuts to ask whether to carry on. Thirty
-# minutes is long enough that a reply still lands inside the window, and short
-# enough that the question is not asked to somebody about to write in anyway.
-CHECKIN_MINUTES = 30
+# How long before WhatsApp's window shuts to ask whether to carry on.
+#
+# Late, because `claim_queued` holds the alerts from the moment it is asked so
+# that the question stays the last message in the conversation: every minute
+# earlier is a minute of held listings. Asking earlier buys nothing else — a
+# reply does not have to land inside the window, since anything inbound reopens
+# it whenever it comes.
+#
+# Five minutes, not one cycle, is the floor. The question can only be sent
+# while the window is still open, so this is the band a drain run has to land
+# in; at two minutes a single late or skipped run stepped over it and left
+# somebody never asked and unreachable until they wrote in by themselves. Five
+# gives the two-minute cycle two chances. `ask_failed` is alerted on for the
+# same reason.
+CHECKIN_MINUTES = 5
 
 # How much of a backlog is worth keeping. Two days, as a rolling window from
 # now — not two days from whenever somebody replies. So the catch-up is always
@@ -510,11 +521,13 @@ def ask_before_the_window_shuts(
             return
 
         for row in due:
-            # Marked before sending, not after. A send that fails is a question
-            # not asked; a send that succeeds and then fails to be recorded
-            # would be asked again on the next run, and twice in half an hour
-            # reads as a malfunction.
-            store.mark_window_asked(conn, int(row["user_id"]))
+            user_id = int(row["user_id"])
+            # Marked before sending, not after: a send that succeeded and then
+            # failed to be recorded would be asked again on the next run, and
+            # twice in five minutes reads as a malfunction. It is also what
+            # holds the alerts back while the question waits to be answered,
+            # so it has to be standing before anything else is delivered.
+            store.mark_window_asked(conn, user_id)
 
             result = notifier.send(
                 Recipient(
@@ -533,7 +546,23 @@ def ask_before_the_window_shuts(
                     ],
                 ),
             )
-            stage.count("asked" if result.ok else "ask_failed")
+            if result.ok:
+                stage.count("asked")
+                continue
+
+            # Undone, not left standing. A question that was not delivered must
+            # not be the reason the alerts stay held, and the window is about to
+            # shut: this is the last chance to reach this person at all, so it
+            # is worth waking somebody rather than counting it and moving on.
+            store.unmark_window_asked(conn, user_id)
+            stage.count("ask_failed")
+            stage.log("warn", f"check-in not delivered to user {user_id}; "
+                              "their window shuts unasked", user_id=user_id)
+            tell_ops(
+                f"⚠️ WhatsApp: could not ask subscriber #{user_id} whether to "
+                "carry on, and their 24-hour window is about to shut. Until "
+                "they write in, nothing can be sent to them."
+            )
 
 def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 

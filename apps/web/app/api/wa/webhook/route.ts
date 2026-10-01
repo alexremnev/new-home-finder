@@ -235,10 +235,12 @@ async function commanded(
 async function pressed(number: string, id: string): Promise<string | null> {
   console.log("wa tap", { from: number.slice(-4), id });
 
-  // The answer to the check-in sent half an hour before the window shut. The
+  // The answer to the check-in sent five minutes before the window shut. The
   // tap itself already reopened it — every inbound does, at the top of this
   // route — so everything held back goes out on the next drain, and this only
-  // has to say so and name what is being searched for.
+  // has to say so and name what is being searched for. Held includes the
+  // alerts withheld while the question waited: the worker stops delivering
+  // once it has asked, so that the question stays the last thing on screen.
   if (id === "continue") {
     const account = await accountForChat(number, "whatsapp").catch(() => null);
     if (!account || account.subscription_id === null) return noFilterYet(siteUrl());

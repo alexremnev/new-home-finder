@@ -182,13 +182,27 @@ def problems(conn: Any, *, quiet_hours: int, stale_hours: int) -> list[str]:
             "— the source has probably changed its format"
         )
 
+    # Only what nothing is holding back. A WhatsApp message whose 24-hour
+    # window is shut sits queued for up to two days by design, and counting
+    # those reported "delivery is not draining" every hour of every day — see
+    # `queued_notifications` and 0055.
     waiting = scalar(
-        "SELECT count(*) FROM notifications WHERE status = 'queued' "
+        "SELECT count(*) FROM queued_notifications WHERE held IS NULL "
         "AND created_at < now() - make_interval(hours => %s)",
         (stale_hours,),
     )
     if waiting:
         found.append(f"{waiting} message(s) queued for over {stale_hours}h — delivery is not draining")
+
+    held = scalar(
+        "SELECT count(*) FROM queued_notifications WHERE held IS NOT NULL "
+        "AND created_at < now() - make_interval(days => 2)",
+    )
+    if held:
+        found.append(
+            f"{held} message(s) held for over two days — the backlog trim has stopped "
+            "running, because nothing should survive it that long"
+        )
 
     for row in conn.execute(
         "SELECT key, health, health_note FROM sources WHERE enabled AND health <> 'ok'"

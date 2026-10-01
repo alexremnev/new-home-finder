@@ -31,11 +31,14 @@ TRUNCATE notifications, subscriptions, user_channels, user_tokens, payments, use
 
 @pytest.fixture(scope="module")
 def schema() -> Iterator[None]:
+    # Every migration, in order. A short list was enough when these tests only
+    # covered matching and retries; the WhatsApp ones read `source_messages`,
+    # `last_inbound_at` and `window_asked_at`, none of which exist that early —
+    # and the whole chain is the only setup that matches what the server has.
     with psycopg.connect(URL, autocommit=True) as conn:
         conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-        for name in ("0001_init.sql", "0004_source_failures.sql",
-                     "0005_web.sql", "0006_plans.sql", "0007_no_alert_cap.sql"):
-            conn.execute((MIGRATIONS / name).read_text(encoding="utf-8"))
+        for path in sorted(MIGRATIONS.glob("*.sql")):
+            conn.execute(path.read_text(encoding="utf-8"))
     yield
 
 @pytest.fixture
@@ -388,6 +391,121 @@ def test_it_gives_up_waiting_rather_than_holding_a_listing_for_ever(
 
     # A stuck upload must not silence the alerts. Late and plain beats never.
     assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def whatsapp_queued(
+    conn: Any, run: Run, *, inbound_hours: float = 1, asked: bool = False
+) -> int:
+    """One queued WhatsApp alert for a number whose window is in some state.
+
+    `inbound_hours` is how long ago they last wrote in — under 24 and the
+    window is open. `asked` is whether this window's check-in has gone out.
+    """
+
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+    conn.execute("UPDATE notifications SET channel = 'whatsapp'")
+    conn.execute(
+        """
+        INSERT INTO user_channels
+               (user_id, channel, address, verified_at, last_inbound_at, window_asked_at)
+        VALUES (%s, 'whatsapp', '447700900000', now(),
+                now() - make_interval(secs => %s),
+                CASE WHEN %s THEN now() ELSE NULL END)
+        """,
+        (user_id, int(inbound_hours * 3600), asked),
+    )
+    return user_id
+
+def test_an_open_window_delivers_as_usual(conn: Any, run: Run) -> None:
+    whatsapp_queued(conn, run, inbound_hours=1)
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def test_a_shut_window_holds_without_spending_an_attempt(conn: Any, run: Run) -> None:
+    # Nothing can be sent outside the 24 hours and there are no templates, so
+    # claiming would only burn one of five attempts on a message that cannot go.
+    whatsapp_queued(conn, run, inbound_hours=25)
+
+    assert store.claim_queued(conn, limit=10, max_attempts=3) == []
+    assert int(notification(conn)["attempts"]) == 0
+
+def test_nothing_lands_on_top_of_the_check_in(conn: Any, run: Run) -> None:
+    # The question goes out five minutes before the window shuts and is useless
+    # buried: an alert after it pushes the buttons up the conversation, and a
+    # question nobody taps costs two days of silence.
+    whatsapp_queued(conn, run, inbound_hours=23.9, asked=True)
+
+    assert store.claim_queued(conn, limit=10, max_attempts=3) == []
+    assert int(notification(conn)["attempts"]) == 0
+
+def test_the_tap_releases_what_the_question_was_holding(conn: Any, run: Run) -> None:
+    # The webhook writes `last_inbound_at` on every inbound, a tap included,
+    # which puts it past the question — all the release needs.
+    user_id = whatsapp_queued(conn, run, inbound_hours=23.9, asked=True)
+    conn.execute(
+        "UPDATE user_channels SET last_inbound_at = now() "
+        "WHERE user_id = %s AND channel = 'whatsapp'",
+        (user_id,),
+    )
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def test_a_check_in_that_was_never_delivered_holds_nothing(conn: Any, run: Run) -> None:
+    # `ask_before_the_window_shuts` marks before sending and undoes it if the
+    # send fails. Left standing it would hold the queue for a question the
+    # person never saw and can therefore never answer.
+    user_id = whatsapp_queued(conn, run, inbound_hours=23.9, asked=True)
+    store.unmark_window_asked(conn, user_id)
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def test_a_window_reopened_before_the_old_question_was_answered(
+    conn: Any, run: Run
+) -> None:
+    # Asked about a window that has since been replaced: the answer is stale by
+    # itself, and holding on it would hold for ever.
+    user_id = whatsapp_queued(conn, run, inbound_hours=1)
+    conn.execute(
+        "UPDATE user_channels SET window_asked_at = now() - interval '25 hours' "
+        "WHERE user_id = %s AND channel = 'whatsapp'",
+        (user_id,),
+    )
+
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def held_reasons(conn: Any) -> list[str | None]:
+    return [
+        r["held"]
+        for r in conn.execute(
+            "SELECT held FROM queued_notifications ORDER BY id"
+        ).fetchall()
+    ]
+
+def test_a_shut_window_says_so_by_name(conn: Any, run: Run) -> None:
+    # The admin dashboard prints these strings and the hourly report decides
+    # what is a fault by them, so the wording is part of the contract.
+    whatsapp_queued(conn, run, inbound_hours=25)
+
+    assert held_reasons(conn) == ["window shut"]
+
+def test_an_unanswered_check_in_is_its_own_reason(conn: Any, run: Run) -> None:
+    # Separable on purpose: a shut window means nobody could be asked, and an
+    # unanswered one means they were and have not replied yet. The first is
+    # worth watching, the second resolves itself.
+    whatsapp_queued(conn, run, inbound_hours=23.9, asked=True)
+
+    assert held_reasons(conn) == ["check-in unanswered"]
+
+def test_nothing_holds_a_telegram_message(conn: Any, run: Run) -> None:
+    # Which is what keeps `Oldest queued` honest: it ages the rows with no
+    # reason, and for Telegram there is never one.
+    user_id = make_user(conn)
+    make_subscription(conn, user_id)
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+
+    assert held_reasons(conn) == [None]
 
 def test_telegram_never_waits_because_it_previews_the_link(conn: Any, run: Run) -> None:
     user_id = make_user(conn)

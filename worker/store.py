@@ -13,9 +13,11 @@ from worker.contracts.listing import Listing
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
 
-# What a WhatsApp subscriber may cost. See 0048 for why these two numbers and
-# why they are not `max_alerts_per_day` returning.
-WA_DAILY_ALERT = 30
+# What a WhatsApp subscriber may cost in total. See 0048 for why a number and
+# not `max_alerts_per_day` returning.
+#
+# The daily figure is not here: it both stops delivery and raises the alert, so
+# it is one number in `delivery_limits` rather than two that can disagree.
 WA_LIFETIME_ALERT = 500
 
 _INSERT_COLUMNS = (
@@ -502,9 +504,7 @@ def biggest_sitemap(conn: Conn, source_key: str, *, days: int = 7) -> int | None
     most = None if row is None else row["most"]
     return None if most is None else int(most)
 
-def costly_whatsapp(
-    conn: Conn, *, daily: int = WA_DAILY_ALERT, lifetime: int = WA_LIFETIME_ALERT
-) -> list[Row]:
+def costly_whatsapp(conn: Conn, *, lifetime: int = WA_LIFETIME_ALERT) -> list[Row]:
     """WhatsApp subscribers who have crossed a volume threshold unannounced.
 
     One row per alert still owed, with `kind` saying which threshold and
@@ -529,8 +529,12 @@ def costly_whatsapp(
                  GROUP BY n.user_id
             ),
             owed AS (
+                -- The threshold is the cap itself: the alert says "we have
+                -- stopped delivering to this person", so reading it from
+                -- anywhere else would let it announce the wrong thing.
                 SELECT t.user_id, 'daily' AS kind, t.today AS sent
-                  FROM tally t WHERE t.today >= %(daily)s
+                  FROM tally t
+                 WHERE t.today >= (SELECT wa_daily_cap FROM delivery_limits)
                 UNION ALL
                 SELECT t.user_id, 'lifetime', t.ever
                   FROM tally t WHERE t.ever >= %(lifetime)s
@@ -552,7 +556,7 @@ def costly_whatsapp(
               FROM claimed c
              ORDER BY c.user_id, c.kind
             """,
-            {"daily": daily, "lifetime": lifetime},
+            {"lifetime": lifetime},
         ).fetchall()
     )
 
@@ -581,8 +585,12 @@ def drop_stale_whatsapp(conn: Conn, *, days: int = 2) -> int:
     ).fetchall()
     return len(gone)
 
-def closing_windows(conn: Conn, *, minutes: int = 30, limit: int = 200) -> list[Row]:
+def closing_windows(conn: Conn, *, minutes: int = 5, limit: int = 200) -> list[Row]:
     """WhatsApp numbers whose 24-hour window shuts within `minutes`.
+
+    Asked late on purpose — see `CHECKIN_MINUTES`. Late means the question is
+    the newest thing in the conversation, and `claim_queued` keeps it that way
+    by holding alerts from this moment until it is answered.
 
     One question per window: `window_asked_at` is compared against
     `last_inbound_at`, so a window that has since been reopened makes the old
@@ -617,10 +625,35 @@ def closing_windows(conn: Conn, *, minutes: int = 30, limit: int = 200) -> list[
     )
 
 def mark_window_asked(conn: Conn, user_id: int) -> None:
+    """Record that this window's question has been asked.
+
+    Also what holds the alerts back for the last minutes of the window — see
+    `claim_queued`. So it is written immediately before the send and undone by
+    `unmark_window_asked` if that send fails, rather than left standing: a
+    question that was never delivered must not be the reason nothing else is.
+    """
 
     conn.execute(
         """
         UPDATE user_channels SET window_asked_at = now()
+         WHERE user_id = %s AND channel = 'whatsapp'
+        """,
+        (user_id,),
+    )
+
+def unmark_window_asked(conn: Conn, user_id: int) -> None:
+    """Undo `mark_window_asked` after a send that failed.
+
+    Without this a failed check-in is indistinguishable from an answered one:
+    the question is never asked again, the alerts stay held, and with no
+    templates the person cannot be reached at all until they write in
+    themselves. Clearing it lets the next run try again while the window is
+    still open, and releases the queue if it does not.
+    """
+
+    conn.execute(
+        """
+        UPDATE user_channels SET window_asked_at = NULL
          WHERE user_id = %s AND channel = 'whatsapp'
         """,
         (user_id,),
@@ -750,75 +783,30 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
         ).fetchall()
     )
 
-# How long a WhatsApp alert waits for its photograph before going without one.
-#
-# WhatsApp is sent the picture itself rather than a link, so an alert that
-# overtakes its own upload arrives as plain text and is never revisited. Ingest
-# runs every two minutes and uploads a batch each time, so one cycle is usually
-# enough; this is the cap, not the wait.
-PHOTO_GRACE_MINUTES = 5
+def claim_queued(conn: Conn, *, limit: int, max_attempts: int) -> list[Row]:
+    """The next batch of messages that can actually be sent, oldest first.
 
-def claim_queued(
-    conn: Conn,
-    *,
-    limit: int,
-    max_attempts: int,
-    photo_grace: int = PHOTO_GRACE_MINUTES,
-    wa_daily_cap: int = WA_DAILY_ALERT,
-) -> list[Row]:
+    What "can be sent" means is `queued_notifications.held` and lives in the
+    database — see 0055. It used to live here, in three `AND NOT (...)` blocks
+    with their limits as Python defaults, which left the admin dashboard no way
+    to tell a message held on purpose from a delivery that had died.
+
+    Held rows are not claimed, only skipped: claiming spends one of five
+    attempts, and a message waiting for a photograph, for a window to reopen or
+    for midnight has not failed at anything.
+    """
 
     claimed = conn.execute(
         """
         WITH due AS (
             SELECT n.id FROM notifications n
              WHERE n.status = 'queued' AND n.attempts < %(max_attempts)s
-               -- Held back, not claimed: claiming spends an attempt, and a
-               -- message waiting for a picture has not failed at anything.
-               AND NOT (
-                   n.channel = 'whatsapp'
-                   AND n.created_at > now() - make_interval(mins => %(photo_grace)s)
-                   AND EXISTS (
-                       SELECT 1 FROM source_messages m
-                        WHERE m.listing_id = n.listing_id
-                          AND 'photo' = ANY(m.media_kinds)
-                          AND m.wa_media_checked_at IS NULL
-                   )
-               )
-               -- And held back the same way while WhatsApp's window is shut.
-               -- Nothing can be sent then and there are no templates, so an
-               -- attempt would only spend one of five and the message would be
-               -- dead within ten minutes. Held, it goes out the moment the
-               -- person writes in — which is what the check-in asks them to do.
-               AND NOT (
-                   n.channel = 'whatsapp'
-                   AND EXISTS (
-                       SELECT 1 FROM user_channels uc
-                        WHERE uc.user_id = n.user_id AND uc.channel = 'whatsapp'
-                          AND (uc.last_inbound_at IS NULL
-                            OR uc.last_inbound_at <= now() - interval '24 hours')
-                   )
-               )
-               -- Thirty a day on WhatsApp, for somebody who is not paying for
-               -- it. Held rather than dropped: the day rolls over and they go
-               -- out in order. A paying subscriber is not capped at all — an
-               -- alert tells us instead, because cutting off what somebody has
-               -- bought is worse than the bill.
-               AND NOT (
-                   n.channel = 'whatsapp'
-                   AND NOT EXISTS (
-                       SELECT 1 FROM users u JOIN plans p ON p.key = u.plan
-                        WHERE u.id = n.user_id
-                          AND p.price_pence > 0
-                          AND (u.plan_until IS NULL OR u.plan_until > now())
-                   )
-                   AND (
-                       SELECT count(*) FROM notifications s
-                        WHERE s.user_id = n.user_id
-                          AND s.channel = 'whatsapp'
-                          AND s.status = 'sent'
-                          AND (s.sent_at AT TIME ZONE 'Europe/London')::date
-                            = (now() AT TIME ZONE 'Europe/London')::date
-                   ) >= %(wa_daily_cap)s
+               -- Correlated, not `id IN (SELECT ...)`: this way the reason is
+               -- worked out for the rows being considered rather than for the
+               -- whole backlog, and `held` stops at the first rule that bites.
+               AND NOT EXISTS (
+                   SELECT 1 FROM queued_notifications q
+                    WHERE q.id = n.id AND q.held IS NOT NULL
                )
              ORDER BY n.created_at
              LIMIT %(limit)s
@@ -828,12 +816,7 @@ def claim_queued(
           FROM due WHERE n.id = due.id
         RETURNING n.id
         """,
-        {
-            "limit": limit,
-            "max_attempts": max_attempts,
-            "photo_grace": photo_grace,
-            "wa_daily_cap": wa_daily_cap,
-        },
+        {"limit": limit, "max_attempts": max_attempts},
     ).fetchall()
     ids = [int(r["id"]) for r in claimed]
     if not ids:

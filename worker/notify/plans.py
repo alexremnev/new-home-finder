@@ -101,12 +101,15 @@ def notice_for(
     return expiring_notice(plan, plan_until, stage, share, link)
 
 def checkin_notice() -> str:
-    """Asked half an hour before WhatsApp's 24-hour window shuts.
+    """Asked five minutes before WhatsApp's 24-hour window shuts.
 
     Short on purpose: it is a question with two buttons, and every extra line
     is a line between the question and the answer. Tapping either button is an
     inbound message, which is what reopens the window — so even "I found a
     place" leaves us able to reply.
+
+    Asked that late, and with alerts held from the moment it goes out, so that
+    it is the last message in the conversation rather than one somewhere in it.
     """
 
     return "\n".join(
