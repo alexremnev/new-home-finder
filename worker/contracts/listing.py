@@ -45,6 +45,11 @@ class Listing(BaseModel):
     deposit_pcm: float | None = None
 
     postcode: str | None = None
+    #: Where `postcode` came from. 'portal' means the site stated it and it is
+    #: this property's own; 'derived' means it was read off a coordinate and is
+    #: the nearest postcode centroid, which the duplicate rule must not merge
+    #: on. See 0056 and worker.sources.geo.
+    postcode_source: Literal["portal", "derived"] = "portal"
     postcode_district: str | None = None
     tfl_zone: int | None = Field(default=None, ge=1, le=9)
     lat: float | None = Field(default=None, ge=-90, le=90)

@@ -1382,6 +1382,118 @@ export async function readerOverlap(win: Win): Promise<ReaderOverlap[]> {
   ).catch(() => []);
 }
 
+export type FeedReliance = {
+  alerts: number;
+  covered: number;
+  feed_only: number;
+  unrecorded: number;
+  later: number;
+  median_lag_secs: number | null;
+};
+
+// The same question as `readerOverlap`, asked about alerts instead of
+// listings: of what subscribers were actually sent, how much would still have
+// been sent with the Telegram feed switched off.
+//
+// Why both. `readerOverlap` counts listings, and a listing nobody was sent is
+// a miss that cost nothing — most of a district's stock matches nobody's
+// filter. An alert is the product. Scoping to `notifications` also makes the
+// "was it a district we read" test unnecessary: an alert exists because it
+// matched somebody's filter, so its district is subscribed by definition.
+//
+// What this cannot see: a scraper sighting means the listing was stored, not
+// that it would have been announced. A district whose watch had just started
+// stores without announcing — that is the whole of `source_sweeps` — and
+// whether that was the state at the time is not reconstructable afterwards.
+// So `covered` is an upper bound on what survives losing the feed, and
+// `feed_only` is an exact count of what does not.
+export async function feedReliance(win: Win): Promise<FeedReliance> {
+  const rows = await query<FeedReliance>(
+    `WITH alerted AS (
+       SELECT n.id, n.listing_id
+         FROM notifications n
+        WHERE n.kind = 'new_listing' AND n.status = 'sent'
+          AND n.sent_at >  now() - make_interval(mins => $1::int)
+          AND n.sent_at <= now() - make_interval(mins => $2::int)
+     ),
+     whosaw AS (
+       SELECT a.id,
+              min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
+              min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
+         FROM alerted a
+         LEFT JOIN listing_sightings g ON g.listing_id = a.listing_id
+        GROUP BY a.id
+     )
+     SELECT count(*)::int AS alerts,
+            count(*) FILTER (WHERE scraper_at IS NOT NULL)::int AS covered,
+            count(*) FILTER (
+              WHERE scraper_at IS NULL AND feed_at IS NOT NULL)::int AS feed_only,
+            -- Neither reader recorded a sighting: an alert for a listing
+            -- stored before 0052 began recording. Not a miss, and not
+            -- evidence either — said out loud so nobody reads it as cover.
+            count(*) FILTER (
+              WHERE scraper_at IS NULL AND feed_at IS NULL)::int AS unrecorded,
+            count(*) FILTER (
+              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
+                AND scraper_at > feed_at)::int AS later,
+            round(
+              percentile_cont(0.5) WITHIN GROUP (
+                ORDER BY extract(epoch FROM scraper_at - feed_at)
+              )
+            )::int AS median_lag_secs
+       FROM whosaw`,
+    [Math.round(win.mins), Math.round(win.endMins)],
+  ).catch(() => []);
+
+  return rows[0] ?? {
+    alerts: 0, covered: 0, feed_only: 0, unrecorded: 0, later: 0,
+    median_lag_secs: null,
+  };
+}
+
+export type FeedOnly = {
+  listing_id: number;
+  source_key: string;
+  district: string | null;
+  url: string;
+  price_pcm: number | null;
+  first_seen_at: string;
+  alerts: number;
+};
+
+// The misses themselves, newest first. A count says the scrapers are not ready
+// yet; this says why — and the usual answer is one of a handful of causes
+// (a district read after the listing appeared, a page cap, a refusal) that are
+// only visible when you can open the listing that got away.
+export async function feedOnlyListings(win: Win, limit = 12): Promise<FeedOnly[]> {
+  return query<FeedOnly>(
+    `WITH covered AS (
+       SELECT DISTINCT upper(area) AS code
+         FROM subscriptions s
+         CROSS JOIN LATERAL jsonb_array_elements_text(
+             coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
+         ) AS area
+        WHERE s.active
+     )
+     SELECT l.id AS listing_id, l.source_key,
+            upper(l.postcode_district) AS district,
+            l.url, l.price_pcm, l.first_seen_at::text,
+            (SELECT count(*)::int FROM notifications n
+              WHERE n.listing_id = l.id AND n.status = 'sent') AS alerts
+       FROM listings l
+      WHERE l.first_seen_at >  now() - make_interval(mins => $1::int)
+        AND l.first_seen_at <= now() - make_interval(mins => $2::int)
+        AND upper(l.postcode_district) IN (SELECT code FROM covered)
+        AND EXISTS (SELECT 1 FROM listing_sightings g
+                     WHERE g.listing_id = l.id AND g.reader = 'tg_feed')
+        AND NOT EXISTS (SELECT 1 FROM listing_sightings g
+                         WHERE g.listing_id = l.id AND g.reader <> 'tg_feed')
+      ORDER BY l.first_seen_at DESC
+      LIMIT $3`,
+    [Math.round(win.mins), Math.round(win.endMins), limit],
+  ).catch(() => []);
+}
+
 // When the comparison above started having anything to say. Nothing was
 // backfilled, so a window reaching before this is reporting on a period when
 // only some of the readers were recording — worth saying on the page rather

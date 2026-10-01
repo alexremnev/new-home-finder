@@ -8,8 +8,11 @@ silence. Both are pure functions so that neither needs a database to pin down.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
-from worker.sources.sweep import GAP_HOURS, stale_watches, sweep_order
+from worker.contracts.listing import Listing
+from worker.sources import geo, sweep
+from worker.sources.sweep import GAP_HOURS, Catch, stale_watches, sweep_order
 from worker.store import Watch
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
@@ -128,3 +131,80 @@ def test_the_order_is_stable_when_nothing_distinguishes_two_districts() -> None:
     # arbitrary set each time.
     watching = {"SE16": watch(500, 3), "E14": watch(500, 3)}
     assert sweep_order(["SE16", "E14"], watching) == ["E14", "SE16"]
+
+
+class Counting:
+    """Just enough of a Stage to see what the derivation reported."""
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+
+    def count(self, name: str, delta: int = 1) -> None:
+        self.counts[name] = self.counts.get(name, 0) + delta
+
+
+def catch(
+    external_id: str, *, postcode: str | None = None,
+    lat: float | None = 51.5, lng: float | None = -0.02,
+    district: str | None = "E14",
+) -> Catch:
+    return Catch(listing=Listing(
+        source_key="zoopla", external_id=external_id,
+        url=f"https://example.test/{external_id}", price_pcm=2000, bedrooms=2,
+        postcode=postcode, postcode_district=district, lat=lat, lng=lng,
+    ))
+
+
+def test_only_listings_that_need_a_postcode_and_can_have_one_are_asked_about(
+    monkeypatch: Any,
+) -> None:
+    asked: list[list[geo.Ask]] = []
+    monkeypatch.setattr(geo, "nearest", lambda asks: asked.append(asks) or {})
+
+    stage = Counting()
+    sweep._derive_postcodes(
+        [
+            catch("needs-it"),
+            # Already has one from the portal: asking would cost a slot and
+            # could only replace a fact with a guess.
+            catch("has-one", postcode="E14 4AP"),
+            # Nowhere to look.
+            catch("no-coords", lat=None, lng=None),
+        ],
+        stage,  # type: ignore[arg-type]
+    )
+
+    assert [one.key for one in asked[0]] == ["needs-it"]
+    assert stage.counts["postcode_asked"] == 1
+
+
+def test_the_district_goes_with_the_question() -> None:
+    # The refusal lives in `geo`, but it can only refuse if the district is
+    # passed — so this is the half that has to be checked here.
+    import unittest.mock as mock
+
+    with mock.patch.object(geo, "nearest", return_value={}) as asking:
+        sweep._derive_postcodes([catch("one", district="SE16")], Counting())  # type: ignore[arg-type]
+
+    assert asking.call_args.args[0][0].district == "SE16"
+
+
+def test_what_could_not_be_derived_is_counted_and_not_raised(
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(geo, "nearest", lambda asks: {"b": "E14 4AP"})
+
+    stage = Counting()
+    found = sweep._derive_postcodes([catch("a"), catch("b")], stage)  # type: ignore[arg-type]
+
+    assert found == {"b": "E14 4AP"}
+    assert stage.counts["postcode_not_derived"] == 1
+
+
+def test_nothing_to_ask_about_costs_no_request(monkeypatch: Any) -> None:
+    def never(asks: list[geo.Ask]) -> dict[str, str]:
+        raise AssertionError("asked with nothing to ask about")
+
+    monkeypatch.setattr(geo, "nearest", never)
+
+    assert sweep._derive_postcodes([catch("a", postcode="E14 4AP")], Counting()) == {}  # type: ignore[arg-type]

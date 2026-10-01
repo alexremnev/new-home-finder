@@ -4,6 +4,7 @@ import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries"
 import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
+  feedOnlyListings, feedReliance,
   runLog, runPoints, scrapeBytes, sightingsSince, sourceFeeds,
   unparseablePoints,
 } from "@/lib/admin-queries";
@@ -445,6 +446,93 @@ export async function FeedVersusScrapers({ span }: { span: string }) {
           : `The feed found ${missed} listings in districts the scrapers read and they did not — too early to switch it off.`}
         {since ? ` · recording since ${at(since)}` : ""}
       </p>
+    </>
+  );
+}
+
+// The same question as the panel above, asked about what subscribers were
+// actually sent. A listing nobody was sent is a miss that cost nothing; an
+// alert is the product.
+export async function AlertsWithoutFeed({ span }: { span: string }) {
+  const win = windowFor(span);
+  const [own, misses] = await Promise.all([
+    feedReliance(win),
+    feedOnlyListings(win),
+  ]);
+
+  if (own.alerts === 0) {
+    return <p className="hint">No alert was sent {spanWords(win)}.</p>;
+  }
+
+  const share = Math.round((own.covered / own.alerts) * 100);
+
+  return (
+    <>
+      <div className="tiles">
+        <Metric
+          label="Would survive"
+          value={`${share}%`}
+          tone={own.feed_only === 0 ? "good" : share >= 95 ? "warn" : "bad"}
+          note={`${own.covered} of ${own.alerts} alerts · ${spanWords(win)}`}
+          why="Доля отправленных алертов, объявления которых скраперы тоже видели — то есть алерт ушёл бы и с выключенным фидом. Это верхняя граница, а не точное число: то, что скрапер видел объявление, означает, что оно сохранено, но не обязательно что оно было бы анонсировано — район, наблюдение за которым только началось, сохраняет молча. Обратное направление точное: что скрапер не видел, то без фида не ушло бы никому."
+        />
+        <Metric
+          label="Lost without it"
+          value={own.feed_only}
+          tone={own.feed_only > 0 ? "bad" : "good"}
+          note={
+            own.unrecorded > 0
+              ? `${own.unrecorded} more predate the sighting record`
+              : "alerts only the feed made possible"
+          }
+          why="Алерты, объявления которых видел только фид. Это точный счёт того, что подписчики не получили бы вовсе, если выключить Telegram-источник сегодня. Устойчивый ноль здесь вместе с нулём в «Feed versus scrapers» — и фид можно выключать. «predate the sighting record» — алерты по объявлениям, сохранённым до начала учёта (0052): это не промах, но и не доказательство покрытия."
+        />
+        <Metric
+          label="Scraper later"
+          value={own.later}
+          note={
+            own.median_lag_secs === null
+              ? "no pair to compare"
+              : `median ${lead(own.median_lag_secs)}`
+          }
+          why="Сколько алертов фид успел сделать раньше скрапера, и насколько. Для аренды читатель, который находит всё, но на пять минут позже, заменой не является: квартиру снимают за часы. Смотреть вместе с расписанием — скраперы ходят раз в 20 минут, а фид приходит сразу."
+        />
+      </div>
+
+      {misses.length > 0 && (
+        <div className="scroll-x">
+          <table>
+            <thead>
+              <tr>
+                <th>First seen</th>
+                <th>District</th>
+                <th>Portal</th>
+                <th className="num">Rent</th>
+                <th className="num">Alerts</th>
+                <th>Listing</th>
+              </tr>
+            </thead>
+            <tbody>
+              {misses.map((one) => (
+                <tr key={one.listing_id}>
+                  <td className="mono">{at(one.first_seen_at)}</td>
+                  <td>{one.district ?? "—"}</td>
+                  <td>{PORTAL_NAMES[one.source_key] ?? one.source_key}</td>
+                  <td className="num">
+                    {one.price_pcm === null ? "—" : `£${one.price_pcm}`}
+                  </td>
+                  <td className="num">{one.alerts}</td>
+                  <td>
+                    <a href={one.url} target="_blank" rel="noreferrer">
+                      open
+                    </a>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }

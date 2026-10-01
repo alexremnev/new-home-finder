@@ -23,7 +23,8 @@ WA_LIFETIME_ALERT = 500
 _INSERT_COLUMNS = (
     "source_key", "external_id", "url", "price_pcm", "bedrooms", "bathrooms",
     "property_type", "furnished", "pets_allowed", "bills_included", "available_from",
-    "min_tenancy_months", "deposit_pcm", "postcode", "postcode_district", "tfl_zone",
+    "min_tenancy_months", "deposit_pcm", "postcode", "postcode_source",
+    "postcode_district", "tfl_zone",
     "lat", "lng", "title", "description", "is_landlord_direct", "photo_count",
     "floor_area_sqft",
 )
@@ -86,6 +87,13 @@ def mark_duplicate(conn: Conn, listing_id: int) -> int | None:
     London day, and only when that one came from a different portal. Two from
     the same portal are a block of identical flats, not one flat twice — see
     0040 for why that distinction is the whole rule.
+
+    Only postcodes a portal stated take part. A derived one is the nearest
+    centroid to a coordinate the portal rounded, so it collapses the several
+    unit postcodes around a block into one value — and two different flats
+    merging is not a duplicate somebody can ignore, it is a flat the subscriber
+    is never told about. See 0056: filling those postcodes is for the alert to
+    name a street, and dedupe on them needs a distance test as well.
     """
 
     row = conn.execute(
@@ -99,6 +107,7 @@ def mark_duplicate(conn: Conn, listing_id: int) -> int | None:
             SELECT o.id, o.source_key
               FROM listings o
              WHERE o.postcode  = mine.postcode
+               AND o.postcode_source = 'portal'
                AND o.price_pcm = mine.price_pcm
                AND o.bedrooms  = mine.bedrooms
                -- Not stated on both portals as often as the rest, and NULL has
@@ -112,6 +121,7 @@ def mark_duplicate(conn: Conn, listing_id: int) -> int | None:
          WHERE mine.id = %(id)s
            AND me.id = mine.id
            AND mine.postcode IS NOT NULL
+           AND mine.postcode_source = 'portal'
            AND me.duplicate_of IS NULL
            AND keeper.id <> mine.id
            AND keeper.source_key <> mine.source_key

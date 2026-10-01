@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 
 import {
+  AlertsWithoutFeed,
   Duplicates, Faults, FeedVersusScrapers, Feeds, Health, Jobs, LastRuns,
   ListingsCreated, LogLines, Portals,
   MessagesRead, QueueTiles, RunsChart,
@@ -66,6 +67,16 @@ export default async function SystemPage({
       >
         <Suspense fallback={<PanelWait />}>
           <FeedVersusScrapers span={span} />
+        </Suspense>
+      </Panel>
+
+      <Panel
+        wide
+        title="Alerts without the feed"
+        why="Тот же вопрос, что в панели выше, но про то, что подписчики реально получили. Панель выше считает объявления, а большая часть стока не подходит ничьему фильтру — промах по объявлению, которое никому не ушло, ничего не стоил. Здесь считаются отправленные алерты. «Would survive» — доля алертов, объявления которых скраперы тоже видели, и это верхняя граница: увиденное скрапером сохранено, но не обязательно было бы анонсировано, потому что район с только что начатым наблюдением сохраняет молча. «Lost without it» — точный счёт алертов, которых без фида не было бы вовсе; список под плитками показывает сами объявления, чтобы было видно, почему скрапер их не поймал. Районный тест здесь не нужен: алерт существует потому, что подошёл чьему-то фильтру, значит его район подписан по определению."
+      >
+        <Suspense fallback={<PanelWait />}>
+          <AlertsWithoutFeed span={span} />
         </Suspense>
       </Panel>
 

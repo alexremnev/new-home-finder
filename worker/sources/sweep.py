@@ -61,6 +61,7 @@ from worker import store
 from worker.contracts.listing import Listing
 from worker.obs import Run
 from worker.obs.log import Stage
+from worker.sources import geo
 from worker.sources.fetch import Fetcher, Refused
 
 Row = dict[str, Any]
@@ -293,6 +294,39 @@ def sweep_order(
     )
 
 
+def _derive_postcodes(fresh: list[Catch], stage: Stage) -> dict[str, str]:
+    """external_id -> postcode, worked out from coordinates. See 0056.
+
+    Only for listings that still have none and have somewhere to look. The
+    district they are already filed under is passed as well and the answer is
+    refused if its outward code disagrees — a neighbour's postcode in an alert
+    reads as fact and is worse than the district alone.
+    """
+
+    asks = [
+        geo.Ask(
+            key=one.listing.external_id,
+            lat=one.listing.lat,
+            lng=one.listing.lng,
+            district=one.listing.postcode_district,
+        )
+        for one in fresh
+        if one.listing.postcode is None
+        and one.listing.lat is not None
+        and one.listing.lng is not None
+    ]
+    if not asks:
+        return {}
+
+    found = geo.nearest(asks)
+    stage.count("postcode_asked", len(asks))
+    if len(found) < len(asks):
+        # Not a fault: no centroid within range, or one in the wrong district,
+        # or a request that failed. All three leave the listing as it was.
+        stage.count("postcode_not_derived", len(asks) - len(found))
+    return found
+
+
 def _fill_postcode(
     portal: Portal, catch: Catch, get: Fetcher, stage: Stage
 ) -> Catch:
@@ -424,8 +458,11 @@ def _collect(
                 f"what was missed in between cannot be told from what is new; "
                 f"starting those watches again, which costs one silent pass",
             )
-            for one in stale:
-                del watching[one]
+            # Not `one`: the same name is the Catch in the loop below, and
+            # binding it to a district string here left the type checker
+            # reading every `one.listing` down there as an attribute on a str.
+            for gone in stale:
+                del watching[gone]
 
         order = sweep_order(wanted, watching)
 
@@ -498,6 +535,14 @@ def _collect(
             stage.count("already_known", len(harvest.caught) - len(fresh))
             stage.count("new", len(fresh))
 
+            # One request for the whole district, before the loop, because
+            # the loop stores as it goes and a postcode arriving afterwards
+            # would arrive after the duplicate rule had already run without
+            # it. Free, so it is asked for every listing that still has no
+            # postcode — including the ones past the page budget below, which
+            # is the shortfall it exists to cover.
+            derived = _derive_postcodes(fresh, stage)
+
             for one in fresh:
                 # Before storing, not after: the postcode is what the
                 # duplicate rule compares on, and filling it in afterwards
@@ -510,6 +555,16 @@ def _collect(
                     else:
                         stage.count("postcode_missing")
                     postcodes -= 1
+
+                # The portal's own answer first, always: this one is the
+                # nearest centroid to a rounded coordinate, and it is here to
+                # beat NULL rather than to beat the page.
+                guess = derived.get(one.listing.external_id)
+                if one.listing.postcode is None and guess is not None:
+                    one = replace(one, listing=one.listing.model_copy(
+                        update={"postcode": guess, "postcode_source": "derived"}
+                    ))
+                    stage.count("postcode_derived")
 
                 kept = keep(conn, stage, one)
                 # Recorded either way, so that a copy still counts as seen.
