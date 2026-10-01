@@ -165,6 +165,8 @@ FURNISHING: tuple[tuple[Furnished, re.Pattern[str]], ...] = (
     ("furnished", re.compile(r"\bfurnished\b", re.IGNORECASE)),
 )
 
+SPACES = re.compile(r"\s+")
+
 PETS = re.compile(r"\bpets?\s*(?:allowed|welcome|considered|friendly)\b", re.IGNORECASE)
 BILLS = re.compile(r"\bbills?\s*(?:are\s*)?includ", re.IGNORECASE)
 
@@ -464,7 +466,10 @@ def as_listing(row: Any, district: str) -> Listing | None:
             furnished = name
             break
 
-    address = str(row.get("address") or "").strip()
+    # Collapsed rather than stripped, for the same reason as Rightmove's: an
+    # alert is a list of one-line facts and a portal is free to embed a
+    # newline in an address.
+    address = SPACES.sub(" ", str(row.get("address") or "")).strip()
     where = row.get("pos")
     where = where if isinstance(where, dict) else {}
 

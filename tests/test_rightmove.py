@@ -27,7 +27,9 @@ from worker.sources.rightmove import (
     catches_in,
     kind_of,
     monthly,
+    page_model,
     picture,
+    postcode_on,
     results_in,
     search_url,
 )
@@ -35,6 +37,46 @@ from worker.sources.sweep import _announceable
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "rightmove_e14_search.html"
 PAGE = FIXTURE.read_text(encoding="utf-8")
+
+
+# A `window.__PAGE_MODEL` in the real shape: the payload is a JSON *string*
+# whose entries reference each other by index rather than nesting. Entry 7 is
+# the inward code and entry 8 the outward one, and the object at index 3 points
+# at both. Reduced from a live page on 1 October 2026.
+PAGE_MODEL_ENTRIES: list[object] = [
+    {"propertyData": 1},
+    {"id": 2, "address": 3},
+    93791823,
+    {
+        "countryCode": 4,
+        "deliveryPointId": 5,
+        "displayAddress": 9,
+        "incode": 7,
+        "outcode": 8,
+        "ukCountry": 4,
+    },
+    "GB",
+    12345,
+    None,
+    "9LZ",
+    "E14",
+    "One Thames Quay, Marsh Wall, E14",
+]
+
+
+def _page_with_model(entries: list[object] | None = None) -> str:
+    model = {
+        "data": json.dumps(PAGE_MODEL_ENTRIES if entries is None else entries),
+        "encoding": "none",
+    }
+    return (
+        "<html><body><script>window.__PAGE_MODEL = "
+        + json.dumps(model)
+        + ";</script></body></html>"
+    )
+
+
+PAGE_WITH_MODEL = _page_with_model()
 
 
 def _page_of(rows: list[dict]) -> str:
@@ -149,6 +191,74 @@ def test_a_promoted_listing_is_flagged(caught: dict) -> None:
     # not be read as the sort order.
     assert caught["93585705"].promoted is True
     assert caught["92362062"].promoted is False
+
+
+# ── the address the alert prints ────────────────────────────────────────
+
+def test_the_address_is_where_the_alert_looks_for_it(caught: dict) -> None:
+    # The alert's "where" line reads `raw.address`, not the listing title. The
+    # key was missing, so every Rightmove alert went out with no address at
+    # all while Zoopla's had one.
+    one = caught["93625473"].listing
+    assert one.raw["address"] == one.title
+    assert one.raw["address"]
+
+
+def test_a_newline_inside_an_address_is_collapsed() -> None:
+    # Rightmove embeds them: "Duke Shore Wharf,\n106 Narrow Street, E14". An
+    # alert is a list of one-line facts, so a line break in the middle of one
+    # breaks the shape of the whole message.
+    one = as_listing(
+        {
+            "id": 1,
+            "price": {"amount": 2000, "frequency": "monthly"},
+            "displayAddress": "Duke Shore Wharf,\n106 Narrow Street, E14",
+            "bedrooms": 2,
+            "propertySubType": "Flat",
+        },
+        "E14",
+    )
+    assert one is not None
+    assert one.raw["address"] == "Duke Shore Wharf, 106 Narrow Street, E14"
+    assert "\n" not in (one.title or "")
+
+
+# ── the full postcode, out of window.__PAGE_MODEL ───────────────────────
+#
+# The search page states one for about a third of its results. The rest are on
+# the listing's own page, and the shape is unusual enough to pin down: the
+# model's payload is a JSON *string*, so every key inside it is escaped and
+# searching the markup for `"outcode"` finds nothing at all — which is what
+# made this look impossible on the first attempt. Inside, objects reference
+# other entries by index rather than nesting.
+
+
+def test_the_postcode_is_assembled_from_two_indices() -> None:
+    assert postcode_on(PAGE_WITH_MODEL, "E14") == "E14 9LZ"
+
+
+def test_the_model_is_found_despite_the_braces_inside_it() -> None:
+    # Read by balancing braces, because the assignment is followed by a
+    # hundred kilobytes of JSON containing every bracket there is.
+    model = page_model(PAGE_WITH_MODEL)
+    assert isinstance(model.get("data"), str)
+
+
+def test_a_postcode_in_another_district_is_refused() -> None:
+    # A page can carry panels for other properties. A neighbour's postcode in
+    # the alert would also put a wrong fingerprint into the duplicate rule.
+    assert postcode_on(PAGE_WITH_MODEL, "SE16") is None
+
+
+def test_a_page_without_the_model_gives_nothing() -> None:
+    assert postcode_on("<html><body>maintenance</body></html>", "E14") is None
+    assert page_model("<html></html>") == {}
+
+
+def test_a_broken_model_gives_nothing_rather_than_raising() -> None:
+    assert postcode_on("window.__PAGE_MODEL = {not json};", "E14") is None
+    assert postcode_on('window.__PAGE_MODEL = {"data": 7};', "E14") is None
+    assert postcode_on('window.__PAGE_MODEL = {"data": "[1,2,3]"};', "E14") is None
 
 
 # ── the pieces ───────────────────────────────────────────────────────────

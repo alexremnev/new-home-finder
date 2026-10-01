@@ -464,3 +464,56 @@ def test_with_no_history_nothing_is_distrusted() -> None:
     conn = FakeConn(districts=["SE16"], biggest=None)
     collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
     assert conn.settled == ["SE16"]
+
+# ── the type comes from its position, not from anywhere in the slug ────────
+#
+# It used to be any type word found anywhere, which stored a flat in a
+# building called "St Cuthbert House" as a house: "house" matched before
+# "flat" was tried. Of a hundred live slugs across five districts, four were
+# flats recorded as houses — invisible to anyone filtering for a flat and
+# wrongly shown to anyone filtering for a house. London is full of buildings
+# called "… House".
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("slug", "kind"),
+    [
+        # The listing that reported this.
+        ("2-bed-flat-st-cuthbert-house-e14", "flat"),
+        # And its neighbours, from the same sample.
+        ("1-bed-flat-claremont-house-se16", "flat"),
+        ("2-bed-flat-vancouver-house-se16", "flat"),
+        ("1-bed-flat-durell-house-se16", "flat"),
+        ("2-bed-flat-bluebell-house-se16", "flat"),
+        # Genuinely houses, and the longer phrase has to win over the shorter.
+        ("4-bed-terraced-house-upper-north-st-e14", "house"),
+        ("5-bed-end-of-terrace-house-a-se16", "house"),
+        ("4-bed-semi-detached-house-x-nw3", "house"),
+        ("3-bed-detached-house-y-nw3", "house"),
+        # Every other phrase seen in the live sample.
+        ("4-bed-maisonette-smythe-st-e14", "flat"),
+        ("2-bed-flat-london-e14", "flat"),
+        ("5-bed-terraced-a-se16", "house"),
+    ],
+)
+def test_the_type_is_read_from_after_the_bedroom_count(slug: str, kind: str) -> None:
+    read = read_slug(slug)
+    assert read is not None, slug
+    assert read[2] == kind, slug
+
+
+def test_a_houseboat_is_not_a_house() -> None:
+    # Matched as a whole segment, so a word that merely starts with one of
+    # ours is not one of ours.
+    read = read_slug("3-bed-houseboat-mooring-e14")
+    assert read is not None and read[2] is None
+
+
+def test_a_room_and_a_studio_keep_their_own_rules() -> None:
+    # Both are recognised before the bedroom count is even looked for, and a
+    # building name full of type words must not disturb either.
+    assert read_slug("room-in-a-shared-flat-willis-house-e14") == ("E14", 1, "room")
+    assert read_slug("room-in-a-shared-house-royal-court-se16") == ("SE16", 1, "room")
+    assert read_slug("studio-flat-london-e14") == ("E14", 0, "flat")

@@ -128,6 +128,32 @@ FURNISHING = (
     ("furnished", re.compile(r"\bfurnished\b", re.IGNORECASE)),
 )
 
+# What OpenRent puts between the bedroom count and the street, longest first
+# so that `terraced-house` is matched before `terraced` and `semi-detached`
+# before `detached`. Collected from a hundred live slugs across five districts:
+# flat, terraced, maisonette, end-of-terrace, semi-detached.
+SLUG_KINDS: tuple[tuple[str, str], ...] = (
+    ("end-of-terrace-house", "house"),
+    ("semi-detached-house", "house"),
+    ("end-of-terrace", "house"),
+    ("semi-detached", "house"),
+    ("terraced-house", "house"),
+    ("detached-house", "house"),
+    ("town-house", "house"),
+    ("townhouse", "house"),
+    ("terraced", "house"),
+    ("detached", "house"),
+    ("bungalow", "house"),
+    ("cottage", "house"),
+    ("house", "house"),
+    ("maisonette", "flat"),
+    ("apartment", "flat"),
+    ("penthouse", "flat"),
+    ("duplex", "flat"),
+    ("studio", "flat"),
+    ("flat", "flat"),
+)
+
 MONTHS = {
     "january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
     "july": 7, "august": 8, "september": 9, "october": 10, "november": 11,
@@ -211,21 +237,29 @@ def read_slug(slug: str) -> tuple[str, int, str | None] | None:
     if not beds:
         return None
 
-    # Narrowed to four words, and on purpose. The matcher compares the stored
+    # The type is whatever follows the bedroom count, and only that.
+    #
+    # It used to be any of these words found anywhere in the slug, which is
+    # wrong in a way that was quietly costing real listings: a flat in a
+    # building called "St Cuthbert House" has the slug
+    # `2-bed-flat-st-cuthbert-house-e14`, "house" matched before "flat" was
+    # tried, and the flat was stored as a house. Of a hundred slugs sampled
+    # across five districts, `1-bed-flat-claremont-house-se16`,
+    # `2-bed-flat-vancouver-house-se16`, `1-bed-flat-durell-house-se16` and
+    # `2-bed-flat-bluebell-house-se16` were all flats recorded as houses —
+    # invisible to anyone filtering for a flat and wrongly shown to anyone
+    # filtering for a house. London is full of buildings called "… House".
+    #
+    # OpenRent's slug is `<n>-bed-<type>-<street or building>-<outcode>`, so
+    # the type has a position. Matched longest first, because `terraced-house`
+    # and `terraced` both appear and the longer one must win.
+    #
+    # Still narrowed to four words on purpose: the matcher compares the stored
     # type against the filter as an exact string, so "terraced house" would not
-    # answer a filter for "house" — and a form offering every phrase the site
-    # uses is not a choice anybody can make. The specific word is kept in `raw`.
-    for name, kind in (
-        ("terraced-house", "house"),
-        ("detached-house", "house"),
-        ("semi-detached-house", "house"),
-        ("bungalow", "house"),
-        ("house", "house"),
-        ("maisonette", "flat"),
-        ("flat", "flat"),
-        ("apartment", "flat"),
-    ):
-        if name in words:
+    # answer a filter for "house". The portal's own phrase stays in `raw`.
+    after = words[beds.end() - beds.start():].lstrip("-")
+    for name, kind in SLUG_KINDS:
+        if after == name or after.startswith(name + "-"):
             return district, int(beds.group(1)), kind
     return district, int(beds.group(1)), None
 
@@ -513,7 +547,18 @@ def collect(
     return Sweep(stored, announce)
 
 __all__ = [
-    "AGENT", "PAGE_BUDGET", "REFUSALS_ALLOWED", "SOURCE_KEY", "Found", "Sweep",
-    "as_listing", "as_text", "collect", "listings_in", "read_slug", "weigh",
+    "AGENT",
+    "PAGE_BUDGET",
+    "REFUSALS_ALLOWED",
+    "SLUG_KINDS",
+    "SOURCE_KEY",
+    "Found",
+    "Sweep",
+    "as_listing",
+    "as_text",
+    "collect",
+    "listings_in",
+    "read_slug",
+    "weigh",
     "when",
 ]

@@ -29,27 +29,35 @@ watermark. The district's search is `radius=0.0`, confirmed from
 around it — which is why the searched district can be trusted as the listing's
 district even when the address does not state an outcode.
 
-── why the full postcode is not fetched ─────────────────────────────────────
+── the full postcode, and where it hides ────────────────────────────────────
 
-Rightmove states one in `displayAddress` for about a third of its search
-results and stops at the outward code for the rest. The rest cannot be had
-reliably. Measured on 30 September 2026: the detail page ships an empty
-`pageProps`, carries no `postcode`, `outcode` or `incode` field under any
-name, and has no `ld+json` block — so the only source is the markup, where a
-six-character hex colour has a postcode's shape.
+The search page states one in `displayAddress` for about a third of its
+results and stops at the outward code for the rest. The rest are on the
+listing's own page, and finding them took two attempts, so the shape is
+recorded here.
 
-Constraining the search to the outward code we already know removes the hex
-colours, but on three of six pages checked there were still several candidates
-— the page lists similar properties nearby — with nothing to tell the
-listing's own from a neighbour's. A wrong postcode goes into the alert *and*
-into the duplicate fingerprint that decides whether the same flat on two
-portals is sent twice, so guessing is worse than abstaining.
+It is NOT in `__NEXT_DATA__`: on a detail page that block's `pageProps` is
+empty. It is in `window.__PAGE_MODEL`, and the reason searching the markup for
+`"outcode"` finds nothing is that the model's payload is a JSON *string* inside
+that object — so every key in it is escaped and `"outcode"` never appears
+literally in the page at all. That is what made this look impossible.
 
-And abstaining still costs: 100KB a page to learn nothing half the time, which
-would consume the run's whole postcode budget and starve Zoopla, where the
-same request works every time and costs half as much. So this portal spends
-nothing on it, and a listing with no stated postcode gets its map link from
-the coordinates instead — see worker.notify.fields.maps_link.
+Inside, the payload is a flattened array: objects reference other entries by
+index rather than nesting, so `{"outcode": 42, "incode": 97}` means "entry 42"
+and "entry 97". One object carries the address —
+`{countryCode, deliveryPointId, displayAddress, incode, outcode, ukCountry}` —
+and resolving its two indices gives the postcode. Four for four on live pages
+on 1 October 2026.
+
+No general decoder is needed and none is written: finding the one object with
+both keys and following two indices is the whole job, and a decoder for a
+format nobody documents is a decoder that breaks silently.
+
+About 100KB a page, spent only on a listing we are about to store that has no
+postcode of its own. It buys two things — an alert that names the street, and
+a working duplicate rule, since `store.mark_duplicate` compares on the full
+postcode and skips any listing without one. Before this, the same flat
+advertised on Rightmove and Zoopla was sent twice.
 
 ── what this costs, and where the pictures come from ────────────────────────
 
@@ -80,6 +88,7 @@ from pydantic import ValidationError
 
 from worker.contracts.listing import Furnished, Listing
 from worker.obs.log import Stage
+from worker.sources import postcode
 from worker.sources.fetch import Fetcher
 from worker.sources.sweep import Catch, Harvest, Memory
 from worker.units import sqft_from
@@ -106,6 +115,8 @@ MAX_PAGES = 5
 # eight times smaller. Set False to always take the photograph the agent put
 # first, whatever it weighs.
 PREFER_JPEG = True
+
+SPACES = re.compile(r"\s+")
 
 NEXT_DATA = re.compile(
     r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', re.DOTALL
@@ -338,7 +349,11 @@ def as_listing(row: Any, district: str) -> Listing | None:
     # link in an alert is the plain listing page.
     path = str(row.get("propertyUrl") or f"/properties/{listing_id}").split("#", 1)[0]
 
-    address = str(row.get("displayAddress") or "").strip()
+    # Whitespace collapsed, not merely stripped. Rightmove embeds newlines in
+    # some addresses — "Duke Shore Wharf,\n106 Narrow Street, E14" — and an
+    # alert is a list of one-line facts, so a line break in the middle of one
+    # of them breaks the shape of the whole message.
+    address = SPACES.sub(" ", str(row.get("displayAddress") or "")).strip()
     postcode = None
     stated = FULL_POSTCODE.search(address)
     if stated:
@@ -397,6 +412,11 @@ def as_listing(row: Any, district: str) -> Listing | None:
         # listing four times too small. See worker.units.
         floor_area_sqft=sqft_from(str(row.get("displaySize") or "")),
         raw={
+            # The alert's own "where" line reads `raw.address`, not the
+            # listing title — so without this key a Rightmove alert printed no
+            # address at all, while Zoopla's printed one. Same value as
+            # `title`, stored under the name the renderer looks for.
+            "address": address,
             "property_sub_type": str(row.get("propertySubType") or ""),
             "added_or_reduced": str(row.get("addedOrReduced") or ""),
             "update_reason": str(
@@ -488,6 +508,108 @@ def catches_in(page: str, district: str) -> Read:
     )
 
 
+PAGE_MODEL = "window.__PAGE_MODEL"
+
+# The one object in the flattened payload that carries an address. Matched on
+# its keys rather than its position, because the position is an artefact of
+# whatever the page happened to render.
+ADDRESS_KEYS = ("outcode", "incode")
+
+
+def page_model(page: str) -> dict[str, Any]:
+    """`window.__PAGE_MODEL` as a dict, or empty when it is not there.
+
+    Read by balancing braces rather than with a regular expression: the
+    assignment is followed by a hundred kilobytes of JSON containing every
+    bracket there is, and a greedy or lazy pattern gets either far too much or
+    far too little.
+    """
+
+    at = page.find(PAGE_MODEL)
+    if at < 0:
+        return {}
+    start = page.find("{", at)
+    if start < 0:
+        return {}
+
+    depth = 0
+    inside = False
+    escaped = False
+    for here in range(start, len(page)):
+        char = page[here]
+        if inside:
+            # Braces inside a string are not structure, and a quote after a
+            # backslash does not end the string.
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                inside = False
+            continue
+        if char == '"':
+            inside = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(page[start : here + 1])
+                except json.JSONDecodeError:
+                    return {}
+                return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def postcode_on(page: str, district: str) -> str | None:
+    """The listing's full postcode, from its own page. See the module note.
+
+    `district` is the outward code we already know from the search. It is used
+    to choose between candidates and to refuse a disagreement: a page can
+    carry panels for other properties, and a neighbour's postcode in the alert
+    would also put a wrong fingerprint into the duplicate rule.
+    """
+
+    model = page_model(page)
+    payload = model.get("data")
+    if not isinstance(payload, str):
+        return None
+    try:
+        flat = json.loads(payload)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(flat, list):
+        return None
+
+    def at(index: Any) -> Any:
+        # An entry is either an index into the array or the value itself.
+        if isinstance(index, int) and not isinstance(index, bool):
+            return flat[index] if 0 <= index < len(flat) else None
+        return index
+
+    found: set[str] = set()
+    for entry in flat:
+        if not isinstance(entry, dict):
+            continue
+        if not all(key in entry for key in ADDRESS_KEYS):
+            continue
+        outward = at(entry["outcode"])
+        inward = at(entry["incode"])
+        if not isinstance(outward, str) or not isinstance(inward, str):
+            continue
+        whole = postcode.tidy(outward, inward)
+        if whole:
+            found.add(whole)
+
+    wanted = district.strip().upper()
+    ours = {one for one in found if one.split(" ")[0] == wanted}
+    # Exactly one in the district we already know. None means the page did not
+    # say; several means it said more than one thing and guessing between them
+    # is how a neighbour's address ends up in somebody's alert.
+    return ours.pop() if len(ours) == 1 else None
+
+
 @dataclass(frozen=True)
 class Rightmove:
     """The portal, as `worker.sources.sweep.collect` needs it."""
@@ -498,6 +620,22 @@ class Rightmove:
     #: one page. See the note in worker.sources.sweep.
     dated: bool = True
     max_pages: int = MAX_PAGES
+
+    def postcode_for(
+        self, catch: Catch, get: Fetcher, stage: Stage
+    ) -> str | None:
+        """The full postcode, from the listing's own page.
+
+        Only reached for a listing whose search result stated none, which is
+        about two in three. See the module note for where it hides and why
+        finding it took two attempts.
+        """
+
+        del stage
+        district = catch.listing.postcode_district or ""
+        if not district:
+            return None
+        return postcode_on(get.get(catch.listing.url).body, district)
 
     def harvest(
         self,
@@ -586,8 +724,9 @@ class Rightmove:
 
 
 __all__ = [
-    "BASE", "KINDS", "MAX_PAGES", "NEITHER", "NEWEST_FIRST", "NOT_A_DWELLING", "PAGE_STEP",
-    "PREFER_JPEG", "SOURCE_KEY", "Read", "Rightmove", "a_dwelling",
-    "as_listing", "at", "catches_in", "kind_of", "monthly", "next_data",
-    "picture", "promoted", "results_in", "search_url", "when",
+    "ADDRESS_KEYS", "BASE", "KINDS", "MAX_PAGES", "NEITHER", "NEWEST_FIRST",
+    "NOT_A_DWELLING", "PAGE_MODEL", "PAGE_STEP", "PREFER_JPEG", "SOURCE_KEY",
+    "Read", "Rightmove", "a_dwelling", "as_listing", "at", "catches_in",
+    "kind_of", "monthly", "next_data", "page_model", "picture", "postcode_on",
+    "promoted", "results_in", "search_url", "when",
 ]
