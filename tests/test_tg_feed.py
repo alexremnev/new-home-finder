@@ -69,6 +69,66 @@ def test_the_map_pin_is_not_mistaken_for_the_listing() -> None:
     assert "maps.google" not in parsed.url
     assert parsed.raw["address"] == "Grove Green Road, Leyton E11"
 
+# OpenRent serves both of these for the same flat, and the feed carries the
+# long one. The number at the end is the listing; the number at the head of the
+# slug is a bedroom count.
+OPENRENT = (
+    "https://www.openrent.co.uk/property-to-rent/london/"
+    "2-bed-flat-discovery-dock-e14/3059105"
+)
+OPENRENT_SHORT = "https://www.openrent.co.uk/property-to-rent/london/3059105"
+
+
+def test_an_openrent_id_is_the_listing_and_not_the_bedroom_count() -> None:
+    # This captured "2" — the head of the slug. `listings` is UNIQUE
+    # (source_key, external_id), so every 2-bed OpenRent listing from the feed
+    # upserted onto one row: the flat was never stored, and `notifications`
+    # being UNIQUE (user_id, listing_id) meant nobody was told about it either.
+    parsed = parse(LISTING, [{"url": OPENRENT}], received_at=SENT)
+
+    assert parsed.source_key == "openrent"
+    assert parsed.external_id == "3059105"
+
+
+def test_the_short_openrent_url_still_works() -> None:
+    # The form the old pattern was written against. Both are served, so both
+    # have to parse.
+    parsed = parse(LISTING, [{"url": OPENRENT_SHORT}], received_at=SENT)
+    assert parsed.external_id == "3059105"
+
+
+def test_a_studio_or_a_room_is_not_lost_for_want_of_a_leading_digit() -> None:
+    # Their slugs start with a word, so the old pattern matched nothing at all
+    # and the message was counted unparseable rather than wrong.
+    for slug, expected in (
+        ("studio-flat-london-e14/3024812", "3024812"),
+        ("room-in-a-shared-flat-willis-house-e14/2937375", "2937375"),
+    ):
+        parsed = parse(
+            LISTING,
+            [{"url": f"https://www.openrent.co.uk/property-to-rent/london/{slug}"}],
+            received_at=SENT,
+        )
+        assert parsed.external_id == expected, slug
+
+
+def test_a_trailing_slash_or_a_tracking_parameter_does_not_shift_the_id() -> None:
+    for tail in ("/", "?utm_source=tg", "#photos"):
+        parsed = parse(LISTING, [{"url": OPENRENT + tail}], received_at=SENT)
+        assert parsed.external_id == "3059105", tail
+
+
+def test_an_openrent_url_with_no_id_is_refused() -> None:
+    # Better unparseable and counted than stored under a number that is not an
+    # id — that is the whole lesson of the bug above.
+    with pytest.raises(Unparseable, match="no listing link"):
+        parse(
+            LISTING,
+            [{"url": "https://www.openrent.co.uk/property-to-rent/london/2-bed-flat-e14"}],
+            received_at=SENT,
+        )
+
+
 def test_a_message_with_no_listing_link_is_refused() -> None:
     with pytest.raises(Unparseable, match="no listing link"):
         parse(LISTING, [{"url": None}], received_at=SENT)
@@ -197,3 +257,26 @@ class TestSize:
         parsed = parse(LISTING, BUTTONS, received_at=SENT, message_id=108177)
         # The fixture says "N/A", which is exactly the commonest case.
         assert parsed.floor_area_sqft is None
+
+
+def test_the_feed_falls_back_to_the_slug_for_an_openrent_address() -> None:
+    # The alert's "where" line reads `raw.address`, and the feed's OpenRent
+    # messages mostly state none — which is how an alert came to show a
+    # postcode, a price and no idea where the flat was. The url carries the
+    # building, so there is something to say without fetching anything.
+    from worker.ingest.parse import as_listing
+
+    text = LISTING.replace("🧭 **Address**: Grove Green Road, Leyton E11 📍 ", "")
+    parsed = parse(text, [{"url": OPENRENT}], received_at=SENT)
+    listing = as_listing(parsed)
+
+    assert listing.raw["address"] == "Discovery Dock"
+
+
+def test_what_the_message_states_beats_the_slug() -> None:
+    # The slug is a reconstruction: its punctuation and capitals are gone. What
+    # the message stated is what the portal stated, so it wins.
+    from worker.ingest.parse import as_listing
+
+    parsed = parse(LISTING, [{"url": OPENRENT}], received_at=SENT)
+    assert as_listing(parsed).raw["address"] == "Grove Green Road, Leyton E11"

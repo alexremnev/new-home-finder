@@ -215,6 +215,90 @@ def money(raw: str) -> float | None:
     except ValueError:
         return None
 
+# The address, which on this site exists only in the page's <h1>.
+#
+# Measured against four live pages on 2 October 2026, one of each shape the
+# slug can take, and the form held for all four:
+#
+#   2 Bed Flat, Discovery Dock, E14
+#   4 Bed Maisonette, Smythe St, E14
+#   Room in a Shared Flat, Willis House, E14
+#   Studio Flat, London, E14
+#
+# So: `<what it is>, <where it is>, <outcode>`. The first part is the bedroom
+# count and the type, which the alert prints on its own line, and the last is
+# the outcode, which it prints on the line above — which leaves the middle,
+# and the middle alone, as the thing that belongs on the "where" line.
+#
+# Not taken from the slug, although the same words are in it. `smythe-st`
+# title-cased is "Smythe St" by luck rather than by rule, and the heading is
+# what the landlord actually typed.
+HEADING = re.compile(r"<h1[^>]*>(.*?)</h1>", re.DOTALL | re.IGNORECASE)
+
+# What OpenRent puts where a building name would go when the landlord gave
+# none — see the studio above. "London" under a line already reading "E14" is
+# a line that says nothing, so there is no line.
+NO_PLACE = frozenset({"london", "greater london"})
+
+
+def address_in(markup: str) -> str | None:
+    """Where the listing is, out of the page's heading. See `HEADING`."""
+
+    found = HEADING.search(markup)
+    if not found:
+        return None
+
+    parts = [one.strip() for one in as_text(found.group(1)).split(",")]
+    # Three at a minimum. Anything shorter is not the form measured above, and
+    # deciding which half of two parts is the address would be a guess — so
+    # the honest answer is the one this had before: no address line.
+    if len(parts) < 3 or not OUTWARD.match(parts[-1]):
+        return None
+
+    middle = ", ".join(one for one in parts[1:-1] if one)
+    return None if not middle or middle.lower() in NO_PLACE else middle
+
+
+def place_in_slug(slug: str) -> str | None:
+    """The street or building out of a listing slug, title-cased.
+
+    The same `<n>-bed-<type>-<street or building>-<outcode>` shape `read_slug`
+    takes the type out of, read for the part in the middle.
+
+    Weaker than `address_in` and only for where there is no page to read it
+    from: a listing that reached us through the Telegram feed has its url and
+    whatever the message stated, and a message that stated no address left the
+    alert with no "where" line at all. The words here are the ones the landlord
+    typed; their punctuation and capitals are not, so "Smythe St" comes back
+    right and a flat number loses its comma.
+    """
+
+    head, _, tail = slug.rpartition("-")
+    if not OUTWARD.match(tail) or not head:
+        return None
+
+    words = head.lower()
+    if "room-in-a-shared" in words:
+        _, _, rest = words.partition("room-in-a-shared-")
+        # "flat" or "house" and then the place.
+        rest = rest.partition("-")[2]
+    elif words.startswith("studio"):
+        rest = words[len("studio"):].lstrip("-")
+        rest = rest[len("flat"):].lstrip("-") if rest.startswith("flat") else rest
+    else:
+        beds = re.match(r"\d+-bed", words)
+        if not beds:
+            return None
+        rest = words[beds.end():].lstrip("-")
+        for name, _kind in SLUG_KINDS:
+            if rest == name or rest.startswith(name + "-"):
+                rest = rest[len(name):].lstrip("-")
+                break
+
+    place = " ".join(one.capitalize() for one in rest.split("-") if one)
+    return None if not place or place.lower() in NO_PLACE else place
+
+
 def read_slug(slug: str) -> tuple[str, int, str | None] | None:
     """The district, the bedroom count and the type, from the URL alone."""
 
@@ -340,6 +424,10 @@ def as_listing(
             furnished = name
             break
 
+    # Read before `as_text` would be reused on the whole page: the heading is
+    # markup, and the one thing on this page that names the address.
+    address = address_in(html)
+
     return Listing(
         source_key=source_key,
         external_id=found.external_id,
@@ -359,9 +447,17 @@ def as_listing(
         postcode_district=found.district,
         # Every OpenRent listing is let by the landlord; that is the site.
         is_landlord_direct=True,
-        # The exact phrase from the url, kept because `property_type` is
-        # deliberately narrowed to four words for filtering.
-        raw={"slug": found.url.rsplit("/", 2)[-2] if "/" in found.url else ""},
+        title=address,
+        raw={
+            # The exact phrase from the url, kept because `property_type` is
+            # deliberately narrowed to four words for filtering.
+            "slug": found.url.rsplit("/", 2)[-2] if "/" in found.url else "",
+            # The alert's "where" line reads `raw.address` and not the listing
+            # title — the same key Rightmove and Zoopla write under. Without
+            # it an OpenRent alert printed no address at all, which is how this
+            # was noticed: a postcode, a price and no idea where the flat is.
+            "address": address or "",
+        },
     )
 
 def collect(
@@ -554,10 +650,12 @@ __all__ = [
     "SOURCE_KEY",
     "Found",
     "Sweep",
+    "address_in",
     "as_listing",
     "as_text",
     "collect",
     "listings_in",
+    "place_in_slug",
     "read_slug",
     "weigh",
     "when",

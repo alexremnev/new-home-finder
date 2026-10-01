@@ -22,6 +22,22 @@ FEED_READER = "tg_feed"
 
 def as_listing(parsed: tg_feed.Parsed) -> Listing:
 
+    raw = dict(parsed.raw)
+    # The alert's "where" line reads `raw.address`, and a feed message that
+    # states no Address or Location field leaves it empty — which on OpenRent
+    # is most of them. Its url carries the building in the slug, so there is
+    # something to say without fetching anything. Only as a fallback: what the
+    # message stated is what the portal stated, and this is a reconstruction.
+    #
+    # OpenRent only, because only its urls carry a slug. Imported from the
+    # reader that owns that shape rather than copied, the same way
+    # `openrent_v2` borrows `read_slug`.
+    if parsed.source_key == "openrent" and not raw.get("address"):
+        from worker.sources.openrent import place_in_slug
+
+        slug = parsed.url.rstrip("/").rsplit("/", 2)[-2] if "/" in parsed.url else ""
+        raw["address"] = place_in_slug(slug) or ""
+
     return Listing(
         source_key=parsed.source_key,
         external_id=parsed.external_id,
@@ -36,7 +52,7 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
         floor_area_sqft=parsed.floor_area_sqft,
         postcode=parsed.postcode,
         postcode_district=parsed.postcode_district,
-        raw=parsed.raw,
+        raw=raw,
     )
 
 # Bounded twice over. The job must not stall behind a slow portal, and at a

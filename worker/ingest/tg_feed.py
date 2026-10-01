@@ -19,10 +19,44 @@ FIELD = re.compile(
 
 MARKDOWN_LINK = re.compile(r"\s*📍?\s*\[[^\]]*\]\([^)]*\)\s*")
 
+# The listing id out of a portal url. Each pattern's first group is the id, and
+# `listings` is UNIQUE (source_key, external_id), so a pattern that captures the
+# wrong number does not fail — it merges flats.
+#
+# ── what OpenRent's used to capture ──────────────────────────────────────
+#
+# It was `property-to-rent/[^/]*/(\d+)`, which assumed the id sits one segment
+# after `property-to-rent`. It does on the short form the site also serves —
+# `/property-to-rent/london/3059105` — and it does not on the form the feed
+# actually carries:
+#
+#   /property-to-rent/london/2-bed-flat-discovery-dock-e14/3059105
+#
+# There `[^/]*` took `london` and `(\d+)` matched the next digits it could
+# reach, which are the bedroom count at the head of the slug. So every 2-bed
+# OpenRent listing from the feed arrived as external_id "2": the first one was
+# stored, and every one after it hit `ON CONFLICT (source_key, external_id)`,
+# updated that row's `last_seen_at` and returned its id — so the flat was never
+# stored, and `notifications` being UNIQUE (user_id, listing_id) meant nobody
+# was told about it either. Silently, and once per bedroom count for ever.
+#
+# Studios and rooms escaped that and were lost a different way: their slugs
+# start with a word rather than a digit, nothing matched at all, and the
+# message was counted unparseable.
+#
+# So the id is anchored to the END of the path instead of to a position after
+# the host. `[^?#]*?` is lazy and `(?:[/?#]|$)` pins the group to the last
+# segment, which is where OpenRent puts the id in both forms it serves.
 PORTALS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("rightmove", re.compile(r"rightmove\.co\.uk/properties/(\d+)", re.IGNORECASE)),
     ("zoopla", re.compile(r"zoopla\.co\.uk/to-rent/details/(\d+)", re.IGNORECASE)),
-    ("openrent", re.compile(r"openrent\.co\.uk/property-to-rent/[^/]*/(\d+)", re.IGNORECASE)),
+    (
+        "openrent",
+        re.compile(
+            r"openrent\.co\.uk/property-to-rent/[^?#]*?/(\d+)(?:[/?#]|$)",
+            re.IGNORECASE,
+        ),
+    ),
 )
 
 MONEY = re.compile(r"£\s*([\d,]+)")

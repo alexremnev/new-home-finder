@@ -3,9 +3,11 @@ from __future__ import annotations
 from datetime import date
 
 from worker.sources.openrent import (
+    address_in,
     as_listing,
     as_text,
     listings_in,
+    place_in_slug,
     read_slug,
     weigh,
     when,
@@ -136,6 +138,85 @@ class FakeConn:
 
 def only(district: str = "SE16") -> object:
     return [one for one in listings_in(SITEMAP) if one.district == district][0]
+
+# The four heading shapes, from live pages on 2 October 2026 — one for each
+# form the slug can take. The alert prints the bedroom count, the type and the
+# outcode on lines of their own, so what is wanted is the middle.
+LIVE_HEADINGS = {
+    "2 Bed Flat, Discovery Dock, E14": "Discovery Dock",
+    "4 Bed Maisonette, Smythe St, E14": "Smythe St",
+    "Room in a Shared Flat, Willis House, E14": "Willis House",
+    # No building name was given, so OpenRent writes the city. "London" under
+    # a line already reading "E14" is not worth a line.
+    "Studio Flat, London, E14": None,
+}
+
+
+def test_the_address_is_the_middle_of_the_heading() -> None:
+    for heading, expected in LIVE_HEADINGS.items():
+        assert address_in(f"<h1>{heading}</h1>") == expected, heading
+
+
+def test_a_flat_number_stays_with_its_building() -> None:
+    # More than three parts: everything between the type and the outcode is
+    # the address, because dropping any of it would move the flat.
+    assert address_in("<h1>1 Bed Flat, Flat 2, St Cuthbert House, SE16</h1>") == (
+        "Flat 2, St Cuthbert House"
+    )
+
+
+def test_a_heading_of_another_shape_yields_no_address() -> None:
+    # Two parts could be either way round, and guessing would put a property
+    # type on the "where" line. No line is the answer this had before.
+    assert address_in("<h1>2 Bed Flat, E14</h1>") is None
+    assert address_in("<h1>Something else entirely</h1>") is None
+    assert address_in("<p>no heading at all</p>") is None
+    # The last part has to be an outcode, or the shape is not the measured one.
+    assert address_in("<h1>2 Bed Flat, Discovery Dock, London</h1>") is None
+
+
+def test_the_alert_can_say_where_an_openrent_listing_is() -> None:
+    # The bug this exists to stop coming back: `listing_view` reads the "where"
+    # line out of `raw.address`, the key Rightmove and Zoopla both write, and
+    # OpenRent wrote only a slug — so its alerts showed a postcode, a price and
+    # no address at all.
+    listing = as_listing(only(), PAGE)
+
+    assert listing is not None
+    assert listing.raw["address"] == "Rotherhithe Street"
+    assert listing.title == "Rotherhithe Street"
+
+
+def test_a_page_with_no_usable_heading_still_becomes_a_listing() -> None:
+    # The address is worth having and worth nothing next to the listing: a
+    # heading nobody can read must not cost the alert itself.
+    page = PAGE.replace("<h1>2 Bed Flat, Rotherhithe Street, SE16</h1>", "")
+    listing = as_listing(only(), page)
+
+    assert listing is not None
+    assert listing.raw["address"] == ""
+    assert listing.title is None
+
+
+def test_the_slug_names_the_place_when_there_is_no_page_to_read() -> None:
+    # The feed has a url and nothing else. Every shape the slug takes, with the
+    # type stripped off the front and the outcode off the back.
+    cases = {
+        "2-bed-flat-discovery-dock-e14": "Discovery Dock",
+        "4-bed-maisonette-smythe-st-e14": "Smythe St",
+        "room-in-a-shared-flat-willis-house-e14": "Willis House",
+        "1-bed-flat-st-cuthbert-house-se16": "St Cuthbert House",
+        # The longest type wins, or "house" would be left on the front of the
+        # address — the same rule `read_slug` needs for the same reason.
+        "2-bed-terraced-house-rotherhithe-street-se16": "Rotherhithe Street",
+        "studio-craven-street-wc2n": "Craven Street",
+        # No building name given, so there is nothing worth a line.
+        "studio-flat-london-e14": None,
+        "nonsense": None,
+    }
+    for slug, expected in cases.items():
+        assert place_in_slug(slug) == expected, slug
+
 
 def test_a_script_or_style_never_becomes_text() -> None:
 
