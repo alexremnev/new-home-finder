@@ -7,12 +7,6 @@ import {
 } from "./bodies";
 import { Panel, PanelWait } from "./panel";
 import { DEFAULT_SPAN, spanFrom } from "./span";
-import {
-  refreshDuplicates, refreshFaults, refreshFeeds, refreshHealth, refreshJobs,
-  refreshFeedVersusScrapers, refreshPortals,
-  refreshLastRuns, refreshListings, refreshLog, refreshMessages, refreshQueue,
-  refreshRuns,
-} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -23,13 +17,12 @@ export default async function SystemPage({
 }) {
   const params = await searchParams;
   const span = spanFrom(params.w ?? DEFAULT_SPAN).key;
-  const page = Math.max(1, Number(params.p ?? 1) || 1);
   const job = params.job || undefined;
   const level = params.level || undefined;
 
   return (
     <>
-      <Panel wide refresh={refreshHealth.bind(null, span)}>
+      <Panel wide>
         <Suspense fallback={<PanelWait />}>
           <Health span={span} />
         </Suspense>
@@ -40,7 +33,6 @@ export default async function SystemPage({
         foldable
         title="Problems"
         why="Проверки, которые смотрят дальше кода возврата задачи: встала ли очередь, есть ли куда отправлять, не сменил ли источник формат. Задача может завершиться успешно и при этом ничего не сделать. Периоды у проверок свои, не зависящие от выбранного сверху: ошибки задач — за 48 часов, неразобранные сообщения — за 7 дней, «ничего не прочитано» — порог 6 часов, «доставка встала» — очередь старше часа. Дата в строке — последний раз, когда это случилось."
-        refresh={refreshFaults}
       >
         <Suspense fallback={<PanelWait />}>
           <Faults />
@@ -51,7 +43,7 @@ export default async function SystemPage({
         <h1>System</h1>
       </div>
 
-      <Panel wide refresh={refreshFeeds.bind(null, span)}>
+      <Panel wide>
         <Suspense fallback={<PanelWait />}>
           <Feeds span={span} />
         </Suspense>
@@ -61,7 +53,6 @@ export default async function SystemPage({
         wide
         title="Portal scrapers"
         why="Отдельная строка на каждый читатель, который сам ходит на сайт портала. «Нашёл первым» — сколько объявлений этот скрапер увидел раньше всех остальных, включая Telegram-фид; это и есть его настоящий вклад. «Увидел» — сколько всего попалось, вместе с тем, что кто-то нашёл раньше. «Записал» — сколько новых строк он создал: меньше, чем увидел, потому что объявление, которое фид опубликовал минутой раньше, уже лежит в базе. «Отправлено» — сколько из этого действительно ушло подписчикам: расхождение с «записал» нормально для района, который ещё дочитывается, и это первое, на что смотреть, если скрапер занят, а уведомлений нет. Трафик — из счётчика libcurl, то есть ровно то, что прошло по сети в сжатом виде, а не размер распакованных страниц. Строка под таблицей отдельно показывает, сколько ушло через резидентский прокси: эту цифру нужно сверять со счётом DataImpulse. У каждого скрапера свой таймер со сдвигом на семь минут, чтобы три обхода не сходились на сервере в одну минуту."
-        refresh={refreshPortals.bind(null, span)}
       >
         <Suspense fallback={<PanelWait />}>
           <Portals span={span} />
@@ -72,7 +63,6 @@ export default async function SystemPage({
         wide
         title="Feed versus scrapers"
         why="Можно ли выключить Telegram-источник. Колонки: «всего» — объявлений этого портала за период; «оба» — их видели и фид, и скрапер; «фид» — видел только фид; «пропущено» — те из них, что лежали в районе, который скрапер читает, и это единственная колонка, которая означает промах: объявление в районе, который никто не выбрал, скрапер не смотрит по замыслу; «скрапер» — видел только скрапер. «Кто раньше» — сколько раз первым был скрапер против фида и медианная разница: читатель, который находит всё, но на пять минут позже, для уведомлений заменой не является. Группировка идёт по id объявления на портале, а не по строке в базе: для Rightmove и Zoopla фид и скрапер пишут в одну строку, а у OpenRent старый и новый читатели — две строки с одним номером. Задним числом ничего не восстановлено, поэтому период раньше начала учёта покажет ноль не потому, что промахов не было."
-        refresh={refreshFeedVersusScrapers.bind(null, span)}
       >
         <Suspense fallback={<PanelWait />}>
           <FeedVersusScrapers span={span} />
@@ -83,14 +73,13 @@ export default async function SystemPage({
         wide
         title="Duplicates across portals"
         why="Копией считается объявление с тем же полным индексом, той же ценой и тем же числом спален и ванных, что у более раннего объявления, впервые увиденного в тот же лондонский день, — и обязательно с другого портала. Одна и та же квартира приходит и с Rightmove, и с Zoopla: отправляется та, что пришла первой, вторая сохраняется ради своей ссылки, но помечается и не уходит никому. Два объявления с одного портала копиями не считаются — это, как правило, дом-новостройка, где сорок одинаковых квартир действительно сдаются отдельно. Объявления без полного индекса не сравниваются вовсе. Эти копии исключены и из счёта по районам, и из общего числа новых объявлений за день."
-        refresh={refreshDuplicates.bind(null, span)}
       >
         <Suspense fallback={<PanelWait />}>
           <Duplicates span={span} />
         </Suspense>
       </Panel>
 
-      <Panel wide refresh={refreshJobs.bind(null, span)}>
+      <Panel wide>
         <Suspense fallback={<PanelWait />}>
           <Jobs span={span} />
         </Suspense>
@@ -100,7 +89,6 @@ export default async function SystemPage({
         wide
         title="Runs"
         why="Каждый столбик — окно времени. Зелёное: прогоны завершились успешно. Красное: упали или прошли с ошибками. Так видно разницу между «сломалось один раз» и «сломано весь день»."
-        refresh={refreshRuns.bind(null, span)}
       >
         <Suspense fallback={<PanelWait />}>
           <RunsChart span={span} />
@@ -111,7 +99,6 @@ export default async function SystemPage({
         <Panel
           title="Messages read"
           why="Сообщения, прочитанные из фида. Ровно это делает ingest: если линия на нуле, а задача зелёная — значит в канале тихо, а не сломано."
-          refresh={refreshMessages.bind(null, span)}
         >
           <Suspense fallback={<PanelWait />}>
             <MessagesRead span={span} />
@@ -121,7 +108,6 @@ export default async function SystemPage({
         <Panel
           title="Listings created"
           why="Сколько из прочитанных сообщений стало объявлениями. Расхождение с предыдущим графиком — это дубли и то, что парсер не понял."
-          refresh={refreshListings.bind(null, span)}
         >
           <Suspense fallback={<PanelWait />}>
             <ListingsCreated span={span} />
@@ -129,7 +115,7 @@ export default async function SystemPage({
         </Panel>
       </div>
 
-      <Panel wide refresh={refreshQueue.bind(null, span)}>
+      <Panel wide>
         <Suspense fallback={<PanelWait />}>
           <QueueTiles span={span} />
         </Suspense>
@@ -139,7 +125,6 @@ export default async function SystemPage({
         wide
         title="Last runs"
         why="Отдельные прогоны, свежие сверху, последние двенадцать независимо от выбранного периода. Trigger показывает, кто запустил: schedule — таймер, manual — вы руками. skipped_locked значит, что предыдущий прогон ещё шёл, и это норма, а не сбой."
-        refresh={refreshLastRuns}
       >
         <Suspense fallback={<PanelWait />}>
           <LastRuns />
@@ -150,10 +135,9 @@ export default async function SystemPage({
         wide
         title="Run log"
         why="По одной строке на прогон, а не на запись в логе. Раньше было наоборот, и одна затянувшаяся поломка забивала панель одним и тем же предложением тридцать восемь раз, вытесняя всё остальное. Строка говорит: задача, чем кончился прогон, сколько шёл, на какой машине, что успел сделать (числа из счётчиков прогона) и самое плохое, что он сказал — ошибки раньше предупреждений. «no result recorded» означает, что прогон не записал итог вовсе: убитый процесс не может вернуться и дописать свою строку, и именно так выглядит падение. Кнопка «only with problems» оставляет прогоны, которые упали, прошли с ошибками, что-то залогировали или не вернулись. Отдельные строки лога не потеряны — здесь показана худшая из них."
-        refresh={refreshLog.bind(null, span, job, level, page)}
       >
         <Suspense fallback={<PanelWait />}>
-          <LogLines span={span} job={job} level={level} page={page} />
+          <LogLines span={span} job={job} level={level} />
         </Suspense>
       </Panel>
     </>

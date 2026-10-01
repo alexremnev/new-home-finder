@@ -9,8 +9,8 @@ export type Range = 1 | 7 | 30 | 90;
  * so every page and every query means the same thing by "1w".
  *
  *   * `mins` / `endMins` — minutes before now, for the timestamp columns.
- *     `endMins` is 0 for every range that ends now, which is all of them except
- *     Yesterday. Both bounds are needed because Yesterday ends at midnight.
+ *     `endMins` is 0 for a rolling window, which is every preset; both bounds
+ *     are needed because an absolute range can also have ended in the past.
  *   * `fromDay` / `toDay` — inclusive London dates, for the tables keyed on a
  *     DATE: `site_visits.day` and `district_days.day`.
  */
@@ -69,7 +69,11 @@ export async function planMix(): Promise<Slice[]> {
   );
 }
 
-export async function byDistrict(win: Win, limit = 12): Promise<Slice[]> {
+export async function byDistrict(
+  win: Win,
+  limit = 12,
+  offset = 0,
+): Promise<Slice[]> {
   return query<Slice>(
     `SELECT coalesce(l.postcode_district, '—') AS label, count(*)::int AS value
        FROM notifications n
@@ -79,8 +83,8 @@ export async function byDistrict(win: Win, limit = 12): Promise<Slice[]> {
         AND n.sent_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1
       ORDER BY 2 DESC
-      LIMIT $3`,
-    [Math.round(win.mins), Math.round(win.endMins), limit],
+      LIMIT $3 OFFSET $4`,
+    [Math.round(win.mins), Math.round(win.endMins), limit, offset],
   );
 }
 
@@ -203,13 +207,14 @@ export type Payment = {
   created_at: string;
 };
 
-export async function recentPayments(): Promise<Payment[]> {
+export async function recentPayments(limit = 25, offset = 0): Promise<Payment[]> {
   return query<Payment>(
     `SELECT id, user_id, plan, amount_pence, provider, granted_days, granted_by,
             created_at::text
        FROM payments
       ORDER BY created_at DESC
-      LIMIT 50`,
+      LIMIT $1 OFFSET $2`,
+    [limit, offset],
   );
 }
 
@@ -220,13 +225,14 @@ export type Comp = {
   created_at: string;
 };
 
-export async function recentComps(): Promise<Comp[]> {
+export async function recentComps(limit = 10, offset = 0): Promise<Comp[]> {
   return query<Comp>(
     `SELECT id, user_id, detail, created_at::text
        FROM admin_actions
       WHERE action = 'extend_plan'
       ORDER BY created_at DESC
-      LIMIT 20`,
+      LIMIT $1 OFFSET $2`,
+    [limit, offset],
   );
 }
 
@@ -241,7 +247,7 @@ export type Run = {
   error: string | null;
 };
 
-export async function recentRuns(limit = 20): Promise<Run[]> {
+export async function recentRuns(limit = 20, offset = 0): Promise<Run[]> {
   return query<Run>(
     `SELECT id, job, trigger, status,
             started_at::text,
@@ -249,8 +255,8 @@ export async function recentRuns(limit = 20): Promise<Run[]> {
             counters, error
        FROM job_runs
       ORDER BY started_at DESC
-      LIMIT $1`,
-    [limit],
+      LIMIT $1 OFFSET $2`,
+    [limit, offset],
   );
 }
 
@@ -397,7 +403,11 @@ export type Delivered = {
   url: string | null;
 };
 
-export async function deliveredTo(userId: number, limit = 50): Promise<Delivered[]> {
+export async function deliveredTo(
+  userId: number,
+  limit = 25,
+  offset = 0,
+): Promise<Delivered[]> {
   return query<Delivered>(
     `SELECT n.id, n.status, n.error, n.created_at::text, n.sent_at::text,
             l.price_pcm, l.bedrooms, l.postcode_district AS district, l.url
@@ -405,8 +415,8 @@ export async function deliveredTo(userId: number, limit = 50): Promise<Delivered
        LEFT JOIN listings l ON l.id = n.listing_id
       WHERE n.user_id = $1
       ORDER BY n.created_at DESC
-      LIMIT $2`,
-    [userId, limit],
+      LIMIT $2 OFFSET $3`,
+    [userId, limit, offset],
   );
 }
 
@@ -436,11 +446,18 @@ export type Touch = {
   created_at: string;
 };
 
-export async function historyOf(userId: number): Promise<Touch[]> {
+export async function historyOf(
+  userId: number,
+  limit = 15,
+  offset = 0,
+): Promise<Touch[]> {
   return query<Touch>(
     `SELECT id, action, detail, created_at::text
-       FROM admin_actions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
-    [userId],
+       FROM admin_actions
+      WHERE user_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2 OFFSET $3`,
+    [userId, limit, offset],
   );
 }
 
@@ -1177,6 +1194,7 @@ export async function visitorsBy(
   win: Win,
   facet: VisitFacet,
   limit = 12,
+  offset = 0,
 ): Promise<VisitSlice[]> {
   const columns: Record<VisitFacet, string> = {
     source: "source", referrer: "referrer", campaign: "campaign",
@@ -1192,8 +1210,8 @@ export async function visitorsBy(
       WHERE day BETWEEN $1::date AND $2::date
       GROUP BY ${column}
       ORDER BY visitors DESC, name
-      LIMIT $3`,
-    [win.fromDay, win.toDay, limit],
+      LIMIT $3 OFFSET $4`,
+    [win.fromDay, win.toDay, limit, offset],
   ).catch(() => []);
 }
 

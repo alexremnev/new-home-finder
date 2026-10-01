@@ -888,8 +888,7 @@ form p.error {
 
 .filter-group a:hover { border-color: var(--accent); text-decoration: none; }
 
-.filter-group a.range-on,
-.live-choices button.range-on {
+.filter-group a.range-on {
   border-color: var(--ink);
   background: var(--ink);
   color: #fff;
@@ -931,37 +930,6 @@ form p.error {
   align-items: center;
   gap: 0.75rem;
 }
-
-.live {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-.live-age {
-  color: var(--ink-soft);
-  font-size: 0.75rem;
-  font-variant-numeric: tabular-nums;
-  min-width: 4.5rem;
-  text-align: right;
-}
-
-.live-age.stale { color: var(--bad); font-weight: 600; }
-
-.live-choices { display: flex; gap: 0.2rem; }
-
-.live-choices button {
-  padding: 0.25rem 0.55rem;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--card);
-  color: var(--ink-soft);
-  font: inherit;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-
-.live-choices button:hover { border-color: var(--accent); }
 
 @media (max-width: 52rem) {
   .filters { gap: 0.5rem 0.75rem; }
@@ -1307,22 +1275,61 @@ form p.error {
   font-variant-numeric: tabular-nums;
 }
 
-/* The bar and the range row below it stay put together. Sticking them
-   separately would mean knowing the bar's height in CSS, and it changes with
-   the viewport. */
-.dash-top {
+/* The range lives in the bar now, so the bar is the only thing that has to
+   stay put, and it can stick on its own. */
+.dash-bar {
   position: sticky;
   top: 0;
   z-index: 10;
-}
-
-.dash-bar {
   display: flex;
   align-items: center;
   gap: 1rem;
   padding: 0.5rem 1rem;
   border-bottom: 1px solid var(--d-line);
   background: var(--d-card);
+}
+
+/* ── while the range is changing ────────────────────────────────────────── */
+
+/* Changing the range re-queries every panel. The body dims rather than
+   emptying — the numbers on screen are still the answer to the previous
+   question, and they are replaced one panel at a time as the queries land. */
+.dash-busy .dash-body {
+  opacity: 0.55;
+  pointer-events: none;
+  transition: opacity 120ms ease-out;
+}
+
+/* And a line across the top, because a dimmed page alone does not say that
+   something is on its way. */
+.dash-busy .dash-bar::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--d-accent) 50%,
+    transparent 100%
+  );
+  background-repeat: no-repeat;
+  background-size: 40% 100%;
+  animation: dash-sweep 1.1s ease-in-out infinite;
+}
+
+/* Moved by background-position rather than by a transform: the line stays
+   inside the bar, which therefore does not need an overflow rule that would
+   also clip the open range menu. */
+@keyframes dash-sweep {
+  from { background-position: -40% 0; }
+  to   { background-position: 140% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-busy .dash-bar::after { animation: none; opacity: 0.6; }
 }
 
 .dash-bar-right {
@@ -1357,6 +1364,180 @@ form p.error {
   color: var(--d-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* ── the time range ─────────────────────────────────────────────────────── */
+
+/* Top right of the bar, as a dropdown. Sixteen chips in a row of their own
+   used to push every page down by a line and still not fit a phone; a menu
+   costs one click and has room for the calendar as well. */
+.range { position: relative; }
+
+/* Reserved while the picker is still streaming in, so the bar's contents do
+   not jump sideways when it arrives. */
+.range-slot { width: 9.5rem; height: 28px; }
+
+.dash .range-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  height: 28px;
+  padding: 0 0.6rem;
+  border: 1px solid var(--d-line);
+  border-radius: 6px;
+  background: var(--d-card);
+  box-shadow: none;
+  color: var(--d-ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.dash .range-button:hover,
+.dash .range-button-on {
+  border-color: var(--d-accent);
+  background: var(--d-card);
+  color: var(--d-accent);
+}
+
+.range-clock { width: 13px; height: 13px; flex: none; }
+.range-chevron { color: var(--d-faint); font-size: 9px; }
+
+/* A date range spells out both ends, which is wider than the bar can give it
+   on a small screen. */
+.range-label {
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The same dot the body's dim means: the range is changing. On the button as
+   well as on the body, because the button is where the click happened. */
+.range-working {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--d-accent);
+  animation: range-pulse 900ms ease-in-out infinite;
+}
+
+@keyframes range-pulse {
+  50% { opacity: 0.25; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .range-working { animation: none; }
+}
+
+.range-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  width: 15rem;
+  padding: 0.3rem;
+  border: 1px solid var(--d-line);
+  border-radius: 8px;
+  background: var(--d-card);
+  box-shadow: 0 10px 28px rgb(28 35 48 / 14%);
+}
+
+.range-list { margin: 0; padding: 0; list-style: none; }
+
+.dash .range-pick {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  box-shadow: none;
+  color: var(--d-ink);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dash .range-pick:hover { background: var(--d-bg); color: var(--d-ink); }
+
+.dash .range-pick-on {
+  background: var(--d-bg);
+  color: var(--d-accent);
+  font-weight: 600;
+}
+
+.range-rule {
+  height: 1px;
+  margin: 0.3rem 0.2rem;
+  background: var(--d-line);
+}
+
+/* ── the calendar ───────────────────────────────────────────────────────── */
+
+.range-calendar { display: grid; gap: 0.4rem; padding: 0.2rem; }
+
+.dash .range-back {
+  justify-self: start;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+  color: var(--d-soft);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.dash .range-back:hover { background: none; color: var(--d-accent); }
+
+.range-calendar label {
+  display: grid;
+  gap: 0.2rem;
+  color: var(--d-soft);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.range-calendar input {
+  width: 100%;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--d-line);
+  border-radius: 5px;
+  background: var(--d-card);
+  color: var(--d-ink);
+  font: inherit;
+  font-size: 12px;
+}
+
+.range-calendar input:focus-visible { outline: 2px solid var(--d-accent); }
+
+.range-note { margin: 0; color: var(--d-faint); font-size: 11px; }
+
+.dash .range-apply {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--d-ink);
+  border-radius: 5px;
+  background: var(--d-ink);
+  box-shadow: none;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dash .range-apply:disabled {
+  border-color: var(--d-line);
+  background: var(--d-line);
+  color: var(--d-faint);
+  cursor: not-allowed;
 }
 
 .dash .sign-out:focus-visible {
@@ -1477,63 +1658,6 @@ form p.error {
   margin: 0;
 }
 
-/* A head with no title still holds its button at the right. */
-.panel-head:not(:has(> h2)) { justify-content: flex-end; margin-bottom: 0.35rem; }
-
-.panel-refresh {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 1px solid var(--d-line);
-  border-radius: 5px;
-  background: var(--d-card);
-  color: var(--d-soft);
-  cursor: pointer;
-}
-
-.panel-refresh:hover:not(:disabled) {
-  border-color: var(--d-accent);
-  color: var(--d-accent);
-}
-
-/* Not faded to nothing while it turns: the spinner is the feedback, and a
-   ghosted button reads as broken. */
-.panel-refresh:disabled { cursor: progress; color: var(--d-accent); }
-
-.panel-spin { width: 14px; height: 14px; }
-
-.panel-spin-on { animation: panel-turn 700ms linear infinite; }
-
-@keyframes panel-turn {
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .panel-spin-on { animation-duration: 2s; }
-}
-
-/* A refresh that failed leaves the old numbers and says so here, rather than
-   replacing a card that was working with an error. */
-.panel-warn {
-  position: absolute;
-  top: -4px;
-  right: -4px;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: var(--d-bad);
-  color: #fff;
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 11px;
-  text-align: center;
-}
-
 /* While a card's first query runs. Sized so the page does not jump when the
    contents arrive. */
 .panel-wait {
@@ -1637,32 +1761,6 @@ form p.error {
 .win:hover { background: var(--d-bg); text-decoration: none; }
 .win-on { background: var(--d-ink); color: #fff; }
 .win-on:hover { background: var(--d-ink); color: #fff; }
-
-/* The one range for the whole dashboard, directly under the bar. Sixteen
-   choices do not fit a phone, so the row scrolls rather than wrapping into
-   three lines that push every page down. */
-.dash-span {
-  display: flex;
-  padding: 0.45rem 1rem;
-  border-bottom: 1px solid var(--d-line);
-  background: var(--d-card);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.dash-span::-webkit-scrollbar { display: none; }
-
-.span-picker {
-  display: inline-flex;
-  flex: none;
-  overflow: hidden;
-  border: 1px solid var(--d-line);
-  border-radius: 6px;
-  background: var(--d-card);
-}
-
-/* Same chip as the old per-page pickers, so nothing had to be relearned. */
-.span-picker .win { white-space: nowrap; }
 
 .dash-head {
   display: flex;
@@ -1837,26 +1935,43 @@ form p.error {
 
 .card-head h2 { margin: 0; }
 
-.pager {
+/* ── show more ──────────────────────────────────────────────────────────── */
+
+/* Under a list, not around it: the next page is appended, so there is one
+   control and it is always in the same place. */
+.more {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.6rem;
   margin-top: 0.6rem;
-  color: var(--d-soft);
-  font-size: 12px;
 }
 
-.pager a {
-  padding: 0.2rem 0.5rem;
+.more-button {
+  padding: 0.3rem 0.8rem;
   border: 1px solid var(--d-line);
-  border-radius: 5px;
+  border-radius: 6px;
+  background: var(--d-card);
   color: var(--d-ink);
-  text-decoration: none;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
-.pager a:hover { background: var(--d-bg); text-decoration: none; }
-.pager .off { border-color: #eef0f3; color: var(--d-faint); pointer-events: none; }
+.more-button:hover:not(:disabled) {
+  border-color: var(--d-accent);
+  color: var(--d-accent);
+}
+
+/* Not faded while it loads: the word changes to say so, and a ghosted button
+   reads as broken. */
+.more-button:disabled { cursor: progress; color: var(--d-soft); }
+
+.more-count {
+  color: var(--d-faint);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── what a thing means ─────────────────────────────────────────────────── */
 
@@ -1939,8 +2054,13 @@ form p.error {
 
 /* ── dashboard buttons ─────────────────────────────────────────────────────
    Their own style, now that the site's is scoped to .site. Small, quiet, and
-   the width of their label — a dashboard action is not a call to action. */
-.dash button:not(.why):not(.sign-out),
+   the width of their label — a dashboard action is not a call to action.
+
+   The exceptions are listed here rather than fought with elsewhere: this
+   selector carries three classes and an element, so a rule written with one
+   class loses to it however late it appears. Anything with its own shape —
+   the help mark, Sign out, the range picker, Show more — says so here. */
+.dash button:not(.why):not(.sign-out):not(.range-button):not(.range-pick):not(.range-back):not(.range-apply):not(.more-button),
 .dash input[type="text"],
 .dash input[type="number"],
 .dash select {
@@ -1953,12 +2073,12 @@ form p.error {
   font-size: 12px;
 }
 
-.dash button:not(.why):not(.sign-out) { cursor: pointer; font-weight: 600; }
-.dash button:not(.why):not(.sign-out):hover:not(:disabled) {
+.dash button:not(.why):not(.sign-out):not(.range-button):not(.range-pick):not(.range-back):not(.range-apply):not(.more-button) { cursor: pointer; font-weight: 600; }
+.dash button:not(.why):not(.sign-out):not(.range-button):not(.range-pick):not(.range-back):not(.range-apply):not(.more-button):hover:not(:disabled) {
   border-color: var(--d-faint);
   background: var(--d-bg);
 }
-.dash button:not(.why):not(.sign-out):disabled {
+.dash button:not(.why):not(.sign-out):not(.range-button):not(.range-pick):not(.range-back):not(.range-apply):not(.more-button):disabled {
   color: var(--d-faint);
   cursor: not-allowed;
 }
@@ -2502,8 +2622,6 @@ form p.error {
 
 .grid th.sortable button:hover { color: var(--d-ink, inherit); text-decoration: underline; }
 .grid th.num.sortable button { text-align: right; }
-
-.pager button:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* A panel that folds away. Open by default — a problem nobody sees is a problem
    nobody fixes — but foldable, because it sits above everything else. */

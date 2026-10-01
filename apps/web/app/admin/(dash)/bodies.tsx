@@ -2,21 +2,25 @@ import Link from "next/link";
 
 import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries";
 import {
-  delivery, duplicates, intakePoints, jobStates, knownJobs, logPage,
+  delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
   runLog, runPoints, scrapeBytes, sightingsSince, sourceFeeds,
   unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
 
+import { jobStatesOnce, windowFor } from "./cached";
 import { Metric, RunBars, Series, Why } from "./charts";
-import { bucketMinutes, spanFrom, spanWords } from "./span";
+import { Paged, type MorePage } from "./paged";
+import { moreFaults, moreLastRuns, moreLog } from "./more";
+import { bucketMinutes, spanWords } from "./span";
 
 // What each card on the System tab contains, one component each.
 //
 // The page renders these inside Suspense, so twelve queries run in parallel and
-// the page arrives without waiting for the slowest; each card's refresh action
-// renders the same component again for that card alone. See ./panel.tsx.
+// the page arrives without waiting for the slowest. The lists among them each
+// render their first page here and the rest through a server action, appended
+// in place by ./paged.tsx.
 
 // Named and ordered here, not taken from whatever the database happens to
 // return: a source that has never produced anything still needs a panel, and a
@@ -61,9 +65,9 @@ const FEEDS: {
   },
 ];
 
-// Ten is enough to see what is wrong. Uncapped, one repeating check buries
-// every other kind — and the kinds are the information.
-const FAULTS_SHOWN = 10;
+// Ten at a time is enough to see what is wrong. Shown all at once, one
+// repeating check buries every other kind — and the kinds are the information.
+const FAULTS_PER_PAGE = 10;
 
 // Bytes as somebody reads them. One decimal, because the second never changed
 // a decision.
@@ -153,8 +157,8 @@ const LEVEL_TONE: Record<string, string> = {
 };
 
 export async function Health({ span }: { span: string }) {
-  const win = spanFrom(span);
-  const jobs = await jobStates(win);
+  const win = windowFor(span);
+  const jobs = await jobStatesOnce(win);
 
   // A job counts as broken when its most recent run was not successful, and as
   // silent when it has not run at all in the window. Both are degraded; the
@@ -186,37 +190,51 @@ export async function Health({ span }: { span: string }) {
   );
 }
 
-export async function Faults() {
+// The checks return a handful of grouped rows, so the whole list is fetched and
+// cut here rather than paged in SQL. The cut is still worth having: one noisy
+// check would otherwise bury every other one.
+export async function faultsPage(page: number): Promise<MorePage & { total: number }> {
   const faults = await problems().catch(() => []);
-  if (faults.length === 0) {
+  const from = (page - 1) * FAULTS_PER_PAGE;
+  const shown = faults.slice(from, from + FAULTS_PER_PAGE);
+
+  return {
+    total: faults.length,
+    more: faults.length > from + FAULTS_PER_PAGE,
+    rows: shown.map((fault) => (
+      <div key={fault.kind + fault.detail} className="log-line">
+        <span className="log-when">{at(fault.last_at)}</span>
+        <span className="log-level bad">{fault.kind}</span>
+        <span className="log-message">
+          {fault.detail}
+          {fault.count > 1 ? ` · ×${fault.count}` : ""}
+        </span>
+      </div>
+    )),
+  };
+}
+
+export async function Faults() {
+  const first = await faultsPage(1);
+  if (first.total === 0) {
     return <p className="hint">Nothing is wrong that these checks can see.</p>;
   }
 
   return (
-    <>
-      {faults.slice(0, FAULTS_SHOWN).map((fault) => (
-        <div key={fault.kind + fault.detail} className="log-line">
-          <span className="log-when">{at(fault.last_at)}</span>
-          <span className="log-level bad">{fault.kind}</span>
-          <span className="log-message">
-            {fault.detail}
-            {fault.count > 1 ? ` · ×${fault.count}` : ""}
-          </span>
-        </div>
-      ))}
-
-      {faults.length > FAULTS_SHOWN && (
-        <p className="hint">
-          {faults.length - FAULTS_SHOWN} more of the same kind, not shown. The
-          list is capped so one noisy check cannot bury the rest.
-        </p>
-      )}
-    </>
+    <Paged
+      load={moreFaults}
+      more={first.more}
+      per={FAULTS_PER_PAGE}
+      total={first.total}
+      unit="checks"
+    >
+      {first.rows}
+    </Paged>
   );
 }
 
 export async function Feeds({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const [feeds, downloaded] = await Promise.all([
     sourceFeeds(),
     scrapeBytes(win, "openrent"),
@@ -312,7 +330,7 @@ function portalTone(row: PortalRun | undefined, expected: boolean): "good" | "wa
 // listing the feed published a minute earlier is already in the table and the
 // scraper writes nothing.
 export async function Portals({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const [rows, tally] = await Promise.all([portalRuns(win), readerTally(win)]);
 
   const billable = rows.reduce((sum, row) => sum + Number(row.proxy_bytes ?? 0), 0);
@@ -380,7 +398,7 @@ function lead(seconds: number | null): string {
 // number is the only one that answers it: listings the feed found and the
 // scraper did not, in a district the scrapers actually read.
 export async function FeedVersusScrapers({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const [rows, since] = await Promise.all([readerOverlap(win), sightingsSince()]);
 
   const missed = rows.reduce((sum, row) => sum + row.feed_only_covered, 0);
@@ -432,7 +450,7 @@ export async function FeedVersusScrapers({ span }: { span: string }) {
 }
 
 export async function Duplicates({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const copies = await duplicates(win);
 
   return (
@@ -479,7 +497,7 @@ export async function Duplicates({ span }: { span: string }) {
 }
 
 export async function Jobs({ span }: { span: string }) {
-  const jobs = await jobStates(spanFrom(span));
+  const jobs = await jobStatesOnce(windowFor(span));
   if (jobs.length === 0) {
     return <p className="hint">No job has run in this range.</p>;
   }
@@ -560,22 +578,22 @@ export async function Jobs({ span }: { span: string }) {
 }
 
 export async function RunsChart({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   return <RunBars data={await runPoints(win, bucketMinutes(win.hours))} />;
 }
 
 export async function MessagesRead({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   return <Series data={await messagePoints(win, bucketMinutes(win.hours))} />;
 }
 
 export async function ListingsCreated({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   return <Series data={await intakePoints(win, bucketMinutes(win.hours))} />;
 }
 
 export async function QueueTiles({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const bucket = bucketMinutes(win.hours);
 
   const [queue, read, unread, errorLog] = await Promise.all([
@@ -645,54 +663,75 @@ export async function QueueTiles({ span }: { span: string }) {
   );
 }
 
+const RUNS_PER_PAGE = 12;
+
+// One row more than the page is asked for, and then dropped: that answers
+// "is there another page" without a second COUNT over a table that only grows.
+export async function lastRunsPage(page: number): Promise<MorePage & { count: number }> {
+  const runs = await recentRuns(
+    RUNS_PER_PAGE + 1,
+    (page - 1) * RUNS_PER_PAGE,
+  ).catch(() => []);
+  const shown = runs.slice(0, RUNS_PER_PAGE);
+
+  return {
+    count: shown.length,
+    more: runs.length > RUNS_PER_PAGE,
+    rows: shown.map((run) => {
+      const shade = JOB_TONE[run.status] ?? "bad";
+      return (
+        <tr key={run.id}>
+          <td className="mono">{at(run.started_at)}</td>
+          <td>{run.job}</td>
+          <td>{run.trigger}</td>
+          <td
+            className={
+              shade === "bad" ? "bad" : shade === "warn" ? "warn"
+              : shade === "ok" ? "good" : undefined
+            }
+          >
+            {run.status}
+          </td>
+          <td className="num">{run.seconds ?? "—"}</td>
+          <td className="mono">
+            {run.error
+              ? run.error.slice(0, 120)
+              : Object.entries(run.counters ?? {})
+                  .slice(0, 4)
+                  .map(([name, value]) => `${name} ${value}`)
+                  .join(" · ") || "—"}
+          </td>
+        </tr>
+      );
+    }),
+  };
+}
+
 export async function LastRuns() {
-  const runs = await recentRuns(12).catch(() => []);
-  if (runs.length === 0) return <p className="hint">No run has been recorded.</p>;
+  const first = await lastRunsPage(1);
+  if (first.count === 0) {
+    return <p className="hint">No run has been recorded.</p>;
+  }
 
   return (
-    <div className="scroll-x">
-      <table>
-        <thead>
-          <tr>
-            <th>Started</th>
-            <th>Job</th>
-            <th>Trigger</th>
-            <th>Result</th>
-            <th className="num">Secs</th>
-            <th>What it did</th>
-          </tr>
-        </thead>
-        <tbody>
-          {runs.map((run) => {
-            const shade = JOB_TONE[run.status] ?? "bad";
-            return (
-              <tr key={run.id}>
-                <td className="mono">{at(run.started_at)}</td>
-                <td>{run.job}</td>
-                <td>{run.trigger}</td>
-                <td
-                  className={
-                    shade === "bad" ? "bad" : shade === "warn" ? "warn"
-                    : shade === "ok" ? "good" : undefined
-                  }
-                >
-                  {run.status}
-                </td>
-                <td className="num">{run.seconds ?? "—"}</td>
-                <td className="mono">
-                  {run.error
-                    ? run.error.slice(0, 120)
-                    : Object.entries(run.counters ?? {})
-                        .slice(0, 4)
-                        .map(([name, value]) => `${name} ${value}`)
-                        .join(" · ") || "—"}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <Paged
+      load={moreLastRuns}
+      more={first.more}
+      per={RUNS_PER_PAGE}
+      unit="runs"
+      head={
+        <tr>
+          <th>Started</th>
+          <th>Job</th>
+          <th>Trigger</th>
+          <th>Result</th>
+          <th className="num">Secs</th>
+          <th>What it did</th>
+        </tr>
+      }
+    >
+      {first.rows}
+    </Paged>
   );
 }
 
@@ -740,35 +779,83 @@ const RUN_TONE: Record<string, string> = {
 // pushed everything else off it. A run is the unit somebody actually wants to
 // scan: it started, it took this long, it did this much, and this was the
 // worst thing it said.
+const LOG_PER_PAGE = 12;
+
+export async function logRows(
+  span: string,
+  job: string | undefined,
+  level: string | undefined,
+  page: number,
+): Promise<MorePage & { total: number }> {
+  const runs = await runLog(
+    windowFor(span),
+    { job, bad: Boolean(level) },
+    page,
+    LOG_PER_PAGE,
+  );
+
+  return {
+    total: runs.total,
+    more: runs.total > page * LOG_PER_PAGE,
+    rows: runs.rows.map((run) => {
+      const did = whatItDid(run.counters);
+      const tone = RUN_TONE[run.status] ?? "";
+      return (
+        <div key={run.id} className="log-line mono">
+          <span className="log-when">{at(run.started_at)}</span>
+          <span className={`log-level ${tone}`}>{run.job}</span>
+          <span className="log-message">
+            <span className={tone}>{run.status}</span>
+            {run.secs !== null ? ` in ${run.secs}s` : " · no result recorded"}
+            {run.host ? ` · ${run.host}` : ""}
+            {run.trigger !== "schedule" ? ` · ${run.trigger}` : ""}
+            {did ? ` · ${did}` : ""}
+            {run.notes > 0 && (
+              <>
+                {" · "}
+                <span className={run.worst_level === "error" ? "bad" : "warn"}>
+                  {run.notes} note{run.notes === 1 ? "" : "s"}
+                </span>
+              </>
+            )}
+            {(run.worst || run.error) && (
+              <div className="job-error">
+                {run.worst_stage ? `${run.worst_stage}: ` : ""}
+                {run.worst ?? run.error}
+              </div>
+            )}
+          </span>
+        </div>
+      );
+    }),
+  };
+}
+
 export async function LogLines({
   span,
   job,
   level,
-  page,
 }: {
   span: string;
   job?: string;
   // Kept as the URL's own name for backwards compatibility with a bookmarked
   // link: any value means "only runs worth a look".
   level?: string;
-  page: number;
 }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const bad = Boolean(level);
-  const [runs, jobNames] = await Promise.all([
-    runLog(win, { job, bad }, page),
+  const [first, jobNames] = await Promise.all([
+    logRows(span, job, level, 1),
     knownJobs().catch(() => []),
   ]);
 
-  const perPage = 12;
-  const totalPages = Math.max(1, Math.ceil(runs.total / perPage));
+  // The two filters stay in the URL — they are part of what you would send
+  // somebody — while the position in the list does not. Changing a filter is a
+  // navigation; reading further down is not.
   const link = (over: Record<string, string | undefined>) => {
     const next = new URLSearchParams();
-    for (const [name, value] of Object.entries({
-      w: win.key, job, level, p: String(page), ...over,
-    })) {
-      if (value && value !== "1") next.set(name, value);
-      else if (name === "w" && value) next.set(name, value);
+    for (const [name, value] of Object.entries({ w: win.key, job, level, ...over })) {
+      if (value) next.set(name, value);
     }
     return `/admin?${next.toString()}`;
   };
@@ -777,14 +864,14 @@ export async function LogLines({
     <>
       <div className="dash-head" style={{ marginBottom: "0.6rem" }}>
         <div className="window-picker">
-          <Link className={!job ? "win win-on" : "win"} href={link({ job: undefined, p: "1" })}>
+          <Link className={!job ? "win win-on" : "win"} href={link({ job: undefined })}>
             all jobs
           </Link>
           {jobNames.map((name) => (
             <Link
               key={name}
               className={job === name ? "win win-on" : "win"}
-              href={link({ job: name, p: "1" })}
+              href={link({ job: name })}
             >
               {name}
             </Link>
@@ -793,67 +880,33 @@ export async function LogLines({
         <div className="window-picker">
           <Link
             className={bad ? "win win-on" : "win"}
-            href={link({ level: bad ? undefined : "bad", p: "1" })}
+            href={link({ level: bad ? undefined : "bad" })}
           >
             only with problems
           </Link>
         </div>
       </div>
 
-      {runs.rows.length === 0 ? (
+      {first.total === 0 ? (
         <p className="metric-note">
           {bad
             ? "No run in this range had anything to complain about."
             : "No job ran in this range."}
         </p>
       ) : (
-        runs.rows.map((run) => {
-          const did = whatItDid(run.counters);
-          const tone = RUN_TONE[run.status] ?? "";
-          return (
-            <div key={run.id} className="log-line mono">
-              <span className="log-when">{at(run.started_at)}</span>
-              <span className={`log-level ${tone}`}>{run.job}</span>
-              <span className="log-message">
-                <span className={tone}>{run.status}</span>
-                {run.secs !== null ? ` in ${run.secs}s` : " · no result recorded"}
-                {run.host ? ` · ${run.host}` : ""}
-                {run.trigger !== "schedule" ? ` · ${run.trigger}` : ""}
-                {did ? ` · ${did}` : ""}
-                {run.notes > 0 && (
-                  <>
-                    {" · "}
-                    <span className={run.worst_level === "error" ? "bad" : "warn"}>
-                      {run.notes} note{run.notes === 1 ? "" : "s"}
-                    </span>
-                  </>
-                )}
-                {(run.worst || run.error) && (
-                  <div className="job-error">
-                    {run.worst_stage ? `${run.worst_stage}: ` : ""}
-                    {run.worst ?? run.error}
-                  </div>
-                )}
-              </span>
-            </div>
-          );
-        })
-      )}
-
-      <div className="pager">
-        <Link className={page <= 1 ? "off" : ""} href={link({ p: String(page - 1) })}>
-          ← newer
-        </Link>
-        <span>
-          page {page} of {totalPages} · {runs.total} runs
-        </span>
-        <Link
-          className={page >= totalPages ? "off" : ""}
-          href={link({ p: String(page + 1) })}
+        // Keyed on the filters: a different question is a different list, and
+        // the pages already loaded for the old one must not be kept.
+        <Paged
+          key={`${win.key}|${job ?? ""}|${level ?? ""}`}
+          load={moreLog.bind(null, span, job, level)}
+          more={first.more}
+          per={LOG_PER_PAGE}
+          total={first.total}
+          unit="runs"
         >
-          older →
-        </Link>
-      </div>
+          {first.rows}
+        </Paged>
+      )}
     </>
   );
 }

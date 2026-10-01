@@ -4,8 +4,7 @@ import { Suspense, type ReactNode } from "react";
 
 import { SESSION_COOKIE, sessionIsValid } from "@/lib/admin-session";
 
-import { Live } from "./live";
-import { SpanPicker } from "./span-picker";
+import { RangeFrame, RangePicker } from "./range";
 import { Tabs } from "./tabs";
 
 export const dynamic = "force-dynamic";
@@ -18,19 +17,23 @@ export default async function DashLayout({ children }: { children: ReactNode }) 
     redirect("/admin/login");
   }
 
-
   return (
-    <div className="dash">
-      {/* The bar and the range stick together, as one block, so the range's
-          offset never has to be guessed from the bar's height. */}
-      <div className="dash-top">
+    // The frame owns the pending state of a range change: the picker sits in
+    // the bar and the panels that reload sit in the body, so whatever marks
+    // both as busy has to be above the two of them. See ./range.tsx.
+    <RangeFrame>
       <header className="dash-bar">
         <span className="dash-name">Dashboard</span>
 
         <Tabs />
 
         <div className="dash-bar-right">
-          <Live />
+          {/* One range for the whole dashboard, in the top right corner where
+              a time range is looked for. */}
+          <Suspense fallback={<div className="range-slot" />}>
+            <RangePicker />
+          </Suspense>
+
           {/* The one place a full navigation is the right answer: the session
               cookie is gone and the page must become the login screen. */}
           <form method="post" action="/api/admin/logout">
@@ -41,16 +44,7 @@ export default async function DashLayout({ children }: { children: ReactNode }) 
         </div>
       </header>
 
-      {/* Under the tabs and above every page: one range for the whole
-          dashboard, so switching tabs keeps the question the same. */}
-      <div className="dash-span">
-        <Suspense fallback={<div className="span-picker" />}>
-          <SpanPicker />
-        </Suspense>
-      </div>
-      </div>
-
       <main className="dash-body">{children}</main>
-    </div>
+    </RangeFrame>
   );
 }

@@ -1,12 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, useTransition } from "react";
+import { useMemo, useState } from "react";
 
 import type { DistrictDay, RecipientDay } from "@/lib/admin-queries";
 
 import { Metric, Series, Why } from "../charts";
-import { refreshDays, refreshRecipients } from "./actions";
 
 const COLUMNS = [
   { key: "district", label: "District", numeric: false },
@@ -22,37 +21,6 @@ type ColumnKey = (typeof COLUMNS)[number]["key"];
 
 const PER_PAGE = 25;
 
-// The same control Panel draws on every other page. Written out here because
-// this page's cards live inside a client component that owns their rows.
-function Again({ onClick, busy }: { onClick: () => void; busy: boolean }) {
-  return (
-    <button
-      type="button"
-      className="panel-refresh"
-      onClick={onClick}
-      disabled={busy}
-      aria-label="Refresh just this"
-      title="Refresh just this"
-    >
-      <svg
-        className={busy ? "panel-spin panel-spin-on" : "panel-spin"}
-        viewBox="0 0 16 16"
-        aria-hidden="true"
-        focusable="false"
-      >
-        <path
-          d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3.2h-3.2"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    </button>
-  );
-}
-
 type Aggregate = {
   district: string;
   name: string;
@@ -64,49 +32,26 @@ type Aggregate = {
 };
 
 export function DistrictsView({
-  days: initialDays,
-  recipients: initialRecipients,
+  days,
+  recipients,
   names,
   label,
   days_in_range,
-  span,
 }: {
   days: DistrictDay[];
   recipients: RecipientDay[];
   names: Record<string, string>;
   label: string;
   days_in_range: number;
-  span: string;
 }) {
-  // Held in state so a card can replace its own rows without the page being
-  // re-rendered. The sorting and paging below are the reason this page keeps
-  // its rows rather than its markup: a refresh must not lose your column.
-  const [days, setDays] = useState(initialDays);
-  const [recipients, setRecipients] = useState(initialRecipients);
-  const [busy, start] = useTransition();
   const [sort, setSort] = useState<{ column: ColumnKey; down: boolean }>({
     column: "total",
     down: true,
   });
+  // How many pages of the table are on screen. The rows are already here —
+  // there are three hundred districts at most and the range query returns all
+  // of them — so "show more" is a slice, not a fetch, and is instant.
   const [page, setPage] = useState(1);
-
-  const againDays = () =>
-    start(async () => {
-      try {
-        setDays(await refreshDays(span));
-      } catch {
-        // The rows already shown stay: an empty table is worse than a stale one.
-      }
-    });
-
-  const againPeople = () =>
-    start(async () => {
-      try {
-        setRecipients(await refreshRecipients(span));
-      } catch {
-        /* as above */
-      }
-    });
 
   // Every row handed over is already inside the range: the query asked for it.
   const rows = useMemo(() => {
@@ -156,7 +101,7 @@ export function DistrictsView({
 
   const pages = Math.max(1, Math.ceil(sorted.length / PER_PAGE));
   const here = Math.min(page, pages);
-  const shown = sorted.slice((here - 1) * PER_PAGE, here * PER_PAGE);
+  const shown = sorted.slice(0, here * PER_PAGE);
 
   const listings = rows.reduce((sum, one) => sum + one.total, 0);
   const busiest = sorted.length
@@ -211,10 +156,6 @@ export function DistrictsView({
         <h1>Districts</h1>
       </div>
 
-      <div className="panel-head">
-        <Again onClick={againDays} busy={busy} />
-      </div>
-
       <div className="dash-row">
         <Metric
           label="Listings"
@@ -248,7 +189,6 @@ export function DistrictsView({
         <div className="card panel">
           <div className="panel-head">
             <h2>Listings per day, all districts</h2>
-            <Again onClick={againDays} busy={busy} />
           </div>
           <Series data={trend} />
           <Why text="По одной точке на день, в лондонском времени. Данные ведутся с 18 сентября — раньше этой даты точек нет." />
@@ -259,7 +199,6 @@ export function DistrictsView({
         <div className="card panel">
           <div className="panel-head">
             <h2>Top 5 — busiest subscribers</h2>
-            <Again onClick={againPeople} busy={busy} />
           </div>
           {people.length === 0 ? (
             <p className="hint">Nothing was sent in this range.</p>
@@ -305,7 +244,6 @@ export function DistrictsView({
         <div className="card panel">
           <div className="panel-head">
             <h2>By district</h2>
-            <Again onClick={againDays} busy={busy} />
           </div>
 
           {shown.length === 0 ? (
@@ -357,31 +295,26 @@ export function DistrictsView({
             </div>
           )}
 
-          {pages > 1 && (
-            <div className="pager">
-              <button
-                type="button"
-                className="ghost"
-                disabled={here <= 1}
-                onClick={() => setPage(here - 1)}
-              >
-                ← Previous
-              </button>
-              <span className="hint">
-                Page {here} of {pages} · {sorted.length} districts
+          {sorted.length > 0 && (
+            <div className="more">
+              {here < pages && (
+                <button
+                  type="button"
+                  className="more-button"
+                  onClick={() => setPage(here + 1)}
+                >
+                  Show more
+                </button>
+              )}
+              <span className="more-count">
+                {here < pages
+                  ? `${shown.length} of ${sorted.length} districts`
+                  : `all ${sorted.length} districts`}
               </span>
-              <button
-                type="button"
-                className="ghost"
-                disabled={here >= pages}
-                onClick={() => setPage(here + 1)}
-              >
-                Next →
-              </button>
             </div>
           )}
 
-          <Why text="Клик по любому заголовку сортирует, повторный клик меняет направление. Считается по максимальному фильтру: каждое объявление, впервые увиденное в этот день в этом районе, без других критериев. Min равен нулю, если в каком-то дне периода района не было вовсе — тогда «Days with any» меньше числа дней." />
+          <Why text="Клик по любому заголовку сортирует, повторный клик меняет направление. По 25 строк за раз, «Show more» догружает следующие. Считается по максимальному фильтру: каждое объявление, впервые увиденное в этот день в этом районе, без других критериев. Min равен нулю, если в каком-то дне периода района не было вовсе — тогда «Days with any» меньше числа дней." />
         </div>
       </div>
     </>

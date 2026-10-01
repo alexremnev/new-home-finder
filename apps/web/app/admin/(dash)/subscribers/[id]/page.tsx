@@ -11,9 +11,6 @@ import { describeCriteria, type Criteria } from "@/lib/criteria";
 import { Metric, Why } from "../../charts";
 import { Panel, PanelWait } from "../../panel";
 import {
-  refreshBuckets, refreshHistory, refreshPayments, refreshSent,
-} from "./actions";
-import {
   AccountHistory, AccountPayments, AccountSent, AlertBuckets,
 } from "./bodies";
 import { DEFAULT_SPAN, spanFrom } from "../../span";
@@ -68,14 +65,10 @@ export default async function UserPage({
 
       {done && <p className="note">{done}.</p>}
 
-      <div className="dash-head">
-      </div>
-
       <Panel
         wide
         title="Alerts delivered, half-hour buckets"
         why="Каждая точка — 30 минут. Видно не только сколько человек получил, но и когда: ровная линия у нуля с редкими всплесками — это норма для узкого фильтра, а пустота весь день при активном плане — повод посмотреть канал доставки."
-        refresh={refreshBuckets.bind(null, userId, win.key)}
       >
         <Suspense fallback={<PanelWait />}>
           <AlertBuckets userId={userId} span={win.key} />
@@ -228,7 +221,6 @@ export default async function UserPage({
         wide
         title="Payments"
         why="Каждый платёж по этому аккаунту: тариф, сумма, сколько дней он дал и чем оплачено. Reference — идентификатор на стороне провайдера, по нему платёж находится в дашборде Stripe."
-        refresh={refreshPayments.bind(null, userId)}
       >
         <Suspense fallback={<PanelWait />}>
           <AccountPayments userId={userId} />
@@ -239,7 +231,6 @@ export default async function UserPage({
         wide
         title="What was sent"
         why="Последние уведомления по этому аккаунту, свежие сверху. sent — ушло, failed — не удалось, skipped — задержано долей плана."
-        refresh={refreshSent.bind(null, userId)}
       >
         <Suspense fallback={<PanelWait />}>
           <AccountSent userId={userId} />
@@ -250,7 +241,6 @@ export default async function UserPage({
         wide
         title="What we did to this account"
         why="Каждое действие с этой страницы записывается здесь — смена плана, выданные дни, стирание данных."
-        refresh={refreshHistory.bind(null, userId)}
       >
         <Suspense fallback={<PanelWait />}>
           <AccountHistory userId={userId} />

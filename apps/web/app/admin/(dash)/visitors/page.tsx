@@ -2,14 +2,13 @@ import { Suspense } from "react";
 
 import { Panel, PanelWait } from "../panel";
 import { DEFAULT_SPAN, spanFrom } from "../span";
-import { refreshChart, refreshFacet, refreshTiles } from "./actions";
 import { FACETS, VisitorChart, VisitorFacet, VisitorTiles } from "./bodies";
 
 export const dynamic = "force-dynamic";
 
 // Every card fetches on its own, inside its own Suspense boundary, so the
 // queries run in parallel and the page arrives without waiting for the
-// slowest of twelve. Each then refreshes on its own too — see Panel.
+// slowest of twelve.
 export default async function VisitorsPage({
   searchParams,
 }: {
@@ -24,7 +23,7 @@ export default async function VisitorsPage({
         <h1>Visitors</h1>
       </div>
 
-      <Panel wide refresh={refreshTiles.bind(null, span)}>
+      <Panel wide>
         <Suspense fallback={<PanelWait />}>
           <VisitorTiles span={span} />
         </Suspense>
@@ -33,7 +32,6 @@ export default async function VisitorsPage({
       <Panel
         wide
         title="Visitors over time"
-        refresh={refreshChart.bind(null, span)}
         why="Шаг бакета зависит от выбранного сверху периода и подписан под заголовком. Считается по first_at, то есть по времени прихода, поэтому один посетитель попадает ровно в один бакет. Разбивки ниже считаются по дням: строка в site_visits — одна на человека в день, поэтому часовой период читает сегодняшний день целиком."
       >
         <Suspense fallback={<PanelWait />}>
@@ -50,7 +48,6 @@ export default async function VisitorsPage({
             key={facet.key}
             title={facet.title}
             why={facet.why}
-            refresh={refreshFacet.bind(null, span, facet.key)}
           >
             <Suspense fallback={<PanelWait />}>
               <VisitorFacet span={span} facet={facet.key} />

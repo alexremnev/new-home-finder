@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 // picker for the whole dashboard, changing range is a navigation either way,
 // and fetching a month to show a day was work nobody asked for.
 //
-// Sorting and paging are still done in the browser, and those are the two that
-// are worth being instant.
+// Sorting and showing more rows are still done in the browser, and those are
+// the two that are worth being instant: the rows for the whole range are
+// already here.
 export default async function DistrictsPage({
   searchParams,
 }: {
@@ -33,7 +34,6 @@ export default async function DistrictsPage({
       recipients={recipients}
       names={names}
       label={win.label}
-      span={win.key}
       // How many London days the range covers, for the per-day averages. Taken
       // from the range rather than counted from the rows: a district silent for
       // five days of seven produces less per day, and dividing by the days that

@@ -1,0 +1,27 @@
+"use server";
+
+import { faultsPage, lastRunsPage, logRows } from "./bodies";
+import type { MorePage } from "./paged";
+
+// The next page of each list on the System tab.
+//
+// They call the same functions the first page was rendered from, so there is
+// one definition of what a row contains. Every argument is a plain string or
+// number, so nothing about the page's state has to be smuggled into a button.
+
+export async function moreFaults(page: number): Promise<MorePage> {
+  return faultsPage(page);
+}
+
+export async function moreLastRuns(page: number): Promise<MorePage> {
+  return lastRunsPage(page);
+}
+
+export async function moreLog(
+  span: string,
+  job: string | undefined,
+  level: string | undefined,
+  page: number,
+): Promise<MorePage> {
+  return logRows(span, job, level, page);
+}

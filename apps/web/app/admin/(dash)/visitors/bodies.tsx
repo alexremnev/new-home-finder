@@ -1,14 +1,16 @@
 import { visitorPoints, visitorsBy, visitorsByDay } from "@/lib/admin-queries";
 
-import { Metric, Rank, Series } from "../charts";
-import { bucketMinutes, bucketWords, spanFrom } from "../span";
+import { windowFor } from "../cached";
+import { Metric, Series } from "../charts";
+import { MoreRank } from "../more-rank";
+import { bucketMinutes, bucketWords } from "../span";
+import { moreFacet } from "./more";
 
 // What each card on this page contains, as its own async component.
 //
-// Defined once and used twice: the page renders these inside Suspense, so the
-// panels query in parallel and the page streams; the refresh actions render the
-// same components again for one card. There is no second copy of a card's
-// contents to keep in step with the first.
+// The page renders these inside Suspense, so the ten breakdowns query in
+// parallel and the page streams rather than waiting for the slowest. Each
+// breakdown shows its longest twelve and loads the rest on demand.
 
 // Two letters is all that is stored, so the name is looked up here rather than
 // kept in a column that would need maintaining.
@@ -98,6 +100,27 @@ const NAME: Partial<Record<Facet, (value: string | null) => string>> = {
   language: languageName,
 };
 
+export const FACET_PER_PAGE = 12;
+
+// One row more than the page needs, then dropped: that answers "is there
+// another page" without counting the distinct values twice.
+export async function facetPage(span: string, facet: Facet, page: number) {
+  const rows = await visitorsBy(
+    windowFor(span),
+    facet,
+    FACET_PER_PAGE + 1,
+    (page - 1) * FACET_PER_PAGE,
+  );
+  const label = NAME[facet] ?? ((value: string | null) => value ?? "unknown");
+
+  return {
+    rows: rows
+      .slice(0, FACET_PER_PAGE)
+      .map((one) => ({ label: label(one.name), value: one.visitors })),
+    more: rows.length > FACET_PER_PAGE,
+  };
+}
+
 export async function VisitorFacet({
   span,
   facet,
@@ -105,22 +128,25 @@ export async function VisitorFacet({
   span: string;
   facet: Facet;
 }) {
-  const rows = await visitorsBy(spanFrom(span), facet);
-  const label = NAME[facet] ?? ((value: string | null) => value ?? "unknown");
+  const first = await facetPage(span, facet, 1);
 
-  if (rows.length === 0) {
+  if (first.rows.length === 0) {
     return <p className="hint">Nothing recorded for this range.</p>;
   }
 
   return (
-    <Rank
-      data={rows.map((one) => ({ label: label(one.name), value: one.visitors }))}
+    <MoreRank
+      key={span}
+      rows={first.rows}
+      more={first.more}
+      load={moreFacet.bind(null, span, facet)}
+      unit="shown"
     />
   );
 }
 
 export async function VisitorChart({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const bucket = bucketMinutes(win.hours);
   const points = await visitorPoints(win, bucket);
 
@@ -133,7 +159,7 @@ export async function VisitorChart({ span }: { span: string }) {
 }
 
 export async function VisitorTiles({ span }: { span: string }) {
-  const win = spanFrom(span);
+  const win = windowFor(span);
   const byDay = await visitorsByDay(win);
 
   const visitors = byDay.reduce((sum, one) => sum + one.visitors, 0);
