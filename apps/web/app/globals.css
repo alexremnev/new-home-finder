@@ -2657,8 +2657,12 @@ form p.error {
   top: calc(100% + 0.35rem);
   left: 0;
   right: 0;
-  max-height: 17.5rem;
+  /* The list is uncapped, so this is what keeps 594 outcodes from running off
+     the screen: tall enough to scroll through, short enough to stay a dropdown. */
+  max-height: min(22rem, 50vh);
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
   margin: 0;
   padding: 0.3rem;
   list-style: none;
@@ -2695,14 +2699,11 @@ form p.error {
   font-variant-numeric: tabular-nums;
 }
 
-.combo-empty,
-.combo-more {
+.combo-empty {
   padding: 0.55rem 0.7rem;
   color: var(--ink-soft);
   font-size: 0.8125rem;
 }
-
-.combo-more { border-top: 1px solid var(--line); margin-top: 0.3rem; }
 
 /* ── numbers under the short sliders ──────────────────────────────────────── */
 

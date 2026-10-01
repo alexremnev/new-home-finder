@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { pounds } from "@/lib/money";
 import { matchAreas, neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
@@ -65,11 +65,6 @@ const ROOMS_MAX = 5;
 
 const rooms = (value: number) => String(value);
 
-// Rows the list will show at once. London has 594 outcodes and the named
-// neighbourhoods are more; a list that long is a scrollbar rather than a
-// choice, so past this it asks for another letter instead.
-const LIST_MAX = 8;
-
 // "room" on its own reads as a bedroom count rather than as what it is.
 const TYPE_LABELS: Record<string, string> = {
   flat: "Flat",
@@ -130,6 +125,16 @@ export function SubscribeForm({
   // else's control. See `.combo` in globals.css.
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(0);
+  const listRef = useRef<HTMLUListElement | null>(null);
+
+  // The list is no longer capped, so the highlighted row can be below the fold
+  // of its own scroller: arrowing down has to bring it along.
+  useEffect(() => {
+    if (!open) return;
+    listRef.current
+      ?.querySelector('[aria-selected="true"]')
+      ?.scrollIntoView({ block: "nearest" });
+  }, [open, cursor, typed]);
 
   const [mode, setMode] = useState<"name" | "postcode">("name");
   const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
@@ -314,8 +319,9 @@ export function SubscribeForm({
   // list. Typing an exact district no longer commits it on the spot — which is
   // what made E14 unreachable once E1 had been typed — because choosing is now
   // a click or Enter on a row, and both districts are rows.
-  const matching = matchAreas(options, typed, chosen.map((one) => one.code));
-  const shown = matching.slice(0, LIST_MAX);
+  // Uncapped: London has 594 outcodes and more named neighbourhoods, and the
+  // list scrolls, so there is no reason to hide the tail behind "type more".
+  const shown = matchAreas(options, typed, chosen.map((one) => one.code));
 
   return (
     <form onSubmit={submit} className="hero-form">
@@ -416,7 +422,7 @@ export function SubscribeForm({
           />
 
           {open && (
-            <ul className="combo-list" id="area-list" role="listbox">
+            <ul className="combo-list" id="area-list" role="listbox" ref={listRef}>
               {shown.length === 0 && (
                 <li className="combo-empty">
                   {typed.trim()
@@ -443,21 +449,11 @@ export function SubscribeForm({
                   )}
                 </li>
               ))}
-              {matching.length > shown.length && (
-                <li className="combo-more">
-                  {matching.length - shown.length} more — keep typing to narrow it
-                  down
-                </li>
-              )}
             </ul>
           )}
         </div>
 
-        <p className="hint">
-          {full
-            ? `That is all ${maxDistricts} areas.`
-            : "Start typing, or pick from the list."}
-        </p>
+        {full && <p className="hint">{`That is all ${maxDistricts} areas.`}</p>}
 
         {chosen.length > 0 && (
           <div className="chips">
