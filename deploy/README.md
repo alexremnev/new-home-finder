@@ -1,11 +1,18 @@
 # Running the worker on a VPS
 
-Four jobs, on systemd timers, on a machine that listens on nothing.
+Five jobs, on systemd timers, on a machine that listens on nothing.
 
-    ingest   every 5 min    read the feed, parse, match, queue
-    drain    every 5 min    send the queue, warn about plans, seed new filters
-    rollup   every 5 min    total the day into daily_stats
-    report   hourly         check for silence, alert the ops chat
+    ingest      every 5 min   read the feed, parse, match, queue
+    rightmove   by calendar   read Rightmove search pages
+    drain       every 5 min   send the queue, warn about plans, seed new filters
+    rollup      every 5 min   total the day into daily_stats
+    report      hourly        check for silence, alert the ops chat
+
+Four of the five are plain intervals and drift. `rightmove` is the exception: it
+runs on a London-time calendar — every 5 minutes on weekdays 08:00–18:00, every
+10 minutes the rest of the day, hourly between midnight and 07:00 — because how
+often it is worth asking a portal depends on when letting agents publish. The
+reasoning is in `systemd/london-home-finder-rightmove.timer`.
 
 ## What runs where, and why
 

@@ -5,30 +5,39 @@
 #
 # ── the schedule, in London time ─────────────────────────────────────────
 #
-#   weekdays  07:20–17:00   every 10 minutes
-#   weekdays  17:00–22:00   hourly
-#   weekdays  22:00–07:20   not at all
-#   weekends  10:00–20:00   hourly
+#   every day  00:00–07:00   hourly
+#   weekdays   08:00–18:00   every 5 minutes
+#   weekdays   07:00–08:00   every 10 minutes
+#   weekdays   18:00–24:00   every 10 minutes
+#   weekends   07:00–24:00   every 10 minutes
 #
-# Chosen against when London letting agents actually publish, and unchanged by
-# the split into three jobs. Each band's stated end is exclusive, which is what
-# makes the two weekday bands meet at 17:00 without firing twice.
+# Five minutes through the hours London letting agents actually publish, ten
+# minutes either side of them, and hourly overnight when nothing is posted but
+# the watermark should still not be a whole night behind by breakfast. There is
+# no dead band any more: this reader runs around the clock.
 #
-# ── why the three are offset from each other ─────────────────────────────
+# Each band's stated end is exclusive, which is what makes them meet without
+# firing twice. So the last five-minute run is 17:55 and the last hourly night
+# run is 06:00 — 18:00 and 07:00 belong to the ten-minute band that follows.
 #
-# Rightmove runs every ten minutes — :00, :10, :20, :30, :40, :50 — while
-# Zoopla takes :07, :27, :47 and OpenRent :14, :34, :54. So the three still
-# never land on the server in the same minute; Rightmove simply fills twice
-# as many of the slots between them.
+# About 1060 runs a week against roughly 335 before, a little over three times
+# as many; at one search page per district that is some 380MB a week with the
+# three districts the seed enables, and the sweep still stops as soon as it is
+# behind the watermark, so a shorter interval means less new stock above it per
+# run rather than proportionally more work.
 #
-# Ten rather than twenty because this is the reader the whole product rests
-# on while the Telegram feed is still the thing finding listings first: a
-# flat is let in hours, so ten minutes of lead is worth 3MB of search pages.
-# One page per district either way — the sweep stops as soon as it is behind
-# the watermark, and half the interval means half as much new stock above it.
+# ── nothing to be offset from any more ───────────────────────────────────
 #
-# The jitter below is 90 seconds against a three-minute separation, so it
-# still blurs the start without letting two jobs collide.
+# This header used to explain why Rightmove took :00/:10/… while Zoopla sat at
+# :07 and OpenRent at :14. Those two timers are disabled and deleted by
+# `install.sh`, and the jobs still running — ingest, drain, rollup, report —
+# are all OnUnitInactiveSec, so they drift and there is no fixed minute to
+# avoid. The phase of this timer is now free, and is simply the top of the
+# five-minute grid.
+#
+# A sweep that outlasts its interval does not pile up: systemd will not start a
+# second london-home-finder@rightmove.service while the first is still running,
+# it skips that trigger. TimeoutStartSec in the service is 600s.
 #
 # ── the zone is stated here, not taken from the machine ──────────────────
 #
@@ -39,33 +48,39 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..16:00/10 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:00/5 Europe/London'
 
 [Unit]
-Description=Read Rightmove search pages on London working hours
+Description=Read Rightmove search pages, five-minutely through the working day
 
 [Timer]
 Unit=london-home-finder@rightmove.service
 
-# Weekdays, the working day. Two lines because the day does not start on the
-# hour: the first covers the four runs before 08:00, the second the whole
-# hours after it. Folded into one `07..16` line it would add a run at 07:00
-# that the schedule deliberately excludes.
-OnCalendar=Mon..Fri 07:20,30,40,50 Europe/London
-OnCalendar=Mon..Fri 08..16:00/10 Europe/London
-# Weekday evenings: hourly.
-OnCalendar=Mon..Fri 17..21:00 Europe/London
-# Weekends, a shorter day: hourly.
-OnCalendar=Sat,Sun 10..19:00 Europe/London
+# Nights, every day including weekends: hourly, 00:00 to 07:00.
+OnCalendar=*-*-* 00..06:00 Europe/London
+
+# Weekdays, the working day: every five minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:00/5 Europe/London
+
+# Weekdays, the hour before the working day and the evening after it: every ten
+# minutes. Two lines because the morning band is a single hour — folded into
+# `07..17` it would make 07:00–08:00 five-minutely too.
+OnCalendar=Mon..Fri 07:00/10 Europe/London
+OnCalendar=Mon..Fri 18..23:00/10 Europe/London
+
+# Weekends, from the end of the night band to midnight: every ten minutes.
+OnCalendar=Sat,Sun 07..23:00/10 Europe/London
 
 # A minute and a half of jitter, so we are not on the stroke of the hour with
-# everybody else's crontab.
+# everybody else's crontab. Still well inside the shortest interval, so it
+# blurs a start without ever reordering two runs.
 RandomizedDelaySec=90s
 AccuracySec=30s
 
 # Deliberately NOT Persistent. A run missed because the machine was off should
-# be skipped, not fired the moment it boots — which on a reboot at 03:00 would
-# mean a sweep in the middle of the hours this schedule exists to avoid.
+# be skipped rather than fired on boot: the next slot is at most an hour away
+# and usually five minutes, so catching up buys nothing and a boot during the
+# night band would start a sweep off-grid.
 Persistent=false
 
 [Install]
