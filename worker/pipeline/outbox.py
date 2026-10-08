@@ -65,6 +65,25 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
         if not listing_ids:
             return
 
+        # A source can be read and stored without being sent — see 0060. The
+        # gate is here rather than at each call site because both of them, the
+        # feed's ingest and a portal's sweep, arrive through this function, and
+        # a rule about what a subscriber receives that is written down twice is
+        # a rule that will one day be two rules.
+        #
+        # Said as a stage counter and not only as a log line: a muted source
+        # looks exactly like a broken matcher from outside — candidates in,
+        # nothing queued — and this is the difference.
+        if not store.announces(conn, source_key):
+            stage.set("muted", True)
+            stage.log(
+                "info",
+                f"{source_key} is stored but not announced "
+                f"(sources.announces is false); {len(listing_ids)} listing(s) "
+                f"queued for nobody",
+            )
+            return
+
         subscriptions = store.active_subscriptions(conn)
         stage.set("subscriptions", len(subscriptions))
         if not subscriptions:

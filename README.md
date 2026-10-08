@@ -83,6 +83,33 @@ UPDATE sources
  WHERE key = 'openrent';
 ```
 
+### Reading a source and sending from it are two switches
+
+`sources.enabled` decides whether a source is read at all. `sources.announces`
+decides whether what it finds may reach a subscriber. They were one column
+until the Telegram feed needed different answers to the two.
+
+The feed's subscription ends, and the fortnight before it is the only chance to
+establish — rather than hope — that the scrapers find everything it finds.
+Switching it off throws that chance away: it is the only independent witness
+there is, and `listing_sightings` exists to compare it against the scrapers.
+Leaving it sending hides the same thing from the other side, because every flat
+the feed announces is a flat we never learn whether a scraper would have
+announced. So it is read, stored, compared, and sent from by nobody:
+
+```sql
+UPDATE sources SET announces = false WHERE key = 'tg_feed';
+```
+
+The same statement with `true` undoes it, and that is the point of its being a
+column: the honest expectation is that the scrapers have a hole somewhere and
+that the first week is spent finding it.
+
+What to watch while it is muted is the `caught_up` counter on each scrape
+stage — listings already in the database from another reader that this one has
+now caught up with. Those are precisely the alerts the feed used to send, and
+`worker/sources/sweep.py` explains the race they come from.
+
 ### Coverage scope is data too
 
 `locations` holds all zone 1–3 districts as reference data. Which of them a

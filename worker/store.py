@@ -440,6 +440,30 @@ def sighted_by(
         ),
     )
 
+def announces(conn: Conn, source_key: str) -> bool:
+    """Whether what this source finds may be queued for a subscriber.
+
+    The sibling of `enabled_sources`, and deliberately not the same question.
+    `enabled` is about whether we read a site at all — cost, politeness, a
+    circuit breaker. This is about whether what we read reaches anybody, and
+    the Telegram feed is the first source to want different answers: its
+    subscription is ending, and the only way to find out whether the scrapers
+    cover what it covers is to keep reading it while it sends nothing. See
+    0060.
+
+    A source key with no row answers False rather than True. Nothing should
+    reach a subscriber under a key the reference table has never heard of, and
+    `listings.source_key` has a foreign key to it, so this can only be a
+    caller's mistake — the fail-closed answer is the one that makes it visible
+    as silence rather than as mystery alerts.
+    """
+
+    row = conn.execute(
+        "SELECT announces FROM sources WHERE key = %s", (source_key,)
+    ).fetchone()
+    return bool(row["announces"]) if row else False
+
+
 def enabled_sources(conn: Conn) -> set[str]:
     """Which source keys are switched on.
 

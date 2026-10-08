@@ -45,6 +45,9 @@ def schema() -> Iterator[None]:
 def conn(schema: None) -> Iterator[Any]:
     with psycopg.connect(URL, autocommit=True, row_factory=psycopg.rows.dict_row) as c:
         c.execute(WIPE)
+        # `sources` is seed data and cannot be truncated, so the one column a
+        # test here changes is put back by hand. See 0060.
+        c.execute("UPDATE sources SET announces = true WHERE NOT announces")
         yield c
 
 @pytest.fixture
@@ -154,6 +157,47 @@ def test_a_matching_listing_is_queued(conn: Any, run: Run) -> None:
     assert queued["user_id"] == user_id
     assert queued["subscription_id"] == subscription_id
     assert queued["channel"] == "telegram"
+
+def test_a_muted_source_is_matched_against_nobody(conn: Any, run: Run) -> None:
+    """A source read and stored but never sent. See 0060.
+
+    The whole of what retiring the Telegram feed does: it keeps arriving, it
+    keeps being compared against the scrapers in `listing_sightings`, and it
+    reaches no subscriber. The listing itself matches perfectly — the only
+    reason nothing is queued is the source it came through.
+    """
+
+    make_subscription(conn, make_user(conn))
+    conn.execute("UPDATE sources SET announces = false WHERE key = 'tg_feed'")
+
+    outbox.queue_matches(
+        conn, run, source_key="tg_feed", listing_ids=[make_listing(conn, "1")]
+    )
+
+    assert counts(conn) == {}
+
+def test_a_source_the_reference_table_has_never_heard_of_announces_nothing(
+    conn: Any, run: Run
+) -> None:
+    """Fail closed. A key with no row is a caller's mistake, not permission."""
+
+    make_subscription(conn, make_user(conn))
+
+    outbox.queue_matches(
+        conn, run, source_key="nosuchportal", listing_ids=[make_listing(conn, "1")]
+    )
+
+    assert counts(conn) == {}
+
+def test_muting_one_source_leaves_the_others_sending(conn: Any, run: Run) -> None:
+    make_subscription(conn, make_user(conn))
+    conn.execute("UPDATE sources SET announces = false WHERE key = 'tg_feed'")
+
+    outbox.queue_matches(
+        conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")]
+    )
+
+    assert counts(conn) == {"queued": 1}
 
 def test_a_listing_outside_the_criteria_is_not_queued(conn: Any, run: Run) -> None:
     make_subscription(conn, make_user(conn))

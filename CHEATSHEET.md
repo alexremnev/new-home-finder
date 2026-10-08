@@ -344,6 +344,28 @@ UPDATE sources SET config = jsonb_set(config, '{rate_limit_rps}', '0.15')
 -- приостановить источник: таймер, а не база
 --   sudo systemctl disable --now london-home-finder-openrent.timer
 
+-- читать источник, но никому не отправлять (миграция 0060).
+-- `enabled` — читаем ли мы его вообще; `announces` — доходит ли найденное
+-- до подписчика. Это разные вопросы, и tg-фид — первый источник, которому
+-- нужны разные ответы: подписка на него кончается, и единственный способ
+-- узнать, покрывают ли скраперы то же самое, — продолжать его читать,
+-- ничего при этом не рассылая. Сравнение лежит в listing_sightings.
+UPDATE sources SET announces = false WHERE key = 'tg_feed';
+UPDATE sources SET announces = true  WHERE key = 'tg_feed';   -- обратно
+
+-- кто сейчас молчит
+SELECT key, enabled, announces, health FROM sources ORDER BY key;
+
+-- догоняет ли скрапер фид: `caught_up` — объявления, которые уже лежали
+-- в базе от другого ридера, и до которых этот добрался только сейчас.
+-- Это ровно те алерты, которые раньше отправлял фид.
+SELECT r.job, s.source_key, s.counters->>'caught_up' AS caught_up,
+       s.counters->>'new' AS new, s.counters->>'announced' AS announced,
+       s.finished_at
+  FROM job_stages s JOIN job_runs r ON r.id = s.run_id
+ WHERE s.stage = 'scrape' AND s.finished_at > now() - interval '6 hours'
+ ORDER BY s.finished_at DESC;
+
 -- расширить охват
 UPDATE source_locations SET enabled = true
  WHERE source_key = 'openrent'
