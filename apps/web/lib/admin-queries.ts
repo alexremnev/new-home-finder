@@ -1195,6 +1195,25 @@ export async function sourceFeeds(): Promise<SourceFeed[]> {
   ).catch(() => []);
 }
 
+export type SourceSwitch = {
+  key: string;
+  display_name: string;
+  enabled: boolean;
+  announces: boolean;
+};
+
+// The two switches per source, because every number on the coverage panels
+// means something different depending on them. `enabled` is whether we read a
+// source; `announces` is whether what it finds may reach a subscriber. See
+// 0060 — and in particular why a muted feed makes the alert-level comparison
+// vacuous rather than green.
+export async function sourceSwitches(): Promise<SourceSwitch[]> {
+  return query<SourceSwitch>(
+    `SELECT key, display_name, enabled, announces
+       FROM sources ORDER BY key`,
+  ).catch(() => []);
+}
+
 export type Duplicates = {
   // Copies suppressed over the window, and how many listings arrived in total,
   // so the panel can state a share rather than a bare number nobody can size.
@@ -1558,6 +1577,7 @@ export type PortalRun = {
   stored: number;
   announced: number;
   seen: number;
+  caught_up: number;
   invalid: number;
   refused: number;
   partial: number;
@@ -1606,6 +1626,14 @@ export async function portalRuns(win: Win): Promise<PortalRun[]> {
             coalesce(sum((counters->>'seen')::bigint)
                      FILTER (WHERE jsonb_typeof(counters->'seen') = 'number'), 0)::int
               AS seen,
+            -- Listings already in the database from another reader — the feed,
+            -- nearly always — that this one has now caught up with. Zero here
+            -- while the feed is still posting means the scraper is not
+            -- re-examining what the feed got to first, which is the one way
+            -- muting the feed can go wrong silently. See store.sighted_by.
+            coalesce(sum((counters->>'caught_up')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'caught_up') = 'number'), 0)::int
+              AS caught_up,
             coalesce(sum((counters->>'invalid')::bigint)
                      FILTER (WHERE jsonb_typeof(counters->'invalid') = 'number'), 0)::int
               AS invalid,

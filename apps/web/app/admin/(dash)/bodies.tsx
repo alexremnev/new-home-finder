@@ -1,9 +1,11 @@
-import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries";
+import type {
+  FeedOnly, PortalRun, ReaderOverlap, ReaderTally,
+} from "@/lib/admin-queries";
 import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
   feedOnlyListings, feedReliance,
-  runLog, runPoints, sightingsSince, sourceFeeds,
+  runLog, runPoints, sightingsSince, sourceFeeds, sourceSwitches,
   unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
@@ -248,6 +250,61 @@ export async function Feeds() {
   );
 }
 
+// Which of its two switches the Telegram feed is on, and what the panels under
+// this one therefore mean.
+//
+// Both of them compare the feed against the scrapers, and both change meaning
+// the moment the feed stops announcing: "would this alert have survived
+// without the feed" is answered yes by construction once the feed is no longer
+// a path an alert could have come from. A dashboard that turns green because
+// the thing it measures was switched off is worse than one that says nothing,
+// so the state is stated here and the panel below reads it. See 0060.
+export async function FeedState() {
+  const switches = await sourceSwitches();
+  const feed = switches.find((one) => one.key === "tg_feed");
+  const read = feed?.enabled ?? false;
+  const sends = feed?.announces ?? false;
+
+  return (
+    <>
+      <div className="tiles">
+        <Metric
+          label="Feed read"
+          value={read ? "yes" : "no"}
+          tone={read ? "good" : "warn"}
+          note={
+            read
+              ? "ingest is storing messages"
+              : "sources.enabled is false — nothing is being stored"
+          }
+          why="Читается ли Telegram-фид. Это про стоимость и про то, ходим ли мы к источнику вообще, — не про то, доходит ли найденное до подписчика: это второй переключатель. Пока фид читается, он остаётся единственным независимым свидетелем того, что скраперы находят всё; когда перестанет — панели ниже замолчат навсегда, и сравнивать будет не с чем."
+        />
+        <Metric
+          label="Feed announces"
+          value={sends ? "yes" : "no"}
+          tone={read && !sends ? "good" : "warn"}
+          note={
+            !read
+              ? "nothing to announce — the feed is not being read"
+              : sends
+                ? "alerts can still come from the feed"
+                : "read and compared, sent to nobody"
+          }
+          why="Может ли найденное фидом уйти подписчику (sources.announces, миграция 0060). «no» при читаемом фиде — то состояние, ради которого всё это сделано: фид приходит, сравнивается со скраперами в listing_sightings и не отправляет ничего, поэтому любой промах скрапера виден как промах, а не прикрыт фидом. «yes» — переходное состояние: пока фид отправляет, каждая квартира, про которую сообщил он, это квартира, про которую мы так и не узнали, справился бы скрапер или нет. Переключается одним UPDATE: sources SET announces = false WHERE key = 'tg_feed'."
+        />
+      </div>
+      <p className="hint">
+        {!read
+          ? "The feed is not being read, so the two panels below have no witness left: they can only report on listings stored while it still was."
+          : sends
+            ? "The feed is still sending. Every alert it makes is a listing we never find out whether a scraper would have caught — which is what the panels below are trying to measure, so expect them to understate the gap."
+            : "The feed is read, compared and sent from by nobody. A miss below is now a subscriber who heard nothing, not a hypothetical."}
+        {" The feed carries Rightmove and Zoopla only — it has never carried OpenRent, which is why the scraper for it exists at all, so neither panel below says anything about OpenRent coverage. For that, read the “caught up” and “sent” figures on Portal scrapers."}
+      </p>
+    </>
+  );
+}
+
 // The readers that fetch a portal's own pages, one row each. Named and
 // ordered here rather than taken from the database, so that a reader which has
 // not run at all still gets a panel — a silent scraper is the thing worth
@@ -320,6 +377,12 @@ export async function Portals({ span }: { span: string }) {
                 quiet ? "never ran" : null,
                 mine ? `${mine.saw} seen` : null,
                 row ? `${row.stored} stored` : null,
+                // Listings another reader had already stored and this one has
+                // now caught up with. Nearly always the feed, which is a push
+                // against this reader's timer and so usually wins — and these
+                // are precisely the alerts that used to come from the feed and
+                // now have to come from here. See worker/sources/sweep.py.
+                row && row.caught_up > 0 ? `${row.caught_up} caught up` : null,
                 row ? `${row.announced} sent` : null,
                 row ? weight(Number(row.bytes ?? 0)) : null,
                 row && row.runs > 0 ? `${row.runs} runs` : null,
@@ -358,6 +421,51 @@ function lead(seconds: number | null): string {
   const how = amount < 90 ? `${amount}s` : `${Math.round(amount / 60)} min`;
   if (amount < 30) return "neck and neck";
   return seconds > 0 ? `scraper ${how} later` : `scraper ${how} sooner`;
+}
+
+// The misses themselves. Lifted out of the panel below because both of its
+// branches show it — a count says the scrapers have a hole, and opening the
+// listing that got away is what says which kind: a district read after it
+// appeared, a page cap, a refusal.
+//
+// `Alerts` is usually nought and that is the point: the feed saw it, no
+// scraper did, so with the feed muted nobody was told. A non-nought here means
+// the feed queued it, which can only happen while the feed still announces.
+function FeedOnlyTable({ rows }: { rows: FeedOnly[] }) {
+  return (
+    <div className="scroll-x">
+      <table>
+        <thead>
+          <tr>
+            <th>First seen</th>
+            <th>District</th>
+            <th>Portal</th>
+            <th className="num">Rent</th>
+            <th className="num">Alerts</th>
+            <th>Listing</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((one) => (
+            <tr key={one.listing_id}>
+              <td className="mono">{at(one.first_seen_at)}</td>
+              <td>{one.district ?? "—"}</td>
+              <td>{PORTAL_NAMES[one.source_key] ?? one.source_key}</td>
+              <td className="num">
+                {one.price_pcm === null ? "—" : `£${one.price_pcm}`}
+              </td>
+              <td className="num">{one.alerts}</td>
+              <td>
+                <a href={one.url} target="_blank" rel="noreferrer">
+                  open
+                </a>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // Can the Telegram feed be switched off? One tile per portal, and the headline
@@ -420,16 +528,64 @@ export async function FeedVersusScrapers({ span }: { span: string }) {
 // alert is the product.
 export async function AlertsWithoutFeed({ span }: { span: string }) {
   const win = windowFor(span);
-  const [own, misses] = await Promise.all([
+  const [own, misses, switches] = await Promise.all([
     feedReliance(win),
     feedOnlyListings(win),
+    sourceSwitches(),
   ]);
+
+  // The two leading tiles ask what would survive losing the feed, and they can
+  // only be asked while the feed is a path an alert could have come from. Once
+  // it is muted every sent alert was queued by a scraper, so "covered" equals
+  // "alerts" and "lost without it" is nought — not because nothing is being
+  // lost, but because the question has been answered in advance. See 0060.
+  const muted =
+    switches.find((one) => one.key === "tg_feed")?.announces === false;
 
   if (own.alerts === 0) {
     return <p className="hint">No alert was sent {spanWords(win)}.</p>;
   }
 
   const share = Math.round((own.covered / own.alerts) * 100);
+
+  if (muted) {
+    return (
+      <>
+        <div className="tiles">
+          <Metric
+            label="Caught up"
+            value={own.later}
+            tone={own.later > 0 ? "good" : "warn"}
+            note={`of ${own.alerts} alerts · ${spanWords(win)}`}
+            why="Алерты, чьё объявление фид увидел раньше скрапера, — и которые всё равно ушли. Это прямое доказательство, что подмена работает: раньше про такую квартиру сообщал фид, а скрапер считал её «уже известной» и молчал, потому что строка в базе уже была. Теперь новизна определяется по listing_sightings — видел ли её именно этот читатель, — и скрапер догоняет. Ноль при живом фиде означает, что догонять он перестал: либо фид не успевает первым (тогда и догонять нечего), либо правило сломалось. Сверять со счётчиком «caught up» на панели Portal scrapers: там то же самое по объявлениям, здесь — по дошедшим алертам."
+          />
+          <Metric
+            label="Behind the feed"
+            value={
+              own.median_lag_secs === null
+                ? "—"
+                : lead(own.median_lag_secs).replace("scraper ", "")
+            }
+            tone={
+              own.median_lag_secs === null || own.median_lag_secs < 180
+                ? "good"
+                : "warn"
+            }
+            note="median, over the alerts both readers saw"
+            why="Насколько позже скрапера дошёл бы алерт, чем дошёл бы через фид. Полнота и скорость — разные вещи, и для аренды вторая не менее важна: читатель, который находит всё, но на пять минут позже, заменой не является, квартиру снимают за часы. Смотреть вместе с расписанием: Rightmove обходится раз в 5 минут в рабочие часы, Zoopla по районам раз в 20, весь Лондон раз в 5, OpenRent раз в 20 — а фид приходил сразу. Это и есть цена отказа от фида, и она не нулевая даже при идеальном покрытии."
+          />
+        </div>
+        <p className="hint">
+          {`The feed is muted, so "would this alert have survived" cannot be asked here any more: every alert ${spanWords(win)} was queued by a scraper, which would answer yes to its own question. What the loss looks like now is listings, not alerts — the panel above, per portal. `}
+          {own.unrecorded > 0
+            ? `${own.unrecorded} alerts have no sighting from either reader: their listings were stored before recording began, so they are neither a miss nor evidence. `
+            : ""}
+          {"A range reaching back before the feed was muted mixes the two regimes — nothing records the moment it was switched, so narrow the range if the numbers look impossible."}
+        </p>
+        {misses.length > 0 && <FeedOnlyTable rows={misses} />}
+      </>
+    );
+  }
 
   return (
     <>
@@ -464,40 +620,7 @@ export async function AlertsWithoutFeed({ span }: { span: string }) {
         />
       </div>
 
-      {misses.length > 0 && (
-        <div className="scroll-x">
-          <table>
-            <thead>
-              <tr>
-                <th>First seen</th>
-                <th>District</th>
-                <th>Portal</th>
-                <th className="num">Rent</th>
-                <th className="num">Alerts</th>
-                <th>Listing</th>
-              </tr>
-            </thead>
-            <tbody>
-              {misses.map((one) => (
-                <tr key={one.listing_id}>
-                  <td className="mono">{at(one.first_seen_at)}</td>
-                  <td>{one.district ?? "—"}</td>
-                  <td>{PORTAL_NAMES[one.source_key] ?? one.source_key}</td>
-                  <td className="num">
-                    {one.price_pcm === null ? "—" : `£${one.price_pcm}`}
-                  </td>
-                  <td className="num">{one.alerts}</td>
-                  <td>
-                    <a href={one.url} target="_blank" rel="noreferrer">
-                      open
-                    </a>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      {misses.length > 0 && <FeedOnlyTable rows={misses} />}
     </>
   );
 }
