@@ -42,12 +42,31 @@ def _openrent_v2() -> Any:
     return OpenRentV2()
 
 
+def _zoopla_london() -> Any:
+    """Zoopla, read as one search of the whole city rather than district by
+    district.
+
+    A separate job from `zoopla` and not a replacement for it: they are two
+    schedules with two timers, and the district reader stays the way to read a
+    named district on demand — which is what onboarding a district and catching
+    up after an outage both need.
+
+    The same source key, though, so the two converge on one row per flat. See
+    the class note in worker.sources.zoopla.
+    """
+
+    from worker.sources.zoopla import Zoopla
+
+    return Zoopla.for_region()
+
+
 # One job per portal, keyed by source key. Built through these thunks rather
 # than imported at module level: the delivery host installs no scraping extra,
 # and `import worker.pipeline.run` must not require curl_cffi there.
 PORTAL_JOBS: dict[str, Any] = {
     "rightmove": _rightmove,
     "zoopla": _zoopla,
+    "zoopla_london": _zoopla_london,
     "openrent_v2": _openrent_v2,
 }
 
@@ -128,17 +147,34 @@ def run_job(
         # schedules it.
         from worker.sources.sweep import collect as sweep_portal
 
-        wanted = dict(PORTAL_JOBS) if job == "portals" else {job: PORTAL_JOBS[job]}
+        chosen = dict(PORTAL_JOBS) if job == "portals" else {job: PORTAL_JOBS[job]}
+        # Built here rather than inside the loop, because the gate below has to
+        # ask each reader what source it writes to. Building is cheap — these
+        # are plain objects — and it is only reached on a portal job, which is
+        # the point of the thunks: importing this module still needs no scraping
+        # extra on the delivery host.
+        wanted = {name: build() for name, build in chosen.items()}
 
         # `sources.enabled` decides whether a portal runs, so switching one off
         # is one UPDATE and no deploy. An explicit --source overrides it,
         # because asking for one reader by name is a deliberate act and having
         # it silently do nothing would be worse than an error.
+        #
+        # Asked of the reader's own source key, not of the job name. Two jobs
+        # can read one site — `zoopla` by district and `zoopla_london` in one
+        # sweep — and keyed by job name the second was switched off by a
+        # `sources` row that does not exist and never will.
         if source_key is None:
             live = store.enabled_sources(conn)
-            for key in sorted(set(wanted) - live):
-                run.event("info", f"{key} is disabled in sources; skipping")
-                del wanted[key]
+            for name in sorted(wanted):
+                if wanted[name].key in live:
+                    continue
+                run.event(
+                    "info",
+                    f"{name} reads {wanted[name].key}, which is disabled in "
+                    f"sources; skipping",
+                )
+                del wanted[name]
             if not wanted:
                 run.event("warn", "no enabled portal to read")
                 return "ok"
@@ -153,9 +189,9 @@ def run_job(
             wanted = {source_key: PORTAL_JOBS[source_key]}
 
         status = "ok"
-        for key, build in wanted.items():
+        for key, reader in wanted.items():
             try:
-                sweep = sweep_portal(conn, run, build(), dry_run=cfg.dry_run)
+                sweep = sweep_portal(conn, run, reader, dry_run=cfg.dry_run)
             except Exception as exc:
                 # One portal must not take the others' listings with it. The
                 # stage is already marked failed by `run.stage`; this keeps the

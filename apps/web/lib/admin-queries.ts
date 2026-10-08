@@ -584,7 +584,8 @@ export const STUCK_AFTER_MINUTES = 15;
 // permanent red panel for a job nobody wants running. If it is ever enabled
 // again it appears here anyway, through `seen`.
 export const EXPECTED_JOBS = [
-  "ingest", "rightmove", "zoopla", "openrent_v2", "drain", "rollup", "report",
+  "ingest", "rightmove", "zoopla", "zoopla_london", "openrent_v2",
+  "drain", "rollup", "report",
 ] as const;
 
 export async function jobStates(win: Win): Promise<JobState[]> {

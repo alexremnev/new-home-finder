@@ -183,6 +183,23 @@ class Portal(Protocol):
     #: True when every listing carries a trustworthy first-appeared date.
     dated: bool
 
+    #: Names to sweep instead of the subscribed districts, or empty for the
+    #: usual district-by-district read.
+    #:
+    #: A reader that can search a whole region in one query returns the region
+    #: here, and the engine treats it as a pseudo-district: one watch, one
+    #: watermark, one gap rule, all the existing machinery unchanged. What it
+    #: cannot do is tell the engine which district a listing is in — so a
+    #: portal with regions must file each listing itself, and `collect` trusts
+    #: `listing.postcode_district` rather than the name it searched for.
+    #:
+    #: Why it is worth it: a district sweep costs one page per subscribed
+    #: district per run, for ever, and a region sweep costs one page per run
+    #: whatever anybody subscribes to. Measured on two weeks of this project's
+    #: own counters: 4.8MB per district per day against about 9MB a day for
+    #: every district in London. See worker.sources.zoopla.REGION.
+    regions: tuple[str, ...]
+
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
     ) -> str | None:
@@ -437,6 +454,15 @@ def _collect(
             )
             return Sweep()
 
+        # What gets read, which is no longer the same thing as what is wanted.
+        # A region reader sweeps one name and sorts the results out afterwards;
+        # a district reader sweeps exactly the districts somebody asked for.
+        regions = tuple(getattr(portal, "regions", ()) or ())
+        to_read = sorted(regions) if regions else wanted
+        wanted_set = set(wanted)
+        if regions:
+            stage.set("regions", list(regions))
+
         # Read up front, before anything below writes to it: a district that
         # starts being watched during this run must not retroactively make this
         # run's own backlog announceable.
@@ -448,7 +474,7 @@ def _collect(
         watching = store.district_watch(conn, portal.key)
         stage.set("settled_districts", len(watching))
 
-        stale = stale_watches(wanted, watching)
+        stale = stale_watches(to_read, watching)
         if stale:
             store.void_watch(conn, portal.key, stale)
             stage.set("watch_restarted", stale)
@@ -464,7 +490,7 @@ def _collect(
             for gone in stale:
                 del watching[gone]
 
-        order = sweep_order(wanted, watching)
+        order = sweep_order(to_read, watching)
 
         refused = 0
         postcodes = POSTCODE_BUDGET
@@ -544,10 +570,24 @@ def _collect(
             derived = _derive_postcodes(fresh, stage)
 
             for one in fresh:
+                # A listing page costs 43KB and only earns it for a district
+                # somebody is waiting for. The search page, by contrast, is
+                # already paid for — so everything on it is stored either way.
+                #
+                # Storing a district nobody has chosen is close to free and buys
+                # something real: when somebody does choose it, the listings are
+                # already there and `backfill_from` decides what they hear
+                # about, instead of the district starting cold. In district mode
+                # this is always true, because the only districts read are the
+                # wanted ones.
+                worth_a_page = one.listing.postcode_district in wanted_set
+                if not worth_a_page:
+                    stage.count("outside_the_filter")
+
                 # Before storing, not after: the postcode is what the
                 # duplicate rule compares on, and filling it in afterwards
                 # would mean the comparison had already been made without it.
-                if one.listing.postcode is None and postcodes > 0:
+                if one.listing.postcode is None and postcodes > 0 and worth_a_page:
                     filled = _fill_postcode(portal, one, fetcher, stage)
                     if filled is not one:
                         one = filled
@@ -612,6 +652,17 @@ def _collect(
                 store.mark_swept(conn, portal.key, district)
             if not harvest.complete:
                 stage.count("district_partial")
+                if regions:
+                    # The watermark stays where it is, so the next run tries
+                    # again — but a region search can only reach its newest
+                    # 1,000 results (pageNumberMax 40, measured), so a gap this
+                    # reader cannot close in one run is a gap that will outlive
+                    # the pages that cover it. That is a fault, not a counter.
+                    stage.degrade(
+                        f"{district} did not read back to the watermark in "
+                        f"{harvest.pages} pages; listings published in the gap "
+                        f"may fall past the search's own 1,000-result ceiling"
+                    )
 
         stage.count("over_budget", max(0, len(order) - budget))
         stage.set("requests", fetcher.requests)

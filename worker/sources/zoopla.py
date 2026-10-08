@@ -86,6 +86,49 @@ NEWEST_FIRST = "newest_listings"
 # two, so this is only ever reached if something is wrong.
 MAX_PAGES = 5
 
+# ── reading the whole of London in one query ─────────────────────────────────
+#
+# The same url with a region slug where the outcode goes:
+# `/to-rent/property/london/?results_sort=newest_listings`. Measured 8 October
+# 2026 against the live site, and against two weeks of this project's own
+# `job_stages` counters:
+#
+#   * a region page is 60KB and holds 25 listings, the same as a district page
+#     — the search is the same search, only wider;
+#   * one page spanned 15 different outcodes (E1, E6, E14, EN4, HA1, HA3, HA9,
+#     NW9, SE18, SE22, SW3, SW11, SW18, W14, W1H), so a district sweep is
+#     fetching fifteen pages for what one page carries;
+#   * London publishes on the order of 1,100 rental listings a day here. At a
+#     five-minute interval that is about 15 new ones per run in the busiest
+#     hour, against 25 on a page — so one page per run, almost always.
+#
+# Which is the whole point: the cost of a district sweep grows with the number
+# of districts somebody subscribes to, and the cost of this does not grow at
+# all. Two weeks of measured traffic put the district sweep at 4.8MB per
+# district per day; this is about 9MB a day for every district in London.
+REGION = "london"
+
+# Pages per run in region mode. Higher than `MAX_PAGES` because this one page
+# is the whole city: at ~180 listings an hour in the busiest hour, twenty pages
+# is about five hours of catching up after an outage.
+#
+# It cannot be raised past the site's own ceiling. `pageNumberMax` on the London
+# search is 40, measured, and all 40 pages were the same day — so the newest
+# 1,000 listings is everything this search can ever reach, and a gap longer
+# than that is a gap the engine must refuse to settle over rather than skip.
+MAX_PAGES_REGION = 20
+
+# An outward code anywhere in the address, not only at the end.
+#
+# `stated_outcode` wants it last, which is where Zoopla usually puts it
+# ("Cobalt Point, Canary Wharf, London E14"). On a region page that was true of
+# 21 of 25 addresses; the other four put it in the middle — "Brixton Road SW9,
+# Stockwell, London", "The Draper NW9, Colindale, London". Since the searched
+# name is no longer the answer in region mode, the address has to be read
+# wherever the code happens to sit, and the LAST match is taken: a UK address
+# puts the postcode late, and a street called "Block A1" would otherwise win.
+OUTCODE_IN_ADDRESS = re.compile(r"\b([A-Z]{1,2}\d{1,2}[A-Z]?)\b(?=[\s,]|$)")
+
 # The array that holds the district's own listings, in order. See the module
 # note for the two arrays beside it that must not be read.
 LISTINGS_KEY = "regularListingsFormatted"
@@ -495,8 +538,16 @@ def prose(row: dict[str, Any]) -> str:
     return " · ".join(part for part in parts if part)
 
 
-def as_listing(row: Any, district: str) -> Listing | None:
-    """One search result as a `Listing`, or nothing if it is unusable."""
+def as_listing(row: Any, district: str, *, from_address: bool = False) -> Listing | None:
+    """One search result as a `Listing`, or nothing if it is unusable.
+
+    `from_address` is region mode: the search was "london", so the searched
+    name says nothing about where the flat is and the address has to. A card
+    whose address names no outward code is dropped rather than filed under the
+    region — `match._check_areas` needs a district to match on, so a listing
+    without one can never reach anybody and storing it is noise. Measured at
+    25 of 25 addresses carrying one, so this is the rare case, not the rule.
+    """
 
     if not isinstance(row, dict):
         return None
@@ -535,6 +586,15 @@ def as_listing(row: Any, district: str) -> Listing | None:
     # alert is a list of one-line facts and a portal is free to embed a
     # newline in an address.
     address = SPACES.sub(" ", str(row.get("address") or "")).strip()
+
+    # Region mode reads it off the address; a district search is its own
+    # answer. Deliberately not "prefer the address either way": on a district
+    # page the searched outcode is what the page is, and changing that would
+    # refile two weeks of stored listings for no reason anybody asked for.
+    filed = (outcode_in(address) if from_address else district.upper()) or ""
+    if not filed:
+        return None
+
     where = row.get("pos")
     where = where if isinstance(where, dict) else {}
 
@@ -566,7 +626,7 @@ def as_listing(row: Any, district: str) -> Listing | None:
         # the duplicate rule compares full postcodes, and an outward code alone
         # would make every 2-bed at one price in E14 the same flat.
         postcode=None,
-        postcode_district=district.upper(),
+        postcode_district=filed,
         lat=_coord(where.get("lat"), 90),
         lng=_coord(where.get("lng"), 180),
         title=address or str(row.get("title") or "") or None,
@@ -590,6 +650,17 @@ def stated_outcode(address: str) -> str | None:
 
     found = OUTCODE_AT_END.search(address.upper().strip())
     return found.group(1) if found else None
+
+
+def outcode_in(address: str) -> str | None:
+    """The outward code anywhere in the address — the last one. See the pattern.
+
+    For region mode, where the searched name is "london" and so says nothing
+    about where the flat is.
+    """
+
+    found = OUTCODE_IN_ADDRESS.findall(address.upper().strip())
+    return found[-1] if found else None
 
 
 def _count(raw: Any) -> int | None:
@@ -617,7 +688,7 @@ class Read:
     invalid: int = 0
 
 
-def catches_in(page: str, district: str) -> Read:
+def catches_in(page: str, district: str, *, from_address: bool = False) -> Read:
     """Every usable listing on one Zoopla search page."""
 
     rows = listings_in(page)
@@ -625,7 +696,7 @@ def catches_in(page: str, district: str) -> Read:
     invalid = 0
     for row in rows:
         try:
-            listing = as_listing(row, district)
+            listing = as_listing(row, district, from_address=from_address)
         except ValidationError:
             # Never fatal — see the same guard in openrent and rightmove.
             invalid += 1
@@ -651,14 +722,58 @@ def catches_in(page: str, district: str) -> Read:
 
 @dataclass(frozen=True)
 class Zoopla:
-    """The portal, as `worker.sources.sweep.collect` needs it."""
+    """The portal, as `worker.sources.sweep.collect` needs it.
+
+    Two modes, one class, one source key.
+
+    Per district, which is what it has always done: one search page per
+    subscribed outcode, and the searched outcode is the listing's district.
+
+    Per region, with `region="london"`: one search of the whole city, newest
+    first, paged until it reaches the watermark. The engine treats the region
+    name as a pseudo-district — see `regions` — so the watch, the watermark and
+    the gap rule all work unchanged, and there is exactly one of each instead
+    of one per outcode.
+
+    The source key is the same in both modes, deliberately. `listings` is
+    UNIQUE (source_key, external_id), so whichever mode sees a flat first
+    stores it and the other converges on the same row — which is what keeps
+    `notifications`, UNIQUE (user_id, listing_id), from sending one flat twice.
+    A second source key would have made two rows of one flat and, with no full
+    postcode on a search page for `mark_duplicate` to match on, two alerts.
+    """
 
     key: str = SOURCE_KEY
     #: `publishedOn` is a day rather than an instant, but it is a date the
     #: portal stands behind, so announceability is decided from it. See the
     #: module note on why it is stored as the end of its day.
     dated: bool = True
+
+    #: The region to sweep instead of the subscribed districts, or None for the
+    #: district reader. A frozen field rather than a subclass: everything else
+    #: about the two is identical, and a second class would have to be kept in
+    #: step with this one for ever.
+    region: str | None = None
+
+    #: Pages per run. Left settable so a test can cap it; `for_region` is what
+    #: raises it in normal use, because one region page is the whole city.
     max_pages: int = MAX_PAGES
+
+    @classmethod
+    def for_region(cls, region: str = REGION) -> Zoopla:
+        """The London reader: one search, newest first, paged to the watermark."""
+
+        return cls(region=region, max_pages=MAX_PAGES_REGION)
+
+    @property
+    def regions(self) -> tuple[str, ...]:
+        """What to sweep instead of the subscribed districts, if anything.
+
+        Empty for the district reader, which is how `sweep.collect` tells the
+        two apart without knowing anything about Zoopla.
+        """
+
+        return (self.region,) if self.region else ()
 
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
@@ -686,19 +801,19 @@ class Zoopla:
         since: datetime | None,
         memory: Memory | None = None,
     ) -> Harvest:
-        # Unused here: this portal's search page carries the listings
-        # themselves, so there is nothing to decide before fetching them.
-        del memory
         caught: list[Catch] = []
         seen: set[str] = set()
         pages = 0
         complete = False
         page_number = 1
+        # In region mode `district` is the region name, so it is the slug in
+        # the url and not the answer about any listing.
+        from_address = bool(self.region)
 
         while pages < self.max_pages:
             reply = get.get(search_url(district, page_number))
             pages += 1
-            read = catches_in(reply.body, district)
+            read = catches_in(reply.body, district, from_address=from_address)
             if read.skipped:
                 stage.count("not_a_listing", read.skipped)
             if read.invalid:
@@ -720,6 +835,32 @@ class Zoopla:
                 # announced. See worker.sources.sweep.
                 complete = True
                 break
+
+            # ── where region mode stops ─────────────────────────────────
+            #
+            # On a page we have seen all of, and not on a date.
+            #
+            # `publishedOn` is a day, stored as the end of that day, which is
+            # fine for a district: one page of 25 covers a day or two, so it
+            # reaches yesterday and the date test bites on page one. It is
+            # useless for the whole city. London publishes about 1,100 listings
+            # a day, so a page is half an hour of it, and every listing on the
+            # first forty-odd pages carries today's date — later than any
+            # watermark set today. Measured: with a two-hour watermark the date
+            # test did not bite in two pages, and at twenty pages a run it
+            # would never bite before the cap, so the mark would never advance
+            # and every run would read 1.2MB.
+            #
+            # "Every id on this page is one we already have" is the test that
+            # actually means "there is nothing newer beyond here", and the
+            # engine already offers it. At a five-minute interval the first
+            # page holds a handful of new listings and the second is all known,
+            # so a run is one or two pages.
+            if from_address and memory is not None:
+                ids = [one.listing.external_id for one in read.caught]
+                if len(memory.stored(ids)) == len(ids):
+                    complete = True
+                    break
 
             # Stop once the page reaches a day before the watch began. No
             # promoted-row exception is needed here: the promoted listings are
@@ -746,10 +887,35 @@ class Zoopla:
 
 
 __all__ = [
-    "BASE", "KINDS", "LISTINGS_KEY", "MAX_PAGES", "NEITHER", "NEWEST_FIRST",
-    "NOT_A_DWELLING", "SOURCE_KEY", "Read", "Zoopla", "a_dwelling",
-    "as_listing", "card_is_a_dwelling", "catches_in", "feature",
-    "flight_stream", "kind_of", "listings_in", "monthly", "pages_total",
-    "picture", "prose", "published", "said_type", "search_url",
-    "stated_outcode", "type_of", "when",
+    "BASE",
+    "KINDS",
+    "LISTINGS_KEY",
+    "MAX_PAGES",
+    "MAX_PAGES_REGION",
+    "NEITHER",
+    "NEWEST_FIRST",
+    "NOT_A_DWELLING",
+    "OUTCODE_IN_ADDRESS",
+    "REGION",
+    "SOURCE_KEY",
+    "Read",
+    "Zoopla",
+    "a_dwelling",
+    "as_listing",
+    "card_is_a_dwelling",
+    "catches_in",
+    "feature",
+    "flight_stream",
+    "kind_of",
+    "listings_in",
+    "monthly",
+    "pages_total",
+    "picture",
+    "prose",
+    "published",
+    "said_type",
+    "search_url",
+    "stated_outcode",
+    "type_of",
+    "when",
 ]

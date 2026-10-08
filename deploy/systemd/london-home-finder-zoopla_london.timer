@@ -1,0 +1,92 @@
+# Zoopla, read as one search of the whole city.
+#
+# A second Zoopla job beside `zoopla`, not a replacement for it. The district
+# reader stays: reading one named district on demand is what onboarding a
+# district and catching up after an outage both need, and it is the fallback if
+# this one is ever refused outright.
+#
+# ── what it costs, measured ──────────────────────────────────────────────
+#
+# One region page is 60KB and holds 25 listings — the same page as a district
+# page, only wider. Measured against two weeks of this project's own
+# `job_stages` counters and against the live site on 8 October 2026:
+#
+#   district sweep   4.8 MB per district per day   (10 districts = 48 MB/day)
+#   region sweep     about 7 MB a day              for every district in London
+#
+# London publishes on the order of 1,100 rental listings a day on Zoopla, so
+# about 15 arrive in five minutes in the busiest hour against 25 on a page.
+# One page per run, almost always — which is why the cost does not grow with
+# the number of districts anybody subscribes to.
+#
+# ── the schedule, in London time ─────────────────────────────────────────
+#
+#   weekdays  07:20–17:00   every 5 minutes
+#   weekdays  17:00–22:00   every 15 minutes
+#   weekdays  22:00–07:20   not at all
+#   weekends  10:00–20:00   every 15 minutes
+#
+# Five minutes in the working day because that is the promise the product
+# makes, and because a shorter interval is also a cheaper one per run: fewer
+# arrivals between runs means fewer pages to page through. Evenings and
+# weekends are quarter-hourly — agents publish inside office hours, and the
+# measured evening rate was one listing per five minutes.
+#
+# ── the minute is :03/5, and that is not arbitrary ───────────────────────
+#
+# The four readers must not start in the same minute. Rightmove takes :00,
+# :10, :20…; Zoopla by district :07, :27, :47; OpenRent :14, :34, :54. This one
+# takes :03, :08, :13… which lands on none of them.
+#
+# One minute is the best separation available, not a comfortable one: twelve
+# five-minute slots an hour against the twelve minutes the other three already
+# occupy leaves no series further away, and :13 sits a minute from OpenRent's
+# :14. Hence 30 seconds of jitter rather than Rightmove's 90 — at a
+# five-minute period, ninety seconds is a third of the interval and would both
+# slide runs into each other and undo this spacing.
+#
+# What makes one minute enough is the advisory lock: two runs of the same job
+# cannot overlap at all — the second records `skipped_locked` — and two
+# different readers overlapping costs nothing but bandwidth on one machine.
+#
+# ── the zone is stated here, not taken from the machine ──────────────────
+#
+# Every line carries `Europe/London`. Without it systemd reads OnCalendar in
+# whatever zone the machine happens to be in: the server runs on UTC, so the
+# schedule would sit an hour early through British Summer Time, quietly correct
+# itself in October and break again in March.
+#
+# Needs systemd 252 or later. Check a line with
+#
+#     systemd-analyze calendar 'Mon..Fri 08..16:03/5 Europe/London'
+
+[Unit]
+Description=Read the whole of Zoopla London, newest first
+
+[Timer]
+Unit=london-home-finder@zoopla_london.service
+
+# Weekdays, the working day. Two lines because the day does not start on the
+# hour: the first covers the runs before 08:00, the second the whole hours
+# after it. Folded into one `07..16` line it would add runs at 07:03 and 07:08
+# that the schedule deliberately excludes.
+OnCalendar=Mon..Fri 07:23/5 Europe/London
+OnCalendar=Mon..Fri 08..16:03/5 Europe/London
+# Weekday evenings, quarter-hourly.
+OnCalendar=Mon..Fri 17..21:03/15 Europe/London
+# Weekends, a shorter day and the same quarter-hour.
+OnCalendar=Sat,Sun 10..19:03/15 Europe/London
+
+# Half a minute of jitter — enough to be off the stroke of the minute, small
+# enough that two runs of a five-minute timer cannot meet.
+RandomizedDelaySec=30s
+AccuracySec=15s
+
+# Deliberately NOT Persistent. A run missed because the machine was off should
+# be skipped, not fired the moment it boots — and this reader in particular
+# cannot usefully catch up on a long gap anyway: the search reaches its newest
+# 1,000 results and no further.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

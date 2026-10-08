@@ -16,6 +16,7 @@
 #
 #   bash deploy/run-job.sh rightmove --dry-run
 #   bash deploy/run-job.sh zoopla
+#   bash deploy/run-job.sh zoopla_london    # the whole city in one search
 #   bash deploy/run-job.sh openrent_v2
 #   bash deploy/run-job.sh portals          # all three in one go
 #   bash deploy/run-job.sh drain
@@ -32,7 +33,8 @@ USER_NAME=finder
 
 if [ "$#" -eq 0 ]; then
   echo "Usage: bash deploy/run-job.sh <job> [flags]" >&2
-  echo "Jobs: ingest, rightmove, zoopla, openrent_v2, portals," >&2
+  echo "Jobs: ingest, rightmove, zoopla, zoopla_london," >&2
+  echo "      openrent_v2, portals," >&2
   echo "      drain, rollup, scrape" >&2
   exit 2
 fi

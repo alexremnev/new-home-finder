@@ -24,16 +24,18 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from worker.sources.fetch import Reply
-from worker.sources.sweep import _announceable
+from worker.sources.sweep import Memory, _announceable
 from worker.sources.zoopla import (
     Zoopla,
     a_dwelling,
+    as_listing,
     card_is_a_dwelling,
     catches_in,
     flight_stream,
     kind_of,
     listings_in,
     monthly,
+    outcode_in,
     pages_total,
     picture,
     published,
@@ -377,3 +379,151 @@ def test_an_agent_mentioning_a_garage_still_has_a_flat_to_let() -> None:
     }
     assert card_is_a_dwelling(card) is True
     assert type_of(card) == "flat"
+
+
+# ── the region reader ─────────────────────────────────────────────────────
+#
+# Addresses as served by the live London search on 8 October 2026. Twenty-one
+# of twenty-five put the outward code last, which is what `stated_outcode`
+# wants; the other four put it in the middle, which is why region mode reads it
+# from anywhere in the string.
+LONDON_ADDRESSES = {
+    "Cobalt Point, Canary Wharf, London E14": "E14",
+    "Marsh Wall, Canary Wharf E14": "E14",
+    "Brixton Road SW9, Stockwell, London": "SW9",
+    "The Draper NW9, Colindale, London": "NW9",
+    "Frederick Road SE17, Kennington, London": "SE17",
+    "The Heights HA1, Harrow On The Hill, Harrow": "HA1",
+}
+
+
+def test_the_outward_code_is_read_from_anywhere_in_the_address() -> None:
+    for address, expected in LONDON_ADDRESSES.items():
+        assert outcode_in(address) == expected, address
+
+
+def test_the_last_code_wins_not_the_first() -> None:
+    # A building called "Block A1" has a postcode's shape at the front of the
+    # address. A UK address puts the real one late, so the last match is taken.
+    assert outcode_in("Block A1, Somewhere Road, London SE16") == "SE16"
+
+
+def test_an_address_with_no_code_yields_nothing() -> None:
+    assert outcode_in("No code here at all") is None
+
+
+def test_the_region_reader_sweeps_one_name_and_pages_further() -> None:
+    # The engine reads `regions` to tell the two readers apart without knowing
+    # anything about Zoopla; `max_pages` is higher because one region page is
+    # the whole city and a gap takes more of them to close.
+    district, region = Zoopla(), Zoopla.for_region()
+
+    assert district.regions == ()
+    assert region.regions == ("london",)
+    assert region.max_pages > district.max_pages
+    # One source key, so a flat seen by both readers is one row in `listings`
+    # and therefore one alert. See the class note.
+    assert district.key == region.key
+
+
+def test_in_region_mode_the_listing_is_filed_by_its_own_address() -> None:
+    # Not by the searched name, which is "london" and says nothing.
+    caught = catches_in(PAGE, "london", from_address=True).caught
+
+    assert caught
+    assert {one.listing.postcode_district for one in caught} == {"E14"}
+
+
+def test_a_district_search_still_trusts_the_district_it_searched() -> None:
+    # Unchanged on the old path: the page IS that outcode, and refiling two
+    # weeks of stored listings off the back of this change is not something
+    # anybody asked for.
+    caught = catches_in(PAGE, "e14").caught
+
+    assert {one.listing.postcode_district for one in caught} == {"E14"}
+
+
+def test_a_card_with_no_readable_district_is_dropped_in_region_mode() -> None:
+    # `match._check_areas` needs a district to match on, so a listing without
+    # one can never reach anybody — storing it would be noise with a row in it.
+    card = {
+        "listingId": "1",
+        "address": "Somewhere nice, London",
+        "propertyType": "flat",
+        "price": "£2,000 pcm",
+        "priceUnformatted": 2000,
+        "listingUris": {"detail": "/to-rent/details/1/"},
+    }
+    assert as_listing(card, "london", from_address=True) is None
+    # The same card on a district search is filed under what was searched.
+    filed = as_listing(card, "e14")
+    assert filed is not None and filed.postcode_district == "E14"
+
+
+# Earlier than anything in the fixture, which is dated 26 September 2026.
+BEFORE_FIXTURE = datetime(2026, 9, 1, tzinfo=UTC)
+
+
+def known(*ids: str) -> Memory:
+    """A `Memory` that claims to have exactly these external ids."""
+
+    return Memory(
+        stored=lambda asked: {one for one in asked if one in set(ids)},
+        resolved=lambda asked: {},
+        remember=lambda learned: None,
+    )
+
+
+def test_region_mode_stops_on_a_page_it_has_already_seen() -> None:
+    # The stop that matters. `publishedOn` is a day, so on the whole city every
+    # listing for the next forty pages carries today's date and the date test
+    # never bites — measured. "Every id here is one we have" is what actually
+    # means "nothing newer beyond this".
+    page_ids = [
+        one.listing.external_id
+        for one in catches_in(PAGE, "london", from_address=True).caught
+    ]
+    reader = Zoopla(region="london", max_pages=5)
+    harvest = reader.harvest(
+        "london",
+        Pages(PAGE, PAGE, PAGE),  # type: ignore[arg-type]
+        Quiet(),  # type: ignore[arg-type]
+        # Before the fixture's own dates, so the date test cannot be what
+        # stops this and the new rule is the only thing under test.
+        BEFORE_FIXTURE,
+        known(*page_ids),
+    )
+
+    assert harvest.pages == 1
+    assert harvest.complete is True
+
+
+def test_region_mode_keeps_paging_while_the_page_holds_something_new() -> None:
+    reader = Zoopla(region="london", max_pages=3)
+    harvest = reader.harvest(
+        "london",
+        Pages(PAGE, PAGE, PAGE),  # type: ignore[arg-type]
+        Quiet(),  # type: ignore[arg-type]
+        BEFORE_FIXTURE,
+        known(),
+    )
+
+    # Nothing known and nothing old enough to stop it, so it reads to the cap
+    # and says so — which is what makes the engine leave the watermark alone.
+    assert harvest.pages == 3
+    assert harvest.complete is False
+
+
+def test_a_district_read_is_not_affected_by_the_new_stop() -> None:
+    # No region, so the old date test is the only one, and a `Memory` claiming
+    # everything is known must not shorten it.
+    reader = Zoopla(max_pages=3)
+    harvest = reader.harvest(
+        "e14",
+        Pages(PAGE),  # type: ignore[arg-type]
+        Quiet(),  # type: ignore[arg-type]
+        None,
+        known("anything"),
+    )
+
+    assert harvest.pages == 1
