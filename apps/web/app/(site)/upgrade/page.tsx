@@ -25,8 +25,9 @@ export default async function UpgradePage({
       <div className="panel">
         <h1>That link has expired</h1>
         <p className="lede">
-          Upgrade links are short lived on purpose — one left in a chat should stop
-          working. Send <strong>/pay</strong> to the bot for a new one.
+          A checkout link lapses once it has gone a day and a half unused, and
+          this one has. Send <strong>/pay</strong> to the bot — the next one
+          arrives straight away, and nothing has been charged.
         </p>
       </div>
     );

@@ -148,32 +148,39 @@ def active_subscriptions(conn: Conn) -> list[Row]:
     )
 
 # A checkout link the worker can push. The site issues these for somebody who
-# has just asked (/pay), and an hour's life is right for that. A link inside the
-# 20:00 digest is different: it may well be tapped the next morning, and an
-# expired button is worse than none.
+# has just asked (/pay), and an hour's life is right for that. A link inside a
+# listing alert or the 20:00 digest is different: it may well be tapped the next
+# morning, and an expired button is worse than none.
 PUSHED_TOKEN_MINUTES = 36 * 60
-
-# Reused while it has this much life left, so that the link in a message sent
-# ten minutes ago still works. Issuing a fresh one every run would kill it.
-KEEP_ALIVE_MINUTES = 60
 
 def upgrade_token(conn: Conn, user_id: int) -> str:
 
+    # Kept and extended, never replaced while it is live.
+    #
+    # One account has one upgrade token, and every link it has ever appeared in
+    # is the same string — so pushing a new message cannot kill the button in
+    # the last one. Extending rather than overwriting is also what stops the
+    # site and the worker taking the link away from each other: an hour from
+    # /pay and thirty-six from here, and `greatest` means whichever is longer
+    # wins rather than whichever ran last.
     live = conn.execute(
         """
-        SELECT token FROM user_tokens
-         WHERE user_id = %s AND purpose = 'upgrade' AND used_at IS NULL
-           AND expires_at > now() + make_interval(mins => %s)
-         ORDER BY expires_at DESC
-         LIMIT 1
+        UPDATE user_tokens
+           SET expires_at = greatest(
+                   expires_at, now() + make_interval(mins => %s)
+               )
+         WHERE user_id = %s AND purpose = 'upgrade'
+           AND used_at IS NULL AND expires_at > now()
+        RETURNING token
         """,
-        (user_id, KEEP_ALIVE_MINUTES),
+        (PUSHED_TOKEN_MINUTES, user_id),
     ).fetchone()
     if live:
         return str(live["token"])
 
     # base64url of 24 bytes, the same shape the site issues.
     token = secrets.token_urlsafe(24)
+    # Only dead rows are left to clear: anything live was returned above.
     conn.execute(
         "DELETE FROM user_tokens WHERE user_id = %s AND purpose = 'upgrade'", (user_id,)
     )

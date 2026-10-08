@@ -236,7 +236,14 @@ export async function districtNames(): Promise<Record<string, string>> {
 const TOKEN_BYTES = 24;
 export const START_TTL_MINUTES = 60;
 
-export const UPGRADE_TTL_MINUTES = 60;
+// A checkout link lives in a chat message, and a chat message is read whenever
+// it is read. This was an hour, on the reasoning that somebody who has just
+// sent /pay is about to tap it — true of the tap, false of the message, which
+// stays in the conversation and is the thing people come back to when they have
+// decided. Thirty-six hours, the same as `PUSHED_TOKEN_MINUTES` in
+// `worker/store.py`: the worker's checkout links and the bot's are the same
+// link, and two answers to how long it lasts is one too many.
+export const UPGRADE_TTL_MINUTES = 36 * 60;
 
 // An edit link is followed straight away, from a chat the person is already in.
 // Long enough to fill the form without rushing, short enough that one left in a
@@ -252,13 +259,43 @@ export function newToken(): string {
 // trial are not what a returning subscriber came to read.
 export type TokenPurpose = "start" | "upgrade" | "edit";
 
+/**
+ * A link token for this person and this purpose — the live one where there is
+ * one, extended rather than replaced.
+ *
+ * This used to delete the account's previous token and insert a new one, which
+ * meant every link already sitting in their chat stopped working the moment
+ * another was handed out. That is the one failure the person can do nothing
+ * about: the button looks fine and lands on "that link has expired". The worker
+ * pushes a thirty-six hour checkout link into a listing alert, the site then
+ * hands out an hour-long one for /pay, and whichever ran last used to take the
+ * other's away.
+ *
+ * So: one token per account per purpose, and `greatest` on the expiry so the
+ * life only ever grows. Both sides agree on this — see `upgrade_token` in
+ * `worker/store.py`, which does the same from the other direction.
+ *
+ * The purposes that must not be reusable do not come through here: a 'start'
+ * token is claimed once, and `/api/subscribe` inserts those itself.
+ */
 export async function issueToken(
   userId: number,
   purpose: TokenPurpose,
   ttlMinutes: number,
 ): Promise<string> {
-  const token = newToken();
+  const kept = await query<{ token: string }>(
+    `UPDATE user_tokens
+        SET expires_at = greatest(expires_at, now() + make_interval(mins => $3::int))
+      WHERE user_id = $1 AND purpose = $2
+        AND used_at IS NULL AND expires_at > now()
+      RETURNING token`,
+    [userId, purpose, ttlMinutes],
+  );
+  const live = kept[0]?.token;
+  if (live) return live;
 
+  const token = newToken();
+  // Only dead rows are left to clear: anything live was returned above.
   await query(`DELETE FROM user_tokens WHERE user_id = $1 AND purpose = $2`, [userId, purpose]);
   await query(
     `INSERT INTO user_tokens (token, user_id, purpose, expires_at)
@@ -289,32 +326,6 @@ export function siteUrl(): string {
 }
 
 /**
- * The account's edit token, reused where there is a live one.
- *
- * Every message a bot sends offers a way back to the form, so this is asked for
- * constantly — and `issueToken` deletes the account's previous token of the same
- * purpose. Minting a new one each time would mean the link in the message
- * before this one had just stopped working, which is the one failure the person
- * cannot do anything about: the button looks fine and lands on a sign-up page.
- *
- * So the live token is kept and its expiry pushed out instead. One token per
- * account either way, and every link they have been given works for an hour
- * after the last thing the bot said to them.
- */
-async function editToken(userId: number): Promise<string> {
-  const rows = await query<{ token: string }>(
-    `UPDATE user_tokens
-        SET expires_at = now() + make_interval(mins => $2::int)
-      WHERE user_id = $1 AND purpose = 'edit'
-        AND used_at IS NULL AND expires_at > now()
-      RETURNING token`,
-    [userId, EDIT_TTL_MINUTES],
-  );
-  const live = rows[0]?.token;
-  return live ?? (await issueToken(userId, "edit", EDIT_TTL_MINUTES));
-}
-
-/**
  * The filter form, for somebody a bot already knows.
  *
  * Carries an `e=` token whenever the address belongs to an account, which is
@@ -334,7 +345,9 @@ export async function filterUrl(
   const account = await accountForChat(address, channel).catch(() => null);
   if (!account) return plain;
 
-  const token = await editToken(account.user_id).catch(() => null);
+  const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES).catch(
+    () => null,
+  );
   return token ? `${siteUrl()}/?e=${encodeURIComponent(token)}` : plain;
 }
 

@@ -5,22 +5,14 @@ from datetime import datetime
 
 SITE = os.environ.get("SITE_URL", "https://londonhomefinder.co.uk").rstrip("/")
 
-def bot_username() -> str:
-
-    return (os.environ.get("TELEGRAM_BOT_USERNAME") or "").strip().lstrip("@")
-
-def upgrade_link() -> str | None:
-
-    # Telegram only. Tapping it sends /pay to the bot, which issues a fresh
-    # checkout link — one tap, and never a stale token.
-    name = bot_username()
-    return f"https://t.me/{name}?start=pay" if name else None
-
 def checkout_link(token: str) -> str:
 
-    # Everywhere else. A t.me link in WhatsApp sends the person to a Telegram
-    # bot they may not even use, so the button has to carry the checkout page
-    # itself, and that page needs a token to know whose plan is being bought.
+    # Every channel. The page needs a token to know whose plan is being bought.
+    #
+    # Telegram used to get a t.me deep link here instead — tapping it sent
+    # /start pay to the bot, which replied with the price list and a link to
+    # this page. One tap became three and the prices were read twice, so the
+    # deep link and the bot username it needed are both gone.
     return f"{SITE}/upgrade?t={token}"
 
 KEPT = "Your filter is kept — paying turns the alerts back on with nothing to set up again."

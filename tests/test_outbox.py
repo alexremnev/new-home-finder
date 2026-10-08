@@ -100,22 +100,21 @@ class FakeConn:
     def fetchone(self) -> None:
         return None
 
-def test_telegram_gets_the_deep_link_and_whatsapp_gets_the_checkout_page(
+def test_the_button_goes_to_the_payment_page_not_back_into_the_bot(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
 
-    # A t.me link sent to WhatsApp walks the person into a Telegram bot rather
-    # than to the payment, which is where the money stopped.
+    # Telegram used to get a t.me deep link, which sent /start pay to the bot
+    # and was answered with the price list and a link to this page. A button
+    # labelled "Get full access" asked for a command and a message to be read
+    # before the payment page it was offering.
     monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "londonhomefinderbot")
     monkeypatch.setenv("SITE_URL", "https://londonhomefinder.co.uk")
 
-    assert checkout_for(FakeConn(), 5, "telegram") == (
-        "https://t.me/londonhomefinderbot?start=pay"
-    )
-
-    link = checkout_for(FakeConn(), 5, "whatsapp")
-    assert link is not None
+    link = checkout_for(FakeConn(), 5)
     assert link.startswith("https://londonhomefinder.co.uk/upgrade?t=")
+    # Named rather than implied: a t.me link in WhatsApp walks the person into a
+    # Telegram bot they may not use, and in Telegram it walks them in circles.
     assert "t.me" not in link
 
 def test_a_pushed_checkout_token_outlives_the_evening() -> None:
@@ -136,14 +135,28 @@ def test_a_reusable_token_is_preferred_to_a_fresh_one() -> None:
 
     conn = Existing()
     assert store.upgrade_token(conn, 5) == "still-good"
-    # Nothing was replaced: the link in the message sent a moment ago still works.
+    # Nothing was replaced: the link in the message sent a moment ago still
+    # works, and so does the one in the alert sent yesterday.
     assert not any("INSERT" in sql for sql in conn.statements)
+    assert not any("DELETE" in sql for sql in conn.statements)
 
-def test_without_a_bot_username_there_is_no_broken_button(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_reusing_a_token_never_shortens_its_life() -> None:
+    from worker import store
 
-    monkeypatch.delenv("TELEGRAM_BOT_USERNAME", raising=False)
+    # The site issues an hour-long token for /pay against the same row. Reading
+    # the expiry back with `greatest` is what stops this run from cutting a
+    # thirty-six hour link down — or the site from cutting this one down. Read
+    # off the statement because the rule lives in the database, not here.
+    conn = FakeConn()
+    store.upgrade_token(conn, 5)
+    extend = next(sql for sql in conn.statements if sql.startswith("UPDATE user_tokens"))
+    assert "greatest(" in extend
+    assert "used_at IS NULL" in extend
+
+def test_without_a_link_there_is_no_broken_button() -> None:
+
+    # The upgrade button is the link: there is nothing else for it to do, and a
+    # button that cannot be pressed anywhere is worse than no button.
     assert listing_actions(listing_view(row(delivery_share=20)), 1) == []
 
 def test_a_lapsed_trial_and_a_lapsed_plan_are_told_apart() -> None:

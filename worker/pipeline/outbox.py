@@ -24,7 +24,6 @@ from worker.notify.plans import (
     checkout_link,
     digest_notice,
     notice_for,
-    upgrade_link,
 )
 from worker.obs import Run
 from worker.pipeline.match import is_eligible, matches
@@ -325,14 +324,20 @@ def listing_view(row: Row) -> ListingView:
         ),
     )
 
-def checkout_for(conn: Conn, user_id: int, channel: str) -> str | None:
+def checkout_for(conn: Conn, user_id: int) -> str:
 
-    # The link has to suit the channel it is read in. Telegram gets the deep
-    # link, which asks the bot for a fresh token; anywhere else gets the
-    # checkout page and a token issued here, because a t.me link in WhatsApp
-    # walks the person into a Telegram bot instead of to the payment.
-    if channel == "telegram":
-        return upgrade_link()
+    # The checkout page, whatever the message is read in.
+    #
+    # Telegram used to get a t.me deep link instead, which sent /start pay to
+    # the bot: the bot answered with the price list and a link to this same
+    # page. So a button labelled "Get full access" asked the person to send a
+    # command, read the prices in a chat message, and only then arrive at the
+    # page that states the prices — three steps to say one thing twice. The
+    # link goes where the button says it goes.
+    #
+    # The token is the worker's own, and long-lived for the reason
+    # `store.upgrade_token` gives: a button in a message is tapped whenever the
+    # message is read.
     return checkout_link(store.upgrade_token(conn, user_id))
 
 def listing_actions(
@@ -409,9 +414,11 @@ def drain(
             return "ok"
 
         notifiers: dict[str, Any] = {}
-        # One checkout link per person per run: issuing one per listing would
-        # replace the token in the message sent a moment ago.
-        links: dict[tuple[int, str], str | None] = {}
+        # One checkout link per person per run. The token is now reused rather
+        # than replaced, so asking per listing would return the same string
+        # anyway — but it is a write apiece, and the answer cannot change
+        # inside one run.
+        links: dict[tuple[int, str], str] = {}
 
         gone: set[int] = set()
         status = "ok"
@@ -440,7 +447,7 @@ def drain(
                 continue
 
             if withheld_share(row) is not None and (user_id, channel) not in links:
-                links[(user_id, channel)] = checkout_for(conn, user_id, channel)
+                links[(user_id, channel)] = checkout_for(conn, user_id)
             alert = alert_for(row, links.get((user_id, channel)))
             if alert is None:
                 store.mark_failed(
@@ -671,11 +678,13 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 # nothing was missing — an upgrade prompt for access somebody
                 # already has.
                 if share < 100:
-                    link = checkout_for(conn, int(row["user_id"]), str(row["channel"]))
-                    if link:
-                        actions.insert(
-                            0, Action(label="Upgrade today for full access", url=link)
-                        )
+                    actions.insert(
+                        0,
+                        Action(
+                            label="Upgrade today for full access",
+                            url=checkout_for(conn, int(row["user_id"])),
+                        ),
+                    )
 
                 result = notifier.send(
                     Recipient(
@@ -727,7 +736,7 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         row["plan_until"],
                         notice_stage,
                         share,
-                        checkout_for(conn, int(row["user_id"]), str(row["channel"])),
+                        checkout_for(conn, int(row["user_id"])),
                         allowance=(
                             None if row.get("alert_allowance") is None
                             else int(row["alert_allowance"])
