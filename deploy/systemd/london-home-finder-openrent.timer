@@ -1,8 +1,8 @@
 # OpenRent, read from its own search pages.
 #
 # Costs about 92KB per district for every id in it, then one page per listing
-# that is genuinely new and genuinely in a subscribed district. The old
-# sitemap reader this replaces cost about 950MB a day.
+# that is genuinely new and genuinely in a subscribed district. The sitemap
+# reader this replaced cost about 950MB a day.
 #
 # ── the schedule, in London time ─────────────────────────────────────────
 #
@@ -12,15 +12,15 @@
 #   weekends  10:00–20:00   hourly
 #
 # Chosen against when London letting agents actually publish, and unchanged by
-# the split into three jobs. Each band's stated end is exclusive, which is what
-# makes the two weekday bands meet at 17:00 without firing twice.
+# the split into one job per portal. Each band's stated end is exclusive, which
+# is what makes the two weekday bands meet at 17:00 without firing twice.
 #
-# ── why the three are offset from each other ─────────────────────────────
+# ── why the readers are offset from each other ───────────────────────────
 #
-# OpenRent runs at fourteen minutes past — :14, :34, :54. Rightmove takes the top of the
-# interval, Zoopla seven minutes later, OpenRent fourteen — so the three sweeps
-# never land on the server in the same minute. Each still gets a full sweep
-# every twenty minutes; only the phase differs.
+# OpenRent runs at fourteen minutes past — :14, :34, :54. Rightmove takes the
+# top of the interval, Zoopla seven minutes later, OpenRent fourteen — so the
+# sweeps never land on the server in the same minute. Each still gets a full
+# sweep every twenty minutes; only the phase differs.
 #
 # The jitter below is 90 seconds against a seven-minute separation, so it
 # blurs the start without letting two jobs collide.
@@ -40,7 +40,7 @@
 Description=Read OpenRent search pages on London working hours
 
 [Timer]
-Unit=london-home-finder@openrent_v2.service
+Unit=london-home-finder@openrent.service
 
 # Weekdays, the working day. Two lines because the day does not start on the
 # hour: the first covers the two runs before 08:00, the second the whole hours

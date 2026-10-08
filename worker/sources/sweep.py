@@ -645,7 +645,7 @@ def _collect(
             #
             # This used to sit inside the `dated` branch, so an undated source
             # never recorded a sweep at all. `swept_at` then stayed NULL, which
-            # `stale_watches` reads as a gap — so openrent_v2 had its watch
+            # `stale_watches` reads as a gap — so openrent had its watch
             # voided on every single run and announced nothing, which is
             # precisely the fault this rule exists to prevent.
             if harvest.complete:

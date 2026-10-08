@@ -36,14 +36,14 @@ for %%I in ("%~dp0..\..") do set PROJECT=%%~fI
 set PY=%PROJECT%\.venv\Scripts\python.exe
 set LOGDIR=%PROJECT%\logs
 REM Trailing space included on purpose — see the match below.
-set KNOWN=rightmove zoopla openrent_v2 portals 
+set KNOWN=rightmove zoopla openrent portals 
 
 REM ── what to run ────────────────────────────────────────────────────────────
 REM
 REM Named here rather than deferred to the `portals` job, so that one reader
 REM failing does not stop the next: `portals` is a single run with a single exit
 REM code, and a Zoopla outage would take Rightmove's listings down with it.
-set JOBS=rightmove zoopla openrent_v2
+set JOBS=rightmove zoopla openrent
 set PASSTHRU=
 
 REM `shift` is deliberately not used inside a parenthesised block: the %1..%9

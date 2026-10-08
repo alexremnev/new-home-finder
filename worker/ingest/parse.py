@@ -30,8 +30,7 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
     # message stated is what the portal stated, and this is a reconstruction.
     #
     # OpenRent only, because only its urls carry a slug. Imported from the
-    # reader that owns that shape rather than copied, the same way
-    # `openrent_v2` borrows `read_slug`.
+    # reader that owns that shape rather than copied.
     #
     # The same slug also names the property type, and the feed states none at
     # all: its Bedrooms field says "2 Bedrooms" and stops, so `bedrooms_of`

@@ -13,18 +13,16 @@ from worker.pipeline.run import PORTAL_JOBS, run_job
 
 Row = dict[str, Any]
 
-# `scrape` is the original OpenRent reader, which discovers from the sitemap.
-#
-# The three portal readers are one job each, named after their source key, so
-# that each has its own timer and its own row in `job_runs`. Combined into one
-# job they shared a schedule — three sweeps landing on the server at the same
+# The portal readers are one job each, named after their source key, so that
+# each has its own timer and its own row in `job_runs`. Combined into one job
+# they shared a schedule — several sweeps landing on the server at the same
 # minute — and shared a status, so a portal that had stopped was invisible
-# behind the two that had not.
+# behind the ones that had not.
 #
-# `portals` runs all three in one go. Nothing schedules it; it is for a manual
-# sweep.
+# `portals` runs all of them in one go. Nothing schedules it; it is for a
+# manual sweep.
 JOBS = (
-    "ingest", "scrape", "portals",
+    "ingest", "portals",
     *PORTAL_JOBS,
     "drain", "rollup",
 )

@@ -1,32 +1,483 @@
+"""The OpenRent reader, against a page the real site served.
+
+`tests/fixtures/openrent_e14_search.html` is trimmed from a genuine E14 search
+page taken on 26 September 2026: the first two rendered cards, and the
+`PROPERTYIDS` array that is the whole point of reading this page — it lists
+every id the search matched, not only the twenty shown.
+
+The second half of the file is the page parser, which has no fixture: the
+shapes it reads were confirmed against live listing pages and are written out
+here as the smallest markup that still carries them.
+
+Nothing here touches the network.
+"""
+
 from __future__ import annotations
 
-from datetime import date
+import pathlib
+from datetime import UTC, date, datetime
 
+from worker.sources.fetch import Reply
 from worker.sources.openrent import (
+    Found,
+    OpenRent,
     address_in,
     as_listing,
     as_text,
-    listings_in,
+    how_many,
+    ids_in,
+    images_in,
+    paths_in,
     place_in_slug,
     read_slug,
-    weigh,
+    search_url,
+    short_url,
+    slug_from_path,
+    slugs_in,
     when,
 )
+from worker.sources.sweep import Memory
 
-# The sitemap shape confirmed on 21 September 2026: one loc per listing, no
-# lastmod, and the whole country in one file.
-SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
-<urlset>
- <url><loc>https://www.openrent.co.uk/property-to-rent/london/2-bed-flat-rotherhithe-street-se16/1234567</loc></url>
- <url><loc>https://www.openrent.co.uk/property-to-rent/doncaster/room-in-a-shared-house-sunningdale-drive-dn12/65053</loc></url>
- <url><loc>https://www.openrent.co.uk/property-to-rent/london/studio-craven-street-wc2n/777</loc></url>
- <url><loc>https://www.openrent.co.uk/about/how-it-works</loc></url>
-</urlset>"""
+FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "openrent_e14_search.html"
+PAGE = FIXTURE.read_text(encoding="utf-8")
+
+
+# ── the id list, which is why this reader exists ─────────────────────────
+
+def test_every_id_in_the_district_comes_from_one_page() -> None:
+    # The sitemap reader this replaced downloaded the whole country to answer
+    # this — about 950MB a day. This page answers it in 92KB, and for the
+    # twenty rendered cards it throws in the rent and a photograph as well.
+    ids = ids_in(PAGE)
+    assert len(ids) == 8
+    assert all(one.isdigit() for one in ids)
+
+
+def test_the_page_states_its_own_count_to_check_against() -> None:
+    # `NUMBEROFPROPERTIES` beside the array. If the two ever disagree the page
+    # shape has moved, and the reader says so rather than trusting it.
+    assert how_many(PAGE) == len(ids_in(PAGE))
+
+
+def test_a_page_without_the_array_yields_nothing_rather_than_raising() -> None:
+    assert ids_in("<html><body>maintenance</body></html>") == []
+    assert how_many("<html></html>") is None
+
+
+# ── the cards ────────────────────────────────────────────────────────────
+
+def test_the_rendered_cards_give_their_slugs() -> None:
+    slugs = slugs_in(PAGE)
+    assert len(slugs) == 2
+    for listing_id, slug in slugs.items():
+        assert listing_id.isdigit()
+        # The slug ends with the outward code, which is what makes the
+        # district readable without fetching anything.
+        assert slug.lower().endswith(("e14", "e1", "e3"))
+
+
+def test_a_card_picture_belongs_to_its_own_listing() -> None:
+    # The first version of this matched forwards from `data-listing-id` to the
+    # next `src`, which crossed card boundaries: listing 3030969 came back
+    # holding listing 284912's photograph, and the alert would have shown the
+    # wrong flat. The url carries its own id, so there is nothing to correlate.
+    pictures = images_in(PAGE)
+    assert pictures
+    for listing_id, url in pictures.items():
+        assert f"/listings/{listing_id}/" in url
+        # Protocol-relative in the markup, which no messenger would follow.
+        assert url.startswith("https://imagescdn.openrent.co.uk/")
+
+
+def test_a_listing_with_no_card_picture_is_simply_absent() -> None:
+    # Most of a district is never rendered, and the ones that are can be lazy
+    # loaded. Absent is right; a placeholder would not be.
+    pictures = images_in(PAGE)
+    missing = [one for one in ids_in(PAGE) if one not in pictures]
+    assert missing, "the fixture should include ids with no rendered card"
+
+
+def test_the_card_paths_are_full_listing_paths() -> None:
+    for listing_id, path in paths_in(PAGE).items():
+        assert path.startswith("/property-to-rent/")
+        assert path.endswith(f"/{listing_id}")
+
+
+# ── the urls ─────────────────────────────────────────────────────────────
+
+def test_the_search_url_is_the_district_page() -> None:
+    assert search_url("E14") == "https://www.openrent.co.uk/properties-to-rent/e14"
+    assert search_url("se16").endswith("/se16")
+
+
+def test_a_bare_id_url_is_what_reveals_the_slug() -> None:
+    # It answers 301 with the full slug path in `Location`, about 3KB of
+    # headers against a 300KB page. See the module note.
+    assert short_url("2937375") == "https://www.openrent.co.uk/2937375"
+
+
+def test_a_slug_is_read_out_of_a_redirect_location() -> None:
+    where = "/property-to-rent/london/room-in-a-shared-flat-willis-house-e14/2937375"
+    assert slug_from_path(where) == "room-in-a-shared-flat-willis-house-e14"
+    assert slug_from_path("/nonsense") is None
+
+
+# ── the sweep ────────────────────────────────────────────────────────────
+
+# Enough of a listing page for `as_listing`: it needs a rent stated per month,
+# and reads everything else as optional.
+DETAIL = (
+    "<html><body><h1>2 Bed Flat, Hale Street, E14</h1>"
+    "<p>Rent &#xA3;2,100.00 per month</p><p>1 bathrooms</p>"
+    "<p>Deposit / Bond is &#xA3;2,100.00</p><p>Unfurnished</p>"
+    "<a href='?postCode=E14%200BX'>broadband</a></body></html>"
+)
+
+
+class Fake:
+    """A fetcher that serves the fixture and canned redirects."""
+
+    def __init__(
+        self,
+        page: str,
+        *,
+        redirects: dict[str, str] | None = None,
+        detail: str = DETAIL,
+        refuses: bool = False,
+    ) -> None:
+        self.page = page
+        self.detail = detail
+        self.redirects = redirects or {}
+        self.refuses = refuses
+        self.got: list[str] = []
+        self.headed: list[str] = []
+
+    def get(self, url: str, **_: object) -> Reply:
+        self.got.append(url)
+        # A listing page and a search page are different documents, and a test
+        # must not be able to pass by parsing one as the other.
+        body = self.detail if "/property-to-rent/" in url else self.page
+        return Reply(status=200, body=body, wire=1000, impersonated="chrome124")
+
+    def head(self, url: str) -> tuple[int, str | None]:
+        self.headed.append(url)
+        if self.refuses:
+            # 405 is what OpenRent actually answers this server — see the note
+            # on `Fetcher.head`. It means "we could not ask", not "there is no
+            # slug", and the two have to behave differently.
+            return (405, None)
+        where = self.redirects.get(url.rsplit("/", 1)[-1])
+        return (301, where) if where else (404, None)
+
+
+class Quiet:
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.said: list[str] = []
+
+    def log(self, level: str, message: str, **_: object) -> None:
+        self.said.append(f"{level}: {message}")
+
+    def count(self, name: str, delta: int = 1) -> None:
+        self.counts[name] = self.counts.get(name, 0) + delta
+
+    def set(self, *_: object, **__: object) -> None: ...
+    def degrade(self, *_: object, **__: object) -> None: ...
+
+
+def remember(
+    stored: object = (), resolved: dict[str, str | None] | None = None
+) -> tuple[Memory, dict[str, str | None]]:
+    """A Memory over fixed answers, plus the dict it writes what it learned to."""
+
+    written: dict[str, str | None] = {}
+    return (
+        Memory(
+            stored=lambda ids: set(stored),  # type: ignore[arg-type]
+            resolved=lambda ids: dict(resolved or {}),
+            remember=written.update,
+        ),
+        written,
+    )
+
+
+# `since` is the district's settled_at for an undated portal, so a real value
+# means "already read through" and None means "never".
+SETTLED = datetime(2026, 9, 27, 12, 0, tzinfo=UTC)
+
+
+def test_nothing_is_fetched_for_ids_we_already_have() -> None:
+    # The steady state, and the saving that matters: a district is hundreds of
+    # ids and almost all of them are already stored. Resolving them again would
+    # be the most expensive way to learn nothing.
+    ids = ids_in(PAGE)
+    fetch = Fake(PAGE)
+    stage = Quiet()
+    mem, _ = remember(stored=ids)
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.caught == []
+    assert harvest.complete is True
+    # One page for the district, and not a single request beyond it.
+    assert len(fetch.got) == 1
+    assert fetch.headed == []
+    assert stage.counts["already_known"] == len(ids)
+
+
+def test_an_id_already_known_to_be_elsewhere_costs_nothing() -> None:
+    # The whole point of 0053. OpenRent's district page is a two-kilometre
+    # radius, so about a third of it belongs to a neighbouring district. Those
+    # are correctly never stored — and before this they were therefore looked
+    # up again on every single run, for ever.
+    ids = ids_in(PAGE)
+    fetch = Fake(PAGE)
+    stage = Quiet()
+    mem, _ = remember(resolved={one: "SE16" for one in ids})
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.caught == []
+    assert harvest.complete is True
+    assert fetch.headed == [], "a resolved id must not be resolved again"
+    assert stage.counts["already_resolved"] == len(ids)
+
+
+def test_what_a_pass_resolved_is_written_down() -> None:
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    elsewhere = next(one for one in ids if one not in carded)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            elsewhere: f"/property-to-rent/london/2-bed-flat-somewhere-se16/{elsewhere}"
+        },
+    )
+    mem, written = remember(stored={one for one in ids if one != elsewhere})
+    OpenRent().harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+
+    # Its real district, not the one we searched — that is what makes it
+    # skippable next time.
+    assert written == {elsewhere: "SE16"}
+
+
+def test_a_district_never_read_through_costs_no_listing_pages() -> None:
+    # Nothing found in an unsettled district will be announced whatever we do,
+    # so a 300KB listing page would be spent on a listing nobody is ever told
+    # about. Resolving the id is enough to stop it looking new tomorrow.
+    #
+    # This is what makes the first pass affordable, and what was wrong before:
+    # the district could not be read through within one run's budget, so it
+    # never settled, so it never announced anything at all.
+    ids = ids_in(PAGE)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            one: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{one}"
+            for one in ids
+        },
+    )
+    stage = Quiet()
+    mem, written = remember()
+    harvest = OpenRent().harvest("E14", fetch, stage, None, mem)  # type: ignore[arg-type]
+
+    assert harvest.complete is True, "so that the engine can settle it"
+    assert harvest.caught == [], "nothing stored, because nothing would be sent"
+    # One request, the search page. Not a single redirect either: resolving an
+    # id in a district that cannot announce anything buys nothing, and asking
+    # about 330 of them is what exhausted the run's budget and left the
+    # district unsettled for ever. The ids are written down instead, which is
+    # all the next run needs from this one.
+    assert [one for one in fetch.got if "/property-to-rent/" in one] == []
+    assert fetch.headed == []
+    assert stage.counts["backfilled"] == len(ids)
+    assert set(written) == set(ids)
+
+
+def test_a_listing_outside_the_district_is_not_stored_under_it() -> None:
+    # `var SEARCHRADIUS = 2` — the district page is a two-kilometre radius, so
+    # about a third of what it returns is somewhere else. The slug decides,
+    # not the search.
+    #
+    # The id has to be one the page did not render: a rendered card already
+    # carries its slug, so no redirect is involved at all.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    elsewhere = next(one for one in ids if one not in carded)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            elsewhere: f"/property-to-rent/london/2-bed-flat-somewhere-se16/{elsewhere}"
+        },
+    )
+    stage = Quiet()
+    mem, _ = remember(stored={one for one in ids if one != elsewhere})
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.caught == []
+    assert stage.counts.get("outside_district") == 1
+    # The redirect was asked, the 300KB listing page was not.
+    assert len(fetch.headed) == 1
+    assert len(fetch.got) == 1
+
+
+def test_an_id_with_no_redirect_is_written_off_rather_than_re_asked() -> None:
+    # OpenRent answered and there is no slug behind that id, so there is
+    # nothing to come back for: the district still counts as read through, and
+    # the id is remembered so it is not asked about on every run for ever.
+    # Not remembering it is most of why this reader never settled a district.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    unrendered = next(one for one in ids if one not in carded)
+    fetch = Fake(PAGE)  # every redirect answers 404
+    stage = Quiet()
+    mem, written = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.complete is True
+    assert stage.counts.get("no_slug", 0) >= 1
+    assert written.get(unrendered) is None and unrendered in written
+
+
+def test_a_refused_lookup_leaves_the_district_incomplete() -> None:
+    # The other half of the same branch, and the one that matters on this
+    # server: 405 means we could not ask. Nothing is learned, the district is
+    # not settled on the strength of it, and the id comes round again.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    unrendered = next(one for one in ids if one not in carded)
+    fetch = Fake(PAGE, refuses=True)
+    stage = Quiet()
+    mem, written = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.complete is False
+    assert stage.counts.get("slug_refused", 0) >= 1
+    assert unrendered not in written, "a refusal teaches us nothing"
+
+
+def test_pages_counts_pages_and_not_requests() -> None:
+    # It counted the search page, every redirect and every listing page, so a
+    # run that spent its slug budget reported 439 "pages" and the admin's
+    # pages-per-run chart meant nothing.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    unrendered = next(one for one in ids if one not in carded)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            unrendered: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{unrendered}"
+        },
+    )
+    stage = Quiet()
+    mem, _ = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.pages == 1
+    assert stage.counts.get("slug_lookups") == 1
+    assert stage.counts.get("detail_pages") == 1
+
+
+def test_the_detail_budget_stops_a_run_rather_than_the_district() -> None:
+    # A settled district that produces more new listings than one run's budget
+    # takes a slice and reports itself incomplete, so the rest is read next
+    # time rather than skipped.
+    ids = ids_in(PAGE)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            one: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{one}"
+            for one in ids
+        },
+    )
+    stage = Quiet()
+    mem, _ = remember()
+    harvest = OpenRent(detail_budget=0).harvest(
+        "E14", fetch, stage, SETTLED, mem  # type: ignore[arg-type]
+    )
+
+    assert harvest.complete is False
+    assert harvest.caught == []
+    # No listing page was fetched: the budget was spent before the first one.
+    assert [one for one in fetch.got if "/property-to-rent/" in one] == []
+
+
+def test_a_stored_listing_carries_this_readers_own_source_key() -> None:
+    # The reader's key is passed to the parser rather than left to the
+    # parser's own default. The two agree today, so this is asked of a reader
+    # built with a different one — which is the only way the question has an
+    # answer, and the question is worth keeping: a reader that stored under
+    # one key while asking "have I seen this id?" under another found every id
+    # new on every run, re-fetched the same pages every twenty minutes,
+    # exhausted its budget, settled no district and sent nobody anything. One
+    # wrong constant, and that was the whole of it. See 0053.
+    ids = ids_in(PAGE)
+    one = ids[0]
+    redirects = {one: f"/property-to-rent/london/1-bed-flat-hale-street-e14/{one}"}
+    stored = {other for other in ids if other != one}
+
+    fetch = Fake(PAGE, redirects=redirects)
+    mem, _ = remember(stored=stored)
+    harvest = OpenRent().harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+    assert len(harvest.caught) == 1
+    assert harvest.caught[0].listing.source_key == "openrent"
+
+    fetch = Fake(PAGE, redirects=redirects)
+    mem, _ = remember(stored=stored)
+    mine = OpenRent(key="openrent_shadow")
+    harvest = mine.harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+    assert len(harvest.caught) == 1
+    assert harvest.caught[0].listing.source_key == "openrent_shadow"
+
+
+def test_an_empty_district_is_complete_so_that_it_can_settle() -> None:
+    # A district with nothing in it still has to be marked as read through, or
+    # it would never settle and so would never announce its first real listing.
+    fetch = Fake("<html><body>no properties</body></html>")
+    stage = Quiet()
+    mem, _ = remember()
+    harvest = OpenRent().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.caught == []
+    assert harvest.complete is True
+    assert stage.counts.get("no_ids") == 1
+
+
+def test_the_budget_is_shared_across_districts_in_one_run() -> None:
+    # One busy district must not consume the whole run, so the budget lives on
+    # the portal instance rather than resetting per district.
+    ids = ids_in(PAGE)
+    redirects = {
+        one: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{one}" for one in ids
+    }
+    portal = OpenRent(detail_budget=2)
+    fetch = Fake(PAGE, redirects=redirects)
+    mem, _ = remember()
+
+    portal.harvest("E14", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+    portal.harvest("SE16", fetch, Quiet(), SETTLED, mem)  # type: ignore[arg-type]
+
+    # Two listing pages in total across both districts, not two each.
+    listing_pages = [one for one in fetch.got if "/property-to-rent/" in one]
+    assert len(listing_pages) == 2
+
+
+def test_this_reader_is_undated() -> None:
+    # OpenRent publishes no listing date anywhere this reader can see it: the
+    # "New" sort in the dropdown does not take as a query parameter, and the
+    # cards say only "Last updated around 2 weeks ago". So it uses the engine's
+    # read-through rule instead of a watermark.
+    assert OpenRent().dated is False
+
+
+# ══════════════════════════ the page parser ═══════════════════════════════
+#
+# `as_listing` and the slug readers, which the sweep above reaches only through
+# one fixture listing. Exercised directly here because they carry the shapes
+# measured on live pages, and a shape that moves is the way this reader breaks.
 
 # The page shapes confirmed on a live listing: the rent stated twice, the
 # deposit in a sentence, the postcode only inside a link, and the details in
 # blocks whose markup is not worth anchoring on.
-PAGE = """<html><head><title>x</title>
+PAGE_SE16 = """<html><head><title>x</title>
 <script>var noise = "£9,999.00 per month";</script>
 <style>.a{content:"£1.00 p/m"}</style></head>
 <body>
@@ -41,104 +492,26 @@ PAGE = """<html><head><title>x</title>
  <div>Minimum Tenancy <span>6 Months</span></div>
 </body></html>"""
 
-INDEX = """<?xml version="1.0" encoding="UTF-8"?>
-<sitemapindex>
- <sitemap><loc>https://www.openrent.co.uk/sitemap-static.xml</loc></sitemap>
- <sitemap><loc>https://www.openrent.co.uk/sitemap-listings-1.xml</loc></sitemap>
-</sitemapindex>"""
+SE16_URL = (
+    "https://www.openrent.co.uk/property-to-rent/london/"
+    "2-bed-flat-rotherhithe-street-se16/1234567"
+)
 
-class FakeRun:
 
-    # Enough of a Run for the stage to be entered and counted against.
-    class Stage:
-        def __init__(self) -> None:
-            self.degraded: list[str] = []
-            # Accumulated the way the real Stage does, because these end up in
-            # job_stages.counters and the admin reads them back.
-            self.counters: dict[str, int] = {}
+def only(district: str = "SE16") -> Found:
+    """What the slug gave up, as the reader hands it to `as_listing`."""
 
-        def set(self, *_: object, **__: object) -> None: ...
+    return Found(
+        external_id="1234567",
+        url=SE16_URL,
+        district=district,
+        bedrooms=2,
+        property_type="flat",
+    )
 
-        def count(self, name: str, by: int = 1) -> None:
-            self.counters[name] = self.counters.get(name, 0) + by
 
-        def log(self, *_: object, **__: object) -> None: ...
-        def degrade(self, why: str) -> None:
-            self.degraded.append(why)
-
-    def __init__(self) -> None:
-        self.stages = self.Stage()
-
-    def stage(self, *_: object, **__: object) -> object:
-        run = self
-
-        class Held:
-            def __enter__(self) -> object:
-                return run.stages
-
-            def __exit__(self, *_: object) -> bool:
-                return False
-
-        return Held()
-
-class FakeConn:
-    """A connection that answers the two queries the scraper makes."""
-
-    def __init__(
-        self,
-        districts: list[str],
-        settled: list[str] | None = None,
-        biggest: int | None = None,
-    ) -> None:
-        # The largest sitemap seen lately, as store.biggest_sitemap reports it.
-        # None means no history, which is a first run.
-        self.biggest = biggest
-        self.districts = districts
-        self.settled = list(settled or [])
-        self.inserted: list[object] = []
-        self.images: list[object] = []
-        self.rows: list[dict[str, object]] = []
-        self.next_id = 0
-
-    # store reads and writes through these three, and nothing here touches a
-    # database.
-    def execute(self, sql: str, params: object = None) -> "FakeConn":
-        self.one: dict[str, object] | None = None
-        if "FROM subscriptions" in sql:
-            # The districts live subscriptions name — what the scraper now
-            # follows instead of an operator's list of coverage.
-            self.rows = [{"code": code} for code in self.districts]
-        elif "in_sitemap" in sql and "max(" in sql:
-            self.one = {"most": self.biggest}
-            self.rows = []
-        elif "FROM source_sweeps" in sql:
-            self.rows = [{"district": code} for code in self.settled]
-        elif "INSERT INTO source_sweeps" in sql:
-            assert isinstance(params, tuple)
-            self.settled.append(str(params[1]))
-            self.rows = []
-        elif "INSERT INTO listings" in sql:
-            self.next_id += 1
-            self.inserted.append(params)
-            self.one = {"id": self.next_id}
-            self.rows = []
-        elif "UPDATE listings SET image_url" in sql:
-            assert isinstance(params, tuple)
-            self.images.append(params[0])
-            self.rows = []
-        else:
-            self.rows = []
-        return self
-
-    def fetchall(self) -> list[dict[str, object]]:
-        return self.rows
-
-    def fetchone(self) -> dict[str, object] | None:
-        return self.one
-
-def only(district: str = "SE16") -> object:
-    return [one for one in listings_in(SITEMAP) if one.district == district][0]
-
+# ── the address, which exists only in the heading ────────────────────────
+#
 # The four heading shapes, from live pages on 2 October 2026 — one for each
 # form the slug can take. The alert prints the bedroom count, the type and the
 # outcode on lines of their own, so what is wanted is the middle.
@@ -180,7 +553,7 @@ def test_the_alert_can_say_where_an_openrent_listing_is() -> None:
     # line out of `raw.address`, the key Rightmove and Zoopla both write, and
     # OpenRent wrote only a slug — so its alerts showed a postcode, a price and
     # no address at all.
-    listing = as_listing(only(), PAGE)
+    listing = as_listing(only(), PAGE_SE16)
 
     assert listing is not None
     assert listing.raw["address"] == "Rotherhithe Street"
@@ -190,7 +563,7 @@ def test_the_alert_can_say_where_an_openrent_listing_is() -> None:
 def test_a_page_with_no_usable_heading_still_becomes_a_listing() -> None:
     # The address is worth having and worth nothing next to the listing: a
     # heading nobody can read must not cost the alert itself.
-    page = PAGE.replace("<h1>2 Bed Flat, Rotherhithe Street, SE16</h1>", "")
+    page = PAGE_SE16.replace("<h1>2 Bed Flat, Rotherhithe Street, SE16</h1>", "")
     listing = as_listing(only(), page)
 
     assert listing is not None
@@ -218,26 +591,28 @@ def test_the_slug_names_the_place_when_there_is_no_page_to_read() -> None:
         assert place_in_slug(slug) == expected, slug
 
 
+# ── the page, read as text ───────────────────────────────────────────────
+
 def test_a_script_or_style_never_becomes_text() -> None:
 
     # The page states a plausible rent inside a script. Stripping tags without
     # dropping their contents would take that as the price.
-    text = as_text(PAGE)
+    text = as_text(PAGE_SE16)
     assert "9,999" not in text
     assert "£1.00" not in text
     assert "2,100.00 per month" in text
 
-def test_only_listing_urls_are_taken_from_the_sitemap() -> None:
-    found = listings_in(SITEMAP)
-    assert [one.external_id for one in found] == ["1234567", "65053", "777"]
-    # The marketing page has no id and no outward code, so it is not a listing.
-    assert all("how-it-works" not in one.url for one in found)
 
-def test_the_district_comes_from_the_url_not_the_page() -> None:
+def test_an_escaped_tag_cannot_become_a_tag() -> None:
 
-    # This is what makes a nationwide sitemap affordable: the filter is applied
-    # before any page is fetched.
-    assert {one.district for one in listings_in(SITEMAP)} == {"SE16", "DN12", "WC2N"}
+    # Entities are decoded after the tags are stripped, not before, or this
+    # would smuggle a script past the stripping.
+    text = as_text("<p>&lt;script&gt;alert(1)&lt;/script&gt; Rent &#xA3;2,100.00 per month</p>")
+    assert "<script>" in text  # as visible text, which is harmless
+    assert "£2,100.00" in text
+
+
+# ── the slug, which is read before any page is fetched ───────────────────
 
 def test_the_slug_gives_rooms_and_type() -> None:
     assert read_slug("2-bed-flat-rotherhithe-street-se16") == ("SE16", 2, "flat")
@@ -251,12 +626,18 @@ def test_the_slug_gives_rooms_and_type() -> None:
     # A studio is a flat with nought bedrooms, not a fourth type.
     assert read_slug("studio-craven-street-wc2n") == ("WC2N", 0, "flat")
 
+
 def test_a_slug_without_an_outward_code_is_refused() -> None:
-    # Better to skip one listing than to file it under a district it is not in.
+    # The district comes from the slug and nowhere else — the search is a
+    # two-kilometre radius — so better to skip one listing than to file it
+    # under a district it is not in.
     assert read_slug("2-bed-flat-somewhere-unknown") is None
 
+
+# ── the listing ──────────────────────────────────────────────────────────
+
 def test_a_page_becomes_a_listing() -> None:
-    listing = as_listing(only(), PAGE)
+    listing = as_listing(only(), PAGE_SE16)
     assert listing is not None
     assert listing.source_key == "openrent"
     assert listing.external_id == "1234567"
@@ -273,15 +654,18 @@ def test_a_page_becomes_a_listing() -> None:
     # Every listing on this site is let by its owner.
     assert listing.is_landlord_direct is True
 
+
 def test_without_a_price_nothing_is_stored() -> None:
 
     # There is nothing to match on, so a half-formed listing is worse than none.
     assert as_listing(only(), "<html><body>Under offer</body></html>") is None
 
+
 def test_a_price_outside_the_believable_range_is_refused() -> None:
     # The contract caps these anyway; catching it here keeps the reason legible.
     assert as_listing(only(), "<p>Rent £4.00 per month</p>") is None
     assert as_listing(only(), "<p>Rent £400,000.00 per month</p>") is None
+
 
 def test_part_furnished_is_not_read_as_furnished() -> None:
 
@@ -289,6 +673,7 @@ def test_part_furnished_is_not_read_as_furnished() -> None:
     page = "<p>Rent £2,100.00 per month</p><div>Part furnished</div>"
     listing = as_listing(only(), page)
     assert listing is not None and listing.furnished == "part"
+
 
 def test_a_missing_answer_stays_unknown_rather_than_no() -> None:
     listing = as_listing(only(), "<p>Rent £2,100.00 per month</p>")
@@ -299,34 +684,12 @@ def test_a_missing_answer_stays_unknown_rather_than_no() -> None:
     # Not stated is a third answer, and the matcher treats it as "matches".
     assert listing.bills_included is None
 
+
 def test_today_is_a_date() -> None:
     assert when("Today") == date.today()
     assert when("1 October 2026") == date(2026, 10, 1)
     assert when("whenever") is None
 
-def test_a_run_of_refusals_stops_the_run() -> None:
-    import urllib.error
-
-    from worker.sources.openrent import REFUSALS_ALLOWED, collect
-
-    # A site answering 405 to everything is declining, not having a bad moment.
-    # Spending the whole budget to learn that once every fifteen minutes is both
-    # useless and rude.
-    asked: list[str] = []
-
-    def refusing(url: str) -> str:
-        asked.append(url)
-        if url.endswith(".xml"):
-            return SITEMAP if "listings" in url else INDEX
-        raise urllib.error.HTTPError(url, 405, "Not Allowed", {}, None)  # type: ignore[arg-type]
-
-    conn = FakeConn(districts=["SE16", "WC2N", "DN12"])
-    swept = collect(conn, FakeRun(), get=refusing, pause=0)
-    assert swept.stored == []
-
-    pages = [u for u in asked if not u.endswith(".xml")]
-    assert len(pages) == REFUSALS_ALLOWED, pages
-    assert conn.inserted == []
 
 def test_the_pound_sign_arrives_as_an_entity() -> None:
 
@@ -340,6 +703,7 @@ def test_the_pound_sign_arrives_as_an_entity() -> None:
     listing = as_listing(only(), page)
     assert listing is not None and listing.price_pcm == 3142
 
+
 def test_the_monthly_figure_wins_over_a_weekly_one() -> None:
 
     # A weekly-priced listing states the month in brackets, and that is the
@@ -348,109 +712,15 @@ def test_the_monthly_figure_wins_over_a_weekly_one() -> None:
     listing = as_listing(only(), page)
     assert listing is not None and listing.price_pcm == 12783
 
-def test_an_escaped_tag_cannot_become_a_tag() -> None:
 
-    # Entities are decoded after the tags are stripped, not before, or this
-    # would smuggle a script past the stripping.
-    text = as_text("<p>&lt;script&gt;alert(1)&lt;/script&gt; Rent &#xA3;2,100.00 per month</p>")
-    assert "<script>" in text  # as visible text, which is harmless
-    assert "£2,100.00" in text
-
-def listings_sitemap(ids: range | list[int], district: str = "se16") -> str:
-    return "<urlset>" + "".join(
-        f"<url><loc>https://www.openrent.co.uk/property-to-rent/london/"
-        f"2-bed-flat-street-{district}/{n}</loc></url>"
-        for n in ids
-    ) + "</urlset>"
-
-def serving(ids: range | list[int], district: str = "se16") -> object:
-    def get(url: str) -> str:
-        if "sitemap.xml" in url:
-            return INDEX
-        if url.endswith(".xml"):
-            return listings_sitemap(ids, district)
-        return "<p>Rent &#xA3;2,100.00 per month</p>"
-
-    return get
-
-def test_a_first_pass_over_a_district_announces_nothing() -> None:
-    from worker.sources.openrent import collect
-
-    # The sitemap has no dates, so a listing seen for the first time may have
-    # been on the market since June. Announcing a first pass would send a new
-    # subscriber the whole standing market — which is the flood this prevents.
-    conn = FakeConn(districts=["SE16"])
-    swept = collect(conn, FakeRun(), get=serving(range(25)), pause=0)
-
-    assert len(swept.stored) == 25
-    assert swept.announce == []
-
-def test_a_first_pass_under_the_budget_is_still_silent() -> None:
-    from worker.sources.openrent import PAGE_BUDGET, collect
-
-    # The rule this replaced asked "did we hit the budget", which said yes to a
-    # district of twenty-five and sent every one of them.
-    conn = FakeConn(districts=["SE16"])
-    swept = collect(conn, FakeRun(), get=serving(range(PAGE_BUDGET - 5)), pause=0)
-    assert swept.announce == []
-
-def test_a_district_with_nothing_new_becomes_settled() -> None:
-    from worker.sources.openrent import collect
-
-    # Nothing new left means everything on the market there is stored, so from
-    # now on anything appearing genuinely appeared after we looked.
-    conn = FakeConn(districts=["SE16"])
-    collect(conn, FakeRun(), get=serving([]), pause=0)
-    assert conn.settled == ["SE16"]
-
-def test_once_settled_a_new_listing_is_announced() -> None:
-    from worker.sources.openrent import collect
-
-    conn = FakeConn(districts=["SE16"], settled=["SE16"])
-    swept = collect(conn, FakeRun(), get=serving([9001]), pause=0)
-    assert len(swept.stored) == 1
-    assert swept.announce == swept.stored
-
-def test_settling_one_district_does_not_release_another() -> None:
-    from worker.sources.openrent import collect
-
-    # E14 is settled and quiet; SE16 is being read for the first time. The run
-    # settles E14 and must not let that make SE16's backlog announceable.
-    conn = FakeConn(districts=["SE16", "E14"], settled=["E14"])
-    swept = collect(conn, FakeRun(), get=serving(range(12)), pause=0)
-    assert len(swept.stored) == 12
-    assert swept.announce == []
-
-def test_a_body_is_weighed_in_the_bytes_that_crossed_the_wire() -> None:
-
-    # Measured as UTF-8, not as characters: the page is fetched with
-    # Accept-Encoding: identity, so this is what the network actually carried.
-    assert weigh("abc") == 3
-    assert weigh("£2,100") == 7  # the pound sign is two bytes
-    assert weigh("") == 0
-
-def test_every_fetch_is_added_to_the_traffic_counter() -> None:
-    from worker.sources.openrent import collect
-
-    # What the System tab shows as the period's volume. All three kinds of
-    # fetch count: the index, each child sitemap, and each listing page — the
-    # sitemap is the larger half, because it carries no lastmod and so is
-    # downloaded whole every run.
-    run = FakeRun()
-    conn = FakeConn(districts=["SE16"])
-    collect(conn, run, get=serving(range(3)), pause=0)
-
-    sitemap = listings_sitemap(range(3))
-    page = "<p>Rent &#xA3;2,100.00 per month</p>"
-    expected = weigh(INDEX) + weigh(sitemap) + 3 * weigh(page)
-
-    assert run.stages.counters["bytes"] == expected
-
+# ── the picture ──────────────────────────────────────────────────────────
+#
 # The real page's meta tags, in the order OpenRent states them: its own share
 # graphic twice, then the photograph of the flat.
 METAS = """<meta name="twitter:image" content="https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG">
 <meta property="og:image" content="https://staticcdn.openrent.co.uk/images/logos/meta/share-graphic-2.jpg"/>
 <meta property="og:image" content="https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"/>"""
+
 
 def test_the_portals_own_logo_is_not_taken_for_the_flat() -> None:
     from worker.ingest.photo import image_in
@@ -462,6 +732,7 @@ def test_the_portals_own_logo_is_not_taken_for_the_flat() -> None:
     assert image_in(reordered) == "https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"
     assert image_in(METAS) == "https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"
 
+
 def test_branding_is_better_than_no_picture_at_all() -> None:
     from worker.ingest.photo import image_in
 
@@ -470,81 +741,6 @@ def test_branding_is_better_than_no_picture_at_all() -> None:
     only_furniture = '<meta property="og:image" content="https://staticcdn.openrent.co.uk/images/logos/meta/share-graphic-1.jpg"/>'
     assert image_in(only_furniture) is not None
 
-def test_the_photograph_is_taken_from_the_page_already_fetched() -> None:
-    from worker.sources.openrent import collect
-
-    # The images job cannot do this for OpenRent: it runs on the server, and the
-    # server is answered 405. The scraper is holding the page anyway, so the
-    # picture costs no request at all.
-    def get(url: str) -> str:
-        if "sitemap.xml" in url:
-            return INDEX
-        if url.endswith(".xml"):
-            return listings_sitemap([4242])
-        return "<p>Rent &#xA3;2,100.00 per month</p>" + METAS
-
-    conn = FakeConn(districts=["SE16"], settled=["SE16"])
-    collect(conn, FakeRun(), get=get, pause=0)
-
-    assert conn.images == ["https://imagescdn.openrent.co.uk/listings/218791/o_1jsl.JPG"]
-
-def test_a_page_without_a_picture_is_recorded_as_looked_at() -> None:
-    from worker.sources.openrent import collect
-
-    # Written as None rather than skipped: "looked and found nothing" has to be
-    # distinguishable from "not looked at", or the server retries it forever and
-    # is refused every time.
-    conn = FakeConn(districts=["SE16"], settled=["SE16"])
-    collect(conn, FakeRun(), get=serving([7]), pause=0)
-    assert conn.images == [None]
-
-def test_a_stunted_sitemap_settles_nothing() -> None:
-    from worker.sources.openrent import collect
-
-    # OpenRent answers the same url with a complete but tiny file now and
-    # again — 123 listings where there are normally 25,000, closing tag and all.
-    # Settling a district on that says "we have read this through" on the
-    # strength of half a percent of the list, and from the next run its whole
-    # standing backlog is announced as new.
-    conn = FakeConn(districts=["SE16"], biggest=25_000)
-    swept = collect(conn, FakeRun(), get=serving([]), pause=0)
-
-    assert conn.settled == []
-    assert swept.announce == []
-
-def test_one_child_sitemap_is_not_mistaken_for_a_stunted_one() -> None:
-    from worker.sources.openrent import collect
-
-    # The index lists one listings file some runs and two others. The first
-    # version of this guard compared the run's total against the biggest run
-    # seen, so a perfectly good single-file run of 24,920 sat just under half of
-    # a two-file run's 49,872 and was called stunted by 32 listings. It is
-    # compared per child file for exactly this reason.
-    #
-    # INDEX names two children, so `serving` answers both with the same list:
-    # 3 listings across 2 files, and a usual child of 3. Nothing stunted.
-    conn = FakeConn(districts=["SE16"], biggest=3)
-    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
-    assert conn.settled == ["SE16"]
-
-def test_a_full_sitemap_still_settles_a_quiet_district() -> None:
-    from worker.sources.openrent import collect
-
-    # A whole sitemap that happens to hold nothing in our district. That is the
-    # case settling is for: we have read the list, SE16 is not in it, so from
-    # now on anything appearing there appeared after we looked.
-    conn = FakeConn(districts=["SE16"], biggest=3)
-    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
-    assert conn.settled == ["SE16"]
-
-def test_with_no_history_nothing_is_distrusted() -> None:
-    from worker.sources.openrent import collect
-
-    # The first run has nothing to compare against. Refusing to settle then
-    # would mean never settling at all.
-    conn = FakeConn(districts=["SE16"], biggest=None)
-    collect(conn, FakeRun(), get=serving(range(3), "dn12"), pause=0)
-    assert conn.settled == ["SE16"]
 
 # ── the type comes from its position, not from anywhere in the slug ────────
 #

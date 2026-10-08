@@ -1,7 +1,7 @@
 @echo off
 REM Runs one worker job, logs it, and shouts if it failed.
 REM
-REM   run-job.cmd ingest | drain | rollup | rightmove | zoopla | openrent_v2
+REM   run-job.cmd ingest | drain | rollup | rightmove | zoopla | openrent
 REM
 REM For a run you are watching, use scrape.cmd instead: this one hides the
 REM output in a log and spends the hour's Telegram alert on failure.
@@ -31,8 +31,7 @@ REM neither Python nor a working venv — so it still fires when those are the f
 setlocal EnableDelayedExpansion
 if "%~1"=="" (
   echo Usage: run-job.cmd ^<job^>
-  echo Jobs: ingest, drain, rollup, rightmove, zoopla, openrent_v2, portals
-  echo       scrape ^(the old sitemap reader; superseded by openrent_v2^)
+  echo Jobs: ingest, drain, rollup, rightmove, zoopla, openrent, portals
   exit /b 2
 )
 set JOB=%~1

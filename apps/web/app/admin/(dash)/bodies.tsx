@@ -5,7 +5,7 @@ import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
   feedOnlyListings, feedReliance,
-  runLog, runPoints, scrapeBytes, sightingsSince, sourceFeeds,
+  runLog, runPoints, sightingsSince, sourceFeeds,
   unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
@@ -30,15 +30,7 @@ import { bucketMinutes, spanWords } from "./span";
 // `portal` is which site the listing is from; `feed` is how it reached us — a
 // listing came from the Telegram feed exactly when a source message points at
 // it, and from a scraper when none does.
-const FEEDS: {
-  label: string;
-  portal: string;
-  feed: boolean;
-  why: string;
-  // Only the scraper downloads anything of ours to measure: a feed listing
-  // arrives inside a Telegram message somebody else paid to deliver.
-  traffic?: boolean;
-}[] = [
+const FEEDS: { label: string; portal: string; feed: boolean; why: string }[] = [
   {
     label: "tg → Rightmove",
     portal: "rightmove",
@@ -50,19 +42,6 @@ const FEEDS: {
     portal: "zoopla",
     feed: true,
     why: "То же для Zoopla. Источник определяется по ссылке в сообщении фида, а не по названию канала.",
-  },
-  {
-    label: "tg → OpenRent",
-    portal: "openrent",
-    feed: true,
-    why: "OpenRent через Telegram-фид. Красный — ожидаемо: фид его не публикует, это и была причина завести отдельный скрапер. Станет зелёным, если фид когда-нибудь начнёт.",
-  },
-  {
-    label: "scraper → OpenRent",
-    portal: "openrent",
-    feed: false,
-    traffic: true,
-    why: "OpenRent из собственного скрапера — объявления, за которыми не стоит ни одно сообщение фида. Это основной источник OpenRent; фид остаётся страховкой, и если он найдёт то же объявление, оно склеится в ту же строку.",
   },
 ];
 
@@ -112,21 +91,15 @@ const JOB_WHY: Record<string, string> = {
     "логе появляется «did not read back to the watermark» — лента не успела " +
     "догнать разрыв, а дальше 1000 последних объявлений этот поиск не достаёт. " +
     "Если молчит — объявления Zoopla будут приходить только из фида и от zoopla.",
-  openrent_v2:
+  openrent:
     "Читает OpenRent со страниц поиска: одна страница района отдаёт все его id " +
     "целиком, дальше страница объявления качается только для действительно " +
-    "новых. Заменил старый scrape, который тянул карту сайта всей страны — " +
-    "около 950 МБ в сутки. OpenRent тоже отвечает серверу 405, оговорка та же, " +
-    "что у Zoopla. Если молчит — OpenRent перестанет приходить вовсе: фид его " +
-    "не публикует, это и была причина завести отдельный читатель.",
+    "новых. OpenRent тоже отвечает серверу 405, оговорка та же, что у Zoopla. " +
+    "Если молчит — OpenRent перестанет приходить вовсе: фид его не публикует, " +
+    "это и была причина завести отдельный читатель.",
   portals:
-    "Все три портальных читателя одним прогоном. По расписанию не стоит — это " +
+    "Все портальные читатели одним прогоном. По расписанию не стоит — это " +
     "для ручного обхода. Если появился здесь, значит кто-то запускал вручную.",
-  scrape:
-    "Старый читатель OpenRent по карте сайта. Выключен установщиком: качал " +
-    "карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх " +
-    "объявлений, — а на страницы объявлений OpenRent отвечает серверу 405. " +
-    "Пустая строка здесь — норма. Его работу делает openrent_v2.",
   drain:
     "Отправляет то, что стоит в очереди: уведомления об окончании плана, вечерний " +
     "дайджест и сами алерты. Каждые две минуты. Если молчит — объявления есть, но " +
@@ -244,12 +217,8 @@ export async function Faults() {
   );
 }
 
-export async function Feeds({ span }: { span: string }) {
-  const win = windowFor(span);
-  const [feeds, downloaded] = await Promise.all([
-    sourceFeeds(),
-    scrapeBytes(win, "openrent"),
-  ]);
+export async function Feeds() {
+  const feeds = await sourceFeeds();
 
   return (
     <div className="tiles">
@@ -265,20 +234,8 @@ export async function Feeds({ span }: { span: string }) {
             label={one.label}
             value={day}
             tone={feedTone(day, hour)}
-            note={[
-              found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days",
-              // Only the scraper has a bill attached to it, and it follows the
-              // range above rather than a fixed day.
-              one.traffic ? `${weight(downloaded)} ${spanWords(win)}` : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-            why={
-              one.traffic
-                ? one.why +
-                  " Объём — сколько скрапер скачал за выбранный сверху период, по счётчикам прогонов. Запрос идёт без сжатия, поэтому это ровно то, что прошло по сети. Большая часть этого — карта сайта: в ней нет lastmod, поэтому она качается целиком каждый прогон."
-                : one.why
-            }
+            note={found?.newest ? `last ${ago(found.newest)}` : "nothing in 30 days"}
+            why={one.why}
           />
         );
       })}
@@ -306,20 +263,14 @@ const PORTALS: { source: string; label: string; why: string }[] = [
     why: "То же, но данные лежат в RSC-потоке страницы, а не в __NEXT_DATA__. Читается только массив собственных объявлений района: рядом лежат ещё два — продвинутые и из соседних районов, — и второй заведомо не наш. Около 63 КБ на район, вдвое дешевле Rightmove. Замечание: Zoopla отвечает адресу сервера 403 под любым отпечатком браузера, поэтому либо этот читатель запускается с домашней машины, либо ему нужен резидентский прокси. Если в состоянии видно «refused» — дело именно в этом.",
   },
   {
-    source: "openrent_v2",
-    label: "OpenRent (search)",
-    why: "Новый читатель OpenRent. Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу. OpenRent отвечает адресу сервера 405, так что здесь та же оговорка, что у Zoopla.",
-  },
-  {
     source: "openrent",
-    label: "OpenRent (sitemap)",
-    why: "Старый читатель. Выключен установщиком: он качал карту сайта всей страны каждый прогон — около 950 МБ в сутки ради двух-трёх объявлений, — а на страницы объявлений OpenRent отвечает серверу 405. Пустая плитка здесь — норма, а не поломка. Оставлен рядом, чтобы было с чем сравнить новый.",
+    label: "OpenRent",
+    why: "Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу. OpenRent отвечает адресу сервера 405, так что здесь та же оговорка, что у Zoopla.",
   },
 ];
 
-function portalTone(row: PortalRun | undefined, expected: boolean): "good" | "warn" | "bad" {
-  // A reader that is deliberately off is not a fault, so it stays neutral.
-  if (!row || row.runs === 0) return expected ? "bad" : "warn";
+function portalTone(row: PortalRun | undefined): "good" | "warn" | "bad" {
+  if (!row || row.runs === 0) return "bad";
   if (row.bad > 0 || row.refused > 0) return "bad";
   // A district left half-read means the page cap stopped a sweep early. Not
   // broken, but it will not settle until a run finishes the district.
@@ -353,16 +304,15 @@ export async function Portals({ span }: { span: string }) {
         {PORTALS.map((one) => {
           const row = rows.find((r) => r.source === one.source);
           const mine = tally.find((t) => t.reader === one.source);
-          const expected = one.source !== "openrent";
           const quiet = !row || row.runs === 0;
           return (
             <Metric
               key={one.source}
               label={one.label}
               value={mine?.got_first ?? 0}
-              tone={portalTone(row, expected)}
+              tone={portalTone(row)}
               note={[
-                quiet ? (expected ? "never ran" : "switched off") : null,
+                quiet ? "never ran" : null,
                 mine ? `${mine.saw} seen` : null,
                 row ? `${row.stored} stored` : null,
                 row ? `${row.announced} sent` : null,

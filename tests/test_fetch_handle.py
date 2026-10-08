@@ -20,8 +20,8 @@ and still has the callbacks installed.
 
 So `head()` installed HEADERDATA, and the second ordinary `get()` after it
 fired the header callback into freed memory. On the server it took the whole
-run with it — Windows reported exit -1073740791, and `openrent_v2` was the
-only reader affected because it is the only one that calls `head()`.
+run with it — Windows reported exit -1073740791, and `openrent` was the only
+reader affected because it is the only one that calls `head()`.
 
 The rule that fixes it, and that this test exists to keep: every request sets
 every callback target, on every path.

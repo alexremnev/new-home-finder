@@ -50,8 +50,8 @@ REM     systemctl disable --now london-home-finder-rightmove.timer
 REM
 REM The old "home scrape" task is deleted rather than left alone. It ran the
 REM sitemap reader, which fetched the whole nationwide sitemap every half hour —
-REM about 950MB a day to discover two or three listings — and openrent_v2 does
-REM the same job by reading one 92KB page per district.
+REM about 950MB a day to discover two or three listings — and the `openrent`
+REM job does the same work by reading one 92KB page per district.
 schtasks /Delete /F /TN "home scrape" 2>NUL
 
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:00 ^
@@ -61,7 +61,7 @@ schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:07 ^
   /TN "home zoopla" /TR "%RUN% zoopla"
 
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 20 /ST 00:14 ^
-  /TN "home openrent" /TR "%RUN% openrent_v2"
+  /TN "home openrent" /TR "%RUN% openrent"
 
 schtasks /Create /F /RL LIMITED /SC HOURLY /MO 1 /ST 00:20 ^
   /TN "home report" /TR "cmd /c cd /d \"%PROJECT%\" && .venv\Scripts\python.exe scripts\report.py >> logs\report.log 2>&1"

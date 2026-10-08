@@ -1,35 +1,58 @@
-"""OpenRent, read from the site itself.
+"""OpenRent, read from its district search pages.
 
-The Telegram feed does not publish OpenRent, so it is the one portal that has to
-be fetched directly. Everything after this module is unchanged: a listing goes
-into `listings` like any other, and match, queue and drain never learn where it
-came from.
+The Telegram feed does not publish OpenRent, so it is the one portal that has
+to be fetched directly. Everything after this module is unchanged: a listing
+goes into `listings` like any other, and match, queue and drain never learn
+where it came from.
 
 ── how listings are discovered ───────────────────────────────────────────────
 
-From the site's own sitemap, which `robots.txt` declares and permits. Checked on
-21 September 2026: `robots.txt` allows `/property-to-rent/`, names
-`sitemap.xml`, and sets no crawl delay.
+`robots.txt`, re-read on 26 September 2026, does not disallow
+`/properties-to-rent/`, and one district page carries:
 
-The sitemap carries no `lastmod`, so "new" cannot be read from it — it is
-established by comparing the ids it lists against the ids already stored.
+  * `var PROPERTYIDS = [ 2937375, 3030969, … ]` — **every** listing id the
+    search matches, not only the twenty rendered. E14 returned 328 ids in one
+    92KB page, with `NUMBEROFPROPERTIES = 328` beside it to check against.
+  * the first twenty as full cards: the slug, the monthly rent, and a
+    CDN-resized photograph.
 
-── why the district filter comes first ───────────────────────────────────────
+So discovery costs one request per district, and it scales with the districts
+somebody actually subscribes to rather than with the size of the country.
 
-The districts come from live subscriptions — what somebody is waiting to hear
-about — not from a list of what this source is said to cover. Those two
-disagreed in both directions: fetching districts nobody had chosen, and never
-fetching one that somebody had.
+── why not the sitemap ──────────────────────────────────────────────────────
 
-The sitemap is nationwide: Doncaster and Reading sit beside London. But a
-listing URL ends with its own outward code —
-`/property-to-rent/nuneaton/3-bed-terraced-house-mallard-avenue-cv10/55214` —
-so the district filter is applied to the URL, before a single listing page is
-requested. That is the difference between tens of requests per run and one per
-new listing in the country.
+There was a second reader here until October 2026 which discovered from the
+nationwide sitemap, because that is the only thing `robots.txt` pointed at. It
+is gone, and the measurements that retired it are worth keeping: that sitemap
+carries no `lastmod`, no `ETag` and no `Last-Modified`, ignores `Range`, and is
+served uncompressed whatever `Accept-Encoding` asks for. So every run
+downloaded the whole of the United Kingdom to find out what changed in E14 —
+about 950MB a day to discover two or three listings, against roughly a
+fiftieth of that here.
 
-The slug also gives the bedroom count and the property type, which is why a page
-is only fetched for the one thing it alone holds: the price.
+── the district is not the search ───────────────────────────────────────────
+
+`var SEARCHRADIUS = 2` — the district page is a two-kilometre radius, not the
+outcode. About a third of what it returns is in a neighbouring district, so
+unlike Rightmove the searched district cannot be trusted as the listing's own.
+
+The id alone does not say either. What does is the slug, and a bare id redirects
+to it:
+
+    GET /2937375  ->  301  Location: /property-to-rent/london/
+                           room-in-a-shared-flat-willis-house-e14/2937375
+
+Those headers are about 3KB where the listing page is 300KB, so one HEAD per
+unknown id answers "is this even in a district we care about" for a hundredth
+of the cost of finding out by reading the page. The slug also gives the bedroom
+count and the property type — see `read_slug`.
+
+── what still needs the listing page ───────────────────────────────────────
+
+The rent. The cards carry it for the twenty that are rendered, but a district
+has hundreds, so the page is still fetched for each genuinely new listing in a
+subscribed district, and only for those. The deposit, the minimum tenancy, the
+full postcode and the availability date come with it.
 
 ── why the page is read as text ──────────────────────────────────────────────
 
@@ -37,6 +60,16 @@ The details sit in label-and-value blocks whose markup is not stable, so the
 page is stripped to text and the values are found by their labels: rows get
 reordered, labels do not. The one exception is the postcode, which is only
 available inside a link, so it is taken from the HTML before stripping.
+
+── why this source is undated ──────────────────────────────────────────────
+
+OpenRent publishes no listing date anywhere this reader can see it. The search
+has a "New" sort in its dropdown, but the value does not take as a query
+parameter — tried 0 through 6, and the order never changed — and the cards say
+only "Last updated around 2 weeks ago". So there is no watermark to compare
+against, and this source uses the engine's read-through rule: a district is
+read silently until a run finds nothing new left in it, and only then does it
+start announcing. See worker.sources.sweep.
 """
 
 from __future__ import annotations
@@ -44,53 +77,63 @@ from __future__ import annotations
 import html
 import re
 import time
-import urllib.error
-import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
-import psycopg
 from pydantic import ValidationError
 
-from worker import store
 from worker.contracts.listing import Listing
 from worker.ingest.photo import image_in
-from worker.obs import Run
+from worker.obs.log import Stage
+from worker.sources.fetch import BLOCKED as REFUSALS
+from worker.sources.fetch import Fetcher, Refused
+from worker.sources.sweep import Catch, Harvest, Memory
 from worker.units import sqft_from
-
-Row = dict[str, Any]
-Conn = psycopg.Connection[Row]
 
 SOURCE_KEY = "openrent"
 BASE = "https://www.openrent.co.uk"
-SITEMAP_INDEX = f"{BASE}/sitemap.xml"
 
-# Identifies us and says where to complain, which is the least a scraper owes a
-# site that allowed it.
-AGENT = "LondonHomeFinderBot/1.0 (+https://londonhomefinder.co.uk)"
+# Listing pages per run, shared across every district. A first look at a busy
+# district finds hundreds of unknown ids; fetching them all at once would be
+# both rude and slow, so a run takes a slice and the district converges over
+# several. It cannot settle early while that is happening: a truncated run
+# reports `complete=False`, and the engine only settles on a complete one.
+DETAIL_BUDGET = 40
 
-# Pages per run. The sitemap is fetched whole every time, but listing pages are
-# only fetched for ids we have never seen, and a first run must not try to read
-# the whole of London in one go.
-PAGE_BUDGET = 40
+# Redirect lookups per run. Cheap — about 3KB each — but not free, and the
+# same reasoning applies.
+SLUG_BUDGET = 400
 
-# Between listing pages. No crawl delay is published, so this is manners rather
-# than obedience.
+# Between listing pages. No crawl delay is published, so this is manners.
 PAUSE_SECONDS = 1.0
 
-# Consecutive refusals before the run gives up.
-#
-# A site that answers 405 to the first few requests is not having a bad moment,
-# it is declining — and the honest response is to stop asking, not to spend the
-# whole budget finding out forty times and again in fifteen minutes. One
-# degraded stage says more than forty warnings.
-REFUSALS_ALLOWED = 3
+# ── what a search page gives up ─────────────────────────────────────────────
 
-LOC = re.compile(r"<loc>\s*([^<\s]+)\s*</loc>", re.IGNORECASE)
-LISTING_URL = re.compile(
-    r"/property-to-rent/[^/]+/(?P<slug>[^/]+)/(?P<id>\d+)/?$", re.IGNORECASE
+# Every id the search matched, which is more than the page renders.
+PROPERTY_IDS = re.compile(r"var\s+PROPERTYIDS\s*=\s*\[([^\]]*)\]", re.IGNORECASE)
+HOW_MANY = re.compile(r"var\s+NUMBEROFPROPERTIES\s*=\s*(\d+)", re.IGNORECASE)
+# The twenty rendered cards: the slug and the id, straight from the href.
+CARD = re.compile(
+    r'href="(?P<path>/property-to-rent/[^/"]+/(?P<slug>[^/"]+)/(?P<id>\d+))"',
+    re.IGNORECASE,
 )
+# `//imagescdn.openrent.co.uk/listings/2937375/o_….JPG_homepage.JPG` — already
+# resized by them, and on a CDN that serves anybody.
+#
+# Keyed on the id *inside* the url, not on the `data-listing-id` of whatever
+# card the url happens to sit near. The first version of this matched forwards
+# from `data-listing-id` to the next `src`, which quietly crossed card
+# boundaries: listing 3030969 came back holding listing 284912's photograph,
+# so an alert would have shown the wrong flat. The url identifies itself, so
+# there is nothing to correlate and nothing to get wrong.
+CARD_IMAGE = re.compile(
+    r'//imagescdn\.openrent\.co\.uk/listings/(?P<id>\d+)/(?P<rest>[^"\s]+)',
+    re.IGNORECASE,
+)
+
+# ── what a slug and a listing page give up ──────────────────────────────────
+
 # e14, se16, wc2n, cv10, al1 — the outward half of a UK postcode.
 OUTWARD = re.compile(r"^[a-z]{1,2}\d{1,2}[a-z]?$", re.IGNORECASE)
 
@@ -160,61 +203,6 @@ MONTHS = {
     "december": 12,
 }
 
-@dataclass(frozen=True)
-class Sweep:
-    """What one run did.
-
-    `stored` is everything written; `announce` is the part anybody should hear
-    about. They differ for a district this source has not been read through yet:
-    the sitemap has no dates, so a first pass cannot tell a listing posted an
-    hour ago from one posted in June, and announcing it would send a new
-    subscriber the whole standing market.
-    """
-
-    stored: list[int]
-    announce: list[int]
-
-@dataclass(frozen=True)
-class Found:
-    """What the sitemap alone reveals, before any page is fetched."""
-
-    external_id: str
-    url: str
-    district: str
-    bedrooms: int
-    property_type: str | None
-
-def fetch(url: str, *, timeout: float = 20.0) -> str:
-    # Accept-Encoding: identity so that what we measure is what crossed the
-    # wire. With compression the decoded length would be two or three times the
-    # bytes actually received, and "how much do we download" would be wrong in
-    # the unflattering direction.
-    request = urllib.request.Request(
-        url, headers={"User-Agent": AGENT, "Accept-Encoding": "identity"}
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read().decode("utf-8", errors="replace")
-
-def weigh(body: str) -> int:
-    # The body's size in bytes. Exact rather than indicative, because the
-    # request asks for no compression: the decoded text is the transfer.
-    return len(body.encode("utf-8"))
-
-def as_text(markup: str) -> str:
-
-    # Entities are decoded, and after the tags rather than before: the pound
-    # sign arrives as "&#xA3;" on most of this site, so matching a literal "£"
-    # found nothing on pages that plainly showed a price. Decoding first would
-    # let an escaped "&lt;script&gt;" become a tag after the stripping that was
-    # supposed to remove it.
-    return SPACES.sub(" ", html.unescape(TAGS.sub(" ", markup))).strip()
-
-def money(raw: str) -> float | None:
-    try:
-        return float(raw.replace(",", ""))
-    except ValueError:
-        return None
-
 # The address, which on this site exists only in the page's <h1>.
 #
 # Measured against four live pages on 2 October 2026, one of each shape the
@@ -239,6 +227,34 @@ HEADING = re.compile(r"<h1[^>]*>(.*?)</h1>", re.DOTALL | re.IGNORECASE)
 # none — see the studio above. "London" under a line already reading "E14" is
 # a line that says nothing, so there is no line.
 NO_PLACE = frozenset({"london", "greater london"})
+
+
+@dataclass(frozen=True)
+class Found:
+    """What the id and its slug reveal, before the listing page is fetched."""
+
+    external_id: str
+    url: str
+    district: str
+    bedrooms: int
+    property_type: str | None
+
+
+def as_text(markup: str) -> str:
+
+    # Entities are decoded, and after the tags rather than before: the pound
+    # sign arrives as "&#xA3;" on most of this site, so matching a literal "£"
+    # found nothing on pages that plainly showed a price. Decoding first would
+    # let an escaped "&lt;script&gt;" become a tag after the stripping that was
+    # supposed to remove it.
+    return SPACES.sub(" ", html.unescape(TAGS.sub(" ", markup))).strip()
+
+
+def money(raw: str) -> float | None:
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
 
 
 def address_in(markup: str) -> str | None:
@@ -347,26 +363,6 @@ def read_slug(slug: str) -> tuple[str, int, str | None] | None:
             return district, int(beds.group(1)), kind
     return district, int(beds.group(1)), None
 
-def listings_in(sitemap: str) -> list[Found]:
-    found: list[Found] = []
-    for url in LOC.findall(sitemap):
-        match = LISTING_URL.search(url)
-        if not match:
-            continue
-        read = read_slug(match.group("slug"))
-        if read is None:
-            continue
-        district, beds, kind = read
-        found.append(
-            Found(
-                external_id=match.group("id"),
-                url=url,
-                district=district,
-                bedrooms=beds,
-                property_type=kind,
-            )
-        )
-    return found
 
 def when(raw: str) -> date | None:
     lowered = raw.strip().lower()
@@ -380,17 +376,18 @@ def when(raw: str) -> date | None:
             return None
     return None
 
+
 def as_listing(
     found: Found, html: str, *, source_key: str = SOURCE_KEY
 ) -> Listing | None:
     """A listing, or nothing if the page did not give a price.
 
-    `source_key` is a parameter because `openrent_v2` reuses this parser and
-    is a different source. It was hard-coded to this module's own key, and the
-    newer reader therefore stored everything under `openrent` while asking
-    whether it had seen an id under `openrent_v2` — so the answer was always
-    no, every id looked new on every run, and it re-fetched the same hundreds
-    of pages every twenty minutes without ever announcing anything. See 0053.
+    `source_key` is a parameter rather than this module's constant because the
+    reader carries its own key — see `OpenRent.key`. It was hard-coded once,
+    and a reader whose key differed from it stored everything under the wrong
+    source while asking whether it had seen an id under the right one, so the
+    answer was always no and the same hundreds of pages were re-fetched every
+    twenty minutes. See 0053.
     """
 
     # Before stripping: the postcode exists only inside a link.
@@ -460,142 +457,300 @@ def as_listing(
         },
     )
 
-def collect(
-    conn: Conn,
-    run: Run,
-    *,
-    budget: int = PAGE_BUDGET,
-    pause: float = PAUSE_SECONDS,
-    dry_run: bool = False,
-    get: Any = None,
-) -> Sweep:
-    """Store every new listing in an enabled district."""
 
-    read = get or fetch
-    stored: list[int] = []
-    announce: list[int] = []
+def search_url(district: str) -> str:
+    """The search page for one district."""
 
-    with run.stage("scrape", source_key=SOURCE_KEY) as stage:
-        if dry_run:
-            stage.set("suppressed", True)
-            return Sweep([], [])
+    return f"{BASE}/properties-to-rent/{district.lower()}"
 
-        wanted = set(store.subscribed_districts(conn))
-        stage.set("districts", len(wanted))
-        if not wanted:
-            # Nobody is waiting for anything, so there is nothing to fetch.
-            # Said out loud, because silence here looks identical to a broken
-            # scraper — but this is not a fault, it is an empty subscriber list.
-            stage.log("info", "no active subscription names a district; nothing to scrape")
-            return Sweep([], [])
 
-        index = read(SITEMAP_INDEX)
-        stage.count("bytes", weigh(index))
-        children = [u for u in LOC.findall(index) if "listings" in u.lower()]
-        stage.set("sitemaps", len(children))
+def short_url(external_id: str) -> str:
+    """The bare-id url that redirects to the slug. See the module note."""
 
-        found: list[Found] = []
-        for child in children:
-            sitemap = read(child)
-            # Counted too, and it is the larger half: the whole listings
-            # sitemap is fetched every run because it carries no lastmod, so
-            # most of what we download is the same file again.
-            stage.count("bytes", weigh(sitemap))
-            found.extend(listings_in(sitemap))
-        stage.set("in_sitemap", len(found))
+    return f"{BASE}/{external_id}"
 
-        # OpenRent sometimes answers the same sitemap url with a complete but
-        # stunted file: 123 listings where there are normally 25,000, closing
-        # tag and all. Nothing in the response says it is short — no
-        # Content-Length, no ETag, no Last-Modified — so the only tell is its
-        # size against what that url usually gives.
-        #
-        # It does not matter for what gets announced: a short sitemap yields
-        # nothing fresh, so nothing is wrongly sent. It matters for settling.
-        # A district is marked read-through when nothing new is left in it, and
-        # on one of these runs that is true of every district by accident. Settle
-        # a newly added district on a 0.5% sample and its whole standing backlog
-        # is announced as new from the next run — the exact flood settling
-        # exists to prevent.
-        # Per child sitemap, because the index lists one file some runs and two
-        # others. Compared per run, a perfectly good single-file run of 24,920
-        # sat just under half of a two-file run's 49,872 and was called stunted
-        # by 32 listings — which is what the first version of this did.
-        each = len(found) // max(1, len(children))
-        biggest = store.biggest_sitemap(conn, SOURCE_KEY)
-        stunted = biggest is not None and each * 2 < biggest
-        if stunted:
-            stage.set("sitemap_stunted", True)
+
+def ids_in(page: str) -> list[str]:
+    """Every listing id the search matched, in the order given."""
+
+    found = PROPERTY_IDS.search(page)
+    if not found:
+        return []
+    out: list[str] = []
+    for piece in found.group(1).split(","):
+        digits = piece.strip()
+        if digits.isdigit():
+            out.append(digits)
+    return out
+
+
+def how_many(page: str) -> int | None:
+    """The count the page states, to check the id list against."""
+
+    found = HOW_MANY.search(page)
+    return int(found.group(1)) if found else None
+
+
+def slugs_in(page: str) -> dict[str, str]:
+    """id -> slug, for the cards the page rendered."""
+
+    return {
+        found.group("id"): found.group("slug") for found in CARD.finditer(page)
+    }
+
+
+def paths_in(page: str) -> dict[str, str]:
+    """id -> listing path, for the cards the page rendered."""
+
+    return {
+        found.group("id"): found.group("path") for found in CARD.finditer(page)
+    }
+
+
+def images_in(page: str) -> dict[str, str]:
+    """id -> preview picture url, for the cards the page rendered.
+
+    Already the size OpenRent shows in its own results, on a CDN that serves
+    any client. Nothing is downloaded here: the url is stored and Telegram and
+    WhatsApp fetch it themselves. See worker.sources.sweep.Catch.
+    """
+
+    out: dict[str, str] = {}
+    for found in CARD_IMAGE.finditer(page):
+        listing_id = found.group("id")
+        if listing_id not in out:
+            # Protocol-relative in the markup, which no messenger will follow.
+            out[listing_id] = (
+                f"https://imagescdn.openrent.co.uk/listings/{listing_id}/"
+                f"{found.group('rest')}"
+            )[:1000]
+    return out
+
+
+def slug_from_path(path: str) -> str | None:
+    """The slug out of a listing path, whether relative or absolute."""
+
+    found = CARD.search(f'href="{path}"')
+    return found.group("slug") if found else None
+
+
+@dataclass
+class OpenRent:
+    """The portal, as `worker.sources.sweep.collect` needs it.
+
+    Not frozen, and not by accident: `_details` and `_slugs` are this run's
+    remaining budgets and they are spent across districts, so that one busy
+    district cannot consume the whole run.
+    """
+
+    key: str = SOURCE_KEY
+    #: No listing date is published anywhere this reader can see. See the
+    #: module note, and the read-through rule in worker.sources.sweep.
+    dated: bool = False
+    detail_budget: int = DETAIL_BUDGET
+    slug_budget: int = SLUG_BUDGET
+    pause: float = PAUSE_SECONDS
+
+    _details: int = field(default=-1, init=False)
+    _slugs: int = field(default=-1, init=False)
+
+    def _start(self) -> None:
+        if self._details < 0:
+            self._details = self.detail_budget
+        if self._slugs < 0:
+            self._slugs = self.slug_budget
+
+    def harvest(
+        self,
+        district: str,
+        get: Fetcher,
+        stage: Stage,
+        since: Any = None,
+        memory: Memory | None = None,
+    ) -> Harvest:
+        self._start()
+        # For an undated portal the engine passes `settled_at`, so None here
+        # means this district has never been read through. That distinction is
+        # what makes the first pass cheap — see `backfill` below.
+        settled = since is not None
+
+        reply = get.get(search_url(district))
+        ids = ids_in(reply.body)
+        stated = how_many(reply.body)
+        if stated is not None and ids and abs(stated - len(ids)) > 1:
+            # The two disagree, which means the page shape has moved. Said out
+            # loud rather than trusted, because the id list is the whole basis
+            # of this reader.
             stage.log(
                 "warn",
-                f"each sitemap held about {each} listings where they usually hold "
-                f"{biggest} ({len(found)} across {len(children)} files); reading "
-                f"them but not settling any district on it",
+                f"{district}: the page says {stated} properties but lists "
+                f"{len(ids)} ids; reading what is listed",
             )
+        if not ids:
+            # No ids at all is either an empty district or a changed page. It
+            # is reported as complete so an empty district can settle, which
+            # is what lets it announce its first real listing.
+            stage.count("no_ids")
+            return Harvest(caught=[], complete=True, pages=1)
 
-        here = [one for one in found if one.district in wanted]
-        stage.set("in_our_districts", len(here))
+        # Asked once for the whole list, not once per id: this is a database
+        # round trip, and a district is hundreds of ids.
+        stored = memory.stored(ids) if memory else set()
+        # And separately: ids we have already resolved but did NOT store,
+        # because their slug put them in a neighbouring district. The search is
+        # a two-kilometre radius, so that is about a third of what comes back.
+        # Without this they were re-resolved on every run for ever. See 0053.
+        resolved = memory.resolved(ids) if memory else {}
+        unknown = [
+            one for one in ids if one not in stored and one not in resolved
+        ]
+        stage.count("in_radius", len(ids))
+        stage.count("already_known", len(ids) - len(unknown))
+        stage.count("already_resolved", sum(1 for one in ids if one in resolved))
 
-        # No early return when this is empty. A district that genuinely has no
-        # OpenRent listings right now still has to be marked as read through,
-        # or it would never settle and so would never announce anything once it
-        # did get one.
+        # Everything learned this pass, written once at the end.
+        learned: dict[str, str | None] = {}
 
-        known = store.known_external_ids(
-            conn, source_key=SOURCE_KEY, external_ids=[one.external_id for one in here]
-        )
-        fresh = [one for one in here if one.external_id not in known]
-        stage.count("already_known", len(here) - len(fresh))
-        stage.set("new", len(fresh))
-
-        # Which districts we had finished reading *before* this run. Read first,
-        # because a district settled below must not retroactively make this
-        # run's own backlog announceable.
-        settled = store.settled_districts(conn, SOURCE_KEY)
-        stage.set("settled_districts", len(settled))
-
-        # A district with nothing new left in it has been read through. From the
-        # next run on, anything appearing there appeared after we looked.
+        # ── the first pass, which is where this reader was getting stuck ────
         #
-        # Skipped entirely on a stunted sitemap: "nothing new left" is only
-        # evidence when we have seen the whole list.
-        with_fresh = {one.district for one in fresh}
-        if not stunted:
-            for district in sorted(wanted - with_fresh - settled):
-                store.settle_district(conn, SOURCE_KEY, district)
-                stage.count("district_settled")
+        # An undated portal settles a district by reading it through — see the
+        # rule in worker.sources.sweep — and until it settles, `_announceable`
+        # refuses everything, so nothing in it is ever sent. This reader never
+        # got there: a district is about 330 ids, the slug budget is 400 for
+        # the whole run across ten districts, so the budget ran out, the read
+        # was reported incomplete, the district never settled, and the next run
+        # started again. Measured over a fortnight: 2,413 part-reads, 721 runs,
+        # and not one listing announced.
+        #
+        # The resolving was never the point of a first pass. Nothing found in
+        # an unsettled district can be announced whatever we learn about it, so
+        # the only thing the first pass owes the next one is "these ids are not
+        # new". Writing them down is one database round trip; asking OpenRent
+        # about each of them is 330 requests that buy nothing.
+        #
+        # So: record the lot, settle the district, and start announcing
+        # tomorrow. The cost is that existing stock in a brand new district is
+        # never stored — which is exactly what the read-through rule means by
+        # settling, and what it was already doing on purpose for every listing
+        # the budget did reach.
+        if not settled:
+            stage.count("backfilled", len(unknown))
+            if memory is not None and unknown:
+                memory.remember(dict.fromkeys(unknown, None))
+            return Harvest(caught=[], complete=True, pages=1)
 
-        refused = 0
-        for index_of, one in enumerate(fresh[:budget]):
-            if index_of:
-                time.sleep(pause)
-            try:
-                page = read(one.url)
-            except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-                # One unreachable page is not a reason to abandon a run; a run
-                # of them is. Only the first is described, because forty copies
-                # of one sentence is not forty pieces of information.
-                refused += 1
-                if refused == 1:
-                    stage.log("warn", f"{one.external_id}: {type(exc).__name__}: {exc}")
-                stage.count("unreachable")
-                if refused >= REFUSALS_ALLOWED and not stored:
-                    stage.degrade(
-                        f"openrent refused {refused} requests in a row and gave "
-                        f"nothing — stopping this run rather than asking again"
-                    )
+        slugs = slugs_in(reply.body)
+        pictures = images_in(reply.body)
+        paths = paths_in(reply.body)
+
+        caught: list[Catch] = []
+        complete = True
+        # One search page, which is what this reader reads. The redirect
+        # lookups and the listing pages are requests, not pages, and they get
+        # their own counters below — `pages` was counting all three, so a run
+        # that spent its slug budget reported 439 "pages" and the admin's
+        # chart of pages per run meant nothing.
+        lookups = 0
+        details = 0
+
+        for listing_id in unknown:
+            slug = slugs.get(listing_id)
+            path = paths.get(listing_id)
+
+            if slug is None:
+                # Not one of the rendered cards, so ask the redirect. This is
+                # the cheap question that keeps us from reading a 300KB page
+                # for a flat in the next district along.
+                if self._slugs <= 0:
+                    complete = False
                     break
-                continue
-            refused = 0
-            stage.count("bytes", weigh(page))
+                self._slugs -= 1
+                lookups += 1
+                try:
+                    status, where = get.head(short_url(listing_id))
+                except (Refused, OSError) as error:
+                    # Could not ask, so nothing is learned and the district is
+                    # not settled on the strength of it.
+                    stage.count("slug_unreachable")
+                    stage.log("warn", f"{listing_id}: {type(error).__name__}: {error}")
+                    complete = False
+                    continue
+                if not where or status not in (301, 302, 307, 308):
+                    # Two different things, and conflating them is what made
+                    # this reader ask the same questions for ever.
+                    #
+                    # A refusal — 401, 403, 405, 429 — means we could not ask.
+                    # Nothing is learned, the district stays incomplete, and the
+                    # id comes round again next run. `Fetcher.head` has already
+                    # tried the proxy by this point.
+                    #
+                    # Any other answer is an answer: OpenRent replied and there
+                    # is no slug behind that id. Written down, so it is asked
+                    # about once rather than on every run — which is what 0053
+                    # exists for — and the read is NOT called incomplete,
+                    # because there is nothing left to come back for.
+                    if status in REFUSALS:
+                        stage.count("slug_refused")
+                        complete = False
+                    else:
+                        stage.count("no_slug")
+                        learned[listing_id] = None
+                    continue
+                path = where
+                slug = slug_from_path(where)
+                if slug is None:
+                    stage.count("no_slug")
+                    continue
 
+            read = read_slug(slug)
+            if read is None:
+                # A slug shape `read_slug` does not recognise. Counted rather
+                # than guessed at, and remembered so we do not ask about this
+                # id again.
+                stage.count("unreadable_slug")
+                learned[listing_id] = None
+                continue
+            where_it_is, _beds, _kind = read
+            learned[listing_id] = where_it_is
+            if where_it_is != district.upper():
+                # The two-kilometre radius, doing what it does. Not an error,
+                # and not ours to store under this district.
+                stage.count("outside_district")
+                continue
+
+            if self._details <= 0:
+                # Out of budget for this run. The district is deliberately
+                # left incomplete so that the engine does not settle it: there
+                # is still unread stock in it, and settling now would announce
+                # that stock as new on the next run.
+                complete = False
+                break
+            self._details -= 1
+            if self._details < self.detail_budget - 1:
+                time.sleep(self.pause)
+
+            url = f"{BASE}{path}" if path and path.startswith("/") else None
+            if url is None:
+                stage.count("no_path")
+                continue
             try:
-                listing = as_listing(one, page)
+                detail = get.get(url)
+            except (Refused, OSError) as error:
+                stage.count("unreachable")
+                stage.log("warn", f"{listing_id}: {type(error).__name__}: {error}")
+                complete = False
+                continue
+            details += 1
+
+            found = _found(listing_id, url, where_it_is, read)
+            try:
+                # This reader's own key, not the parser's default. See 0053.
+                listing = as_listing(found, detail.body, source_key=self.key)
             except ValidationError as error:
-                # One listing the contract refuses must not end the run. A
-                # scrape died here on a url that said `21-bed` — the ceiling
-                # has since been raised, but the lesson is the crash, not the
-                # number: forty districts went unread because of one house.
+                # Never fatal. One listing the contract refuses cost a whole
+                # run once already: a scrape died on a url that said `21-bed`,
+                # and forty districts went unread because of one house. The
+                # ceiling has since been raised, but the lesson is the crash.
                 #
                 # Only validation, deliberately. That is a judgement about
                 # their data and skipping it is right; a database error is a
@@ -603,7 +758,7 @@ def collect(
                 stage.count("invalid")
                 stage.log(
                     "warn",
-                    f"{one.external_id}: refused by the listing contract — "
+                    f"{listing_id}: refused by the listing contract — "
                     f"{str(error).splitlines()[0]}",
                 )
                 continue
@@ -611,52 +766,41 @@ def collect(
                 stage.count("no_price")
                 continue
 
-            listing_id = store.insert_listing(conn, listing)
-            store.record_sightings(conn, [listing_id], SOURCE_KEY)
+            caught.append(
+                Catch(listing=listing, image=pictures.get(listing_id) or _og(detail.body))
+            )
 
-            # Usually nothing to find — this is the only source for OpenRent —
-            # but a flat listed both here and on an agent's Rightmove page is
-            # the same flat, and whichever arrived first is the one sent.
-            duplicate = store.mark_duplicate(conn, listing_id)
-            if duplicate is not None:
-                stage.count("duplicate")
+        if memory is not None and learned:
+            memory.remember(learned)
+        stage.count("resolved", len(caught))
+        stage.count("slug_lookups", lookups)
+        stage.count("detail_pages", details)
+        return Harvest(caught=caught, complete=complete, pages=1)
 
-            # The picture is taken from the page we are already holding, not by
-            # the images job. That job runs on the server, and OpenRent answers
-            # the server 405 — the same datacentre block that moved this scraper
-            # to a desk in the first place. It would fetch nothing, write "no
-            # picture" and never ask again, which is why these alerts arrived
-            # bare while the listing plainly had photographs.
-            picture = image_in(page)
-            store.set_listing_image(conn, listing_id, picture)
-            stage.count("with_photo" if picture else "no_photo")
 
-            stored.append(listing_id)
-            if one.district in settled:
-                announce.append(listing_id)
-            stage.count("stored")
+def _found(listing_id: str, url: str, district: str, read: tuple[str, int, str | None]) -> Found:
+    """A `Found`, built from what the slug gave us."""
 
-        stage.count("over_budget", max(0, len(fresh) - budget))
-        stage.set("stored", len(stored))
-        stage.count("stored_not_announced", len(stored) - len(announce))
+    _where, beds, kind = read
+    return Found(
+        external_id=listing_id,
+        url=url,
+        district=district,
+        bedrooms=beds,
+        property_type=kind,
+    )
 
-    return Sweep(stored, announce)
+
+def _og(page: str) -> str | None:
+    """The picture from the listing page, when the card did not carry one."""
+
+    return image_in(page)
+
 
 __all__ = [
-    "AGENT",
-    "PAGE_BUDGET",
-    "REFUSALS_ALLOWED",
-    "SLUG_KINDS",
-    "SOURCE_KEY",
-    "Found",
-    "Sweep",
-    "address_in",
-    "as_listing",
-    "as_text",
-    "collect",
-    "listings_in",
-    "place_in_slug",
-    "read_slug",
-    "weigh",
+    "BASE", "DETAIL_BUDGET", "PAUSE_SECONDS", "SLUG_BUDGET", "SLUG_KINDS",
+    "SOURCE_KEY", "Found", "OpenRent", "address_in", "as_listing", "as_text",
+    "how_many", "ids_in", "images_in", "paths_in", "place_in_slug",
+    "read_slug", "search_url", "short_url", "slug_from_path", "slugs_in",
     "when",
 ]

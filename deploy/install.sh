@@ -79,29 +79,32 @@ echo "== timers"
 cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
 
-# The old OpenRent reader, off. It discovers from the nationwide sitemap, which
-# costs about 950MB a day to find two or three listings, and OpenRent answers
-# this server's address 405 on listing pages anyway — so every run would
-# download the whole country only to be refused.
+# The OpenRent sitemap reader, gone. It discovered from the nationwide sitemap,
+# which cost about 950MB a day to find two or three listings, and OpenRent
+# answers this server's address 405 on listing pages anyway. The `openrent`
+# reader reads the same site from its search pages instead.
 #
-# Disabled here rather than merely left un-enabled, so that a deploy undoes it
-# if somebody turned it on by hand. The `openrent_v2` timer below reads the same
-# site from its search pages instead, for about a fiftieth of the traffic, and
-# does not need the sitemap at all.
+# Still disabled and removed here rather than simply dropped from the repo, so
+# that a deploy cleans up a server that was installed before it went.
 #
-# --now stops a run already in flight; both failures are ignored because a
-# timer that was never enabled is not an error.
+# --now stops a run already in flight; the failures are ignored because a timer
+# that was never enabled is not an error.
 systemctl disable --now london-home-finder-scrape.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-scrape.timer
 
-# An earlier deploy scheduled all three portal readers as one `portals` job.
-# They are one job each now, so that timer is removed rather than left behind
-# firing a fourth sweep nobody is watching.
+# An earlier deploy scheduled every portal reader as one `portals` job. They
+# are one job each now, so that timer is removed rather than left behind firing
+# an extra sweep nobody is watching.
 systemctl disable --now london-home-finder-portals.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-portals.timer
 
 systemctl disable --now london-home-finder-zoopla.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-zoopla.timer
 
+# Zoopla and OpenRent both refuse this server's address, so their readers run
+# from the Windows desk instead. The old `openrent_v2` unit name goes with them.
+systemctl disable --now london-home-finder-openrent.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-openrent.timer
 systemctl disable --now london-home-finder-openrent_v2.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-openrent_v2.timer
 

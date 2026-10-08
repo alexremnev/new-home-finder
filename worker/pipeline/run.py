@@ -36,10 +36,10 @@ def _zoopla() -> Any:
     return Zoopla()
 
 
-def _openrent_v2() -> Any:
-    from worker.sources.openrent_v2 import OpenRentV2
+def _openrent() -> Any:
+    from worker.sources.openrent import OpenRent
 
-    return OpenRentV2()
+    return OpenRent()
 
 
 def _zoopla_london() -> Any:
@@ -67,7 +67,7 @@ PORTAL_JOBS: dict[str, Any] = {
     "rightmove": _rightmove,
     "zoopla": _zoopla,
     "zoopla_london": _zoopla_london,
-    "openrent_v2": _openrent_v2,
+    "openrent": _openrent,
 }
 
 def run_job(
@@ -115,32 +115,13 @@ def run_job(
 
         return "ok"
 
-    if job == "scrape":
-
-        # The original OpenRent reader, which discovers from the nationwide
-        # sitemap. Left exactly as it was: `portals` below reads the same site
-        # from its search pages for about a fiftieth of the traffic, and the
-        # two can be compared before this one is switched off.
-        from worker.sources.openrent import collect as scrape_openrent
-
-        sweep = scrape_openrent(conn, run, dry_run=cfg.dry_run)
-
-        # Only what the scraper is willing to call new. The rest is stored and
-        # will be matched from now on, but is not announced retrospectively —
-        # see Sweep.
-        if sweep.announce:
-            queue_matches(
-                conn, run, source_key="openrent", listing_ids=sweep.announce
-            )
-        return "ok"
-
     if job in PORTAL_JOBS or job == "portals":
 
         # One job per portal, and the job name *is* the source key. Each has
-        # its own timer so the three do not land on the server together, and
-        # each gets its own row in `job_runs` — which is what makes the admin
-        # Jobs panel say "zoopla has not run since Tuesday" instead of hiding
-        # it inside one combined job that looks healthy because the other two
+        # its own timer so they do not land on the server together, and each
+        # gets its own row in `job_runs` — which is what makes the admin Jobs
+        # panel say "zoopla has not run since Tuesday" instead of hiding it
+        # inside one combined job that looks healthy because the others
         # worked.
         #
         # `portals` still runs all of them, for a manual sweep. Nothing

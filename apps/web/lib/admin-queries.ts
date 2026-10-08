@@ -578,13 +578,8 @@ export const STUCK_AFTER_MINUTES = 15;
 // point of the split: a job that has stopped shows as silent here, where
 // combined it hid behind the two that still worked.
 //
-// `scrape` is absent deliberately. The old sitemap reader is disabled by the
-// installer — it downloaded the whole country each run and OpenRent answers
-// this server 405 on listing pages anyway — so expecting it would paint a
-// permanent red panel for a job nobody wants running. If it is ever enabled
-// again it appears here anyway, through `seen`.
 export const EXPECTED_JOBS = [
-  "ingest", "rightmove", "zoopla", "zoopla_london", "openrent_v2",
+  "ingest", "rightmove", "zoopla", "zoopla_london", "openrent",
   "drain", "rollup", "report",
 ] as const;
 
@@ -1328,10 +1323,9 @@ export type ReaderOverlap = {
 // Feed against scraper, per portal, so the Telegram source can be retired on
 // evidence. See 0052 for why this cannot be read off `listings`.
 //
-// Grouped by external_id rather than by listing id, because the two shapes
-// differ: the feed and the Rightmove scraper upsert into one row, while
-// `openrent` and `openrent_v2` are two rows for the same flat that happen to
-// share OpenRent's numeric id.
+// Grouped by external_id rather than by listing id: the feed and a portal's
+// own scraper upsert into one row, so the row cannot say which of them saw it
+// first, and `listing_sightings` is where that is recorded. See 0052.
 //
 // `feed_only_covered` is the number that actually matters. A listing only the
 // feed saw is uninteresting if it was in a district no subscriber has chosen —
@@ -1350,9 +1344,7 @@ export async function readerOverlap(win: Win): Promise<ReaderOverlap[]> {
      fam AS (
        SELECT l.id,
               l.external_id,
-              -- The two OpenRent readers are one portal for this purpose.
-              CASE WHEN l.source_key = 'openrent_v2' THEN 'openrent'
-                   ELSE l.source_key END AS portal,
+              l.source_key AS portal,
               upper(l.postcode_district) AS district
          FROM listings l
         WHERE l.first_seen_at >  now() - make_interval(mins => $1::int)
@@ -1599,16 +1591,3 @@ export async function portalRuns(win: Win): Promise<PortalRun[]> {
   ).catch(() => []);
 }
 
-export async function scrapeBytes(win: Win, source: string): Promise<number> {
-  const rows = await query<{ bytes: string | number | null }>(
-    `SELECT coalesce(sum((counters->>'bytes')::bigint), 0) AS bytes
-       FROM job_stages
-      WHERE stage = 'scrape'
-        AND source_key = $2
-        AND jsonb_typeof(counters->'bytes') = 'number'
-        AND started_at >  now() - make_interval(mins => $1::int)
-        AND started_at <= now() - make_interval(mins => $3::int)`,
-    [Math.round(win.mins), source, Math.round(win.endMins)],
-  ).catch(() => []);
-  return Number(rows[0]?.bytes ?? 0);
-}

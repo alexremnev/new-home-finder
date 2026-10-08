@@ -322,7 +322,7 @@ url: в телеграме inline-кнопка, в ватсапе — его е�
 ```bash
 # Сохранённая страница -> фикстура для коммита. Сохраняет структуру, классы,
 # иконки и форматы значений; убирает прозу, фотографии и ссылки.
-    -o tests/fixtures/openrent/detail.html
+    -o tests/fixtures/openrent_e14_search.html
 ```
 
 `snapshots/` в `.gitignore` — сырые страницы остаются на той машине, где скачаны.
@@ -342,7 +342,7 @@ UPDATE sources SET config = jsonb_set(config, '{rate_limit_rps}', '0.15')
  WHERE key = 'openrent';
 
 -- приостановить источник: таймер, а не база
---   sudo systemctl disable --now london-home-finder-scrape.timer
+--   sudo systemctl disable --now london-home-finder-openrent.timer
 
 -- расширить охват
 UPDATE source_locations SET enabled = true
@@ -494,7 +494,7 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY je.id DESC LIMIT 1
   ) AS e ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'openrent', 'portals')
  ORDER BY r.started_at DESC;
 
 
@@ -527,7 +527,7 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY js.started_at LIMIT 1
   ) AS s ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'openrent_v2', 'portals', 'scrape')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'openrent', 'portals')
  GROUP BY 1, 2
  ORDER BY 1, 2;
 
@@ -573,7 +573,8 @@ SELECT l.id,
 --
 -- Можно ли выключить Telegram-источник. Группировка по id объявления НА
 -- ПОРТАЛЕ, а не по строке в базе: у Rightmove и Zoopla это одна строка, а у
--- OpenRent старый и новый читатели — две строки с одним номером.
+-- фид и скрапер одного портала пишут в одну строку, поэтому сама строка не
+-- говорит, кто увидел объявление первым — это знает только listing_sightings.
 --
 -- Решает дело колонка missed_in_our_districts. «Только фид» само по себе
 -- ничего не значит: объявление в районе, который никто не выбрал, скрапер не
@@ -593,8 +594,7 @@ WITH covered AS (
 ),
 fam AS (
     SELECT l.id, l.external_id,
-           CASE WHEN l.source_key = 'openrent_v2' THEN 'openrent'
-                ELSE l.source_key END                       AS portal,
+           l.source_key                                     AS portal,
            upper(l.postcode_district)                       AS district
       FROM listings l
      WHERE l.first_seen_at > now() - interval '24 hours'

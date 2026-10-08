@@ -48,9 +48,10 @@ class Run:
         # run did not ask. See `finish`.
         self.worst: str = "ok"
         self._stage_note: str | None = None
-        # Which machine this is. The scrape job runs both from the server and
-        # from a desk — OpenRent answers the server 405 for content pages — and
-        # without this the run log cannot say which of them made a request.
+        # Which machine this is. The portal readers run from the server and
+        # from a desk both — Zoopla answers the server 403 and OpenRent 405 on
+        # content pages — and without this the run log cannot say which of them
+        # made a request.
         host = socket.gethostname()[:120] or None
         row = conn.execute(
             """
