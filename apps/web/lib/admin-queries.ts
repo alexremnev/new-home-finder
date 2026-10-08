@@ -624,13 +624,19 @@ export type JobState = {
   //: how a job that died eleven times showed 0 failed.
   stuck: number;
   median_secs: number | null;
-  //: Whether the window is long enough for this job to have been expected.
+  //: Whether this job was expected to have run inside the window, and so
+  //: whether its silence means anything.
   //:
-  //: False only for a job whose timer fires less often than the window is
-  //: long — `purge`, nightly, on anything under a day. Silence from one of
-  //: those is not evidence of anything, so the banner ignores it and the tile
-  //: says "not due" rather than "silent".
+  //: False for a job whose timer fires less often than the window is long —
+  //: `purge`, nightly, on anything under a day — and for a job no timer starts
+  //: at all. Silence from either is not evidence of anything, so the banner
+  //: ignores it and the tile says so rather than "silent".
   due: boolean;
+
+  //: Whether anything starts this job on a timer. False means the only runs it
+  //: will ever have are ones somebody asked for by hand, so it can never be
+  //: silent however long the window is. See `SCHEDULED_JOBS`.
+  timed: boolean;
 };
 
 // Beyond this a run marked 'running' is not running. The longest job here
@@ -645,7 +651,8 @@ export const STUCK_AFTER_MINUTES = 15;
 //
 // One entry per portal reader, not one combined `portals` job. That is the
 // point of the split: a job that has stopped shows as silent here, where
-// combined it hid behind the two that still worked.
+// combined it hid behind the two that still worked. A reader stopped
+// deliberately is the exception, and says so by its period — see `zoopla`.
 //
 // ── why a period, and not just a list of names ───────────────────────────
 //
@@ -657,26 +664,89 @@ export const STUCK_AFTER_MINUTES = 15;
 // why it was left off the list altogether and then missing from the panel.
 //
 // With a period, absence only counts against a job on a window at least as
-// long as its own: any window of a day contains 01:00, so a silent `purge`
-// there is real, and on a half-hour window the tile says "not due" instead of
-// dragging the banner down. Every job keeps its tile either way.
+// long as the one it is allowed — so on a half-hour window the tile says "not
+// due" instead of dragging the banner down. Every job keeps its tile either
+// way. The banner's word for Degraded now being amber rather than red does
+// not change this: the quietest state has to be reported as the quietest
+// state, not as a milder shade of fault.
 //
-// The minutes are read off the timers in deploy/systemd — the gap each one
-// leaves between fires, during the hours it fires at all. The readers pause
+// The minutes are read off the timers in deploy/systemd and, for the two
+// readers that run from the desk, scripts/win/install-task.cmd — the gap each
+// one leaves between fires, during the hours it fires at all. The readers pause
 // overnight, which is a longer gap than any number here, so a window at four
 // in the morning can still call one silent; that is as it was before this
 // list grew a period, and a separate question from the one above.
-export const SCHEDULED_JOBS: { job: string; everyMins: number }[] = [
+//
+// ── null, and why a job is listed with no period at all ──────────────────
+//
+// `everyMins: null` is "nothing starts this on a timer". Not the same as
+// absent: the job keeps its tile and its history, it simply cannot be silent,
+// because there is no fire for it to have missed. Absent would mean the tile
+// only appears when somebody has run it, and with it the page would stop
+// being a list of what exists.
+//
+// `silentAfterMins` is the other half of the same idea, for a job that has a
+// timer but whose missed fire is not news on its own.
+export const SCHEDULED_JOBS: {
+  job: string;
+  everyMins: number | null;
+  silentAfterMins?: number;
+}[] = [
   { job: "ingest", everyMins: 2 },
   { job: "drain", everyMins: 2 },
   { job: "rollup", everyMins: 2 },
   { job: "zoopla_london", everyMins: 5 },
   { job: "rightmove", everyMins: 10 },
-  { job: "zoopla", everyMins: 20 },
+  // Stopped on purpose, so its silence is the intended state and not a fault.
+  // `zoopla_london` reads the whole city in one search, which is what this
+  // reader was doing twenty-odd districts at a time; the reader itself stays,
+  // because reading one named district on demand is what onboarding a district
+  // and catching up after an outage both need. See `_zoopla_london`.
+  { job: "zoopla", everyMins: null },
   { job: "openrent", everyMins: 20 },
   { job: "report", everyMins: 60 },
-  { job: "purge", everyMins: 24 * 60 },
+  // Nightly, but one skipped night is not news: purge deletes rows that have
+  // expired, and a day's delay in deleting them changes nothing anybody can
+  // see. Two nights is different — that is a timer that has stopped rather
+  // than a run that was missed — so absence only counts on a window of two
+  // days or more.
+  { job: "purge", everyMins: 24 * 60, silentAfterMins: 48 * 60 },
 ];
+
+// How long a job has to be absent before that absence means anything: the
+// grace where one is set, the period otherwise, and null for a job nothing
+// starts.
+const SILENT_AFTER = new Map(
+  SCHEDULED_JOBS.map((one) => [one.job, one.silentAfterMins ?? one.everyMins]),
+);
+
+/**
+ * Whether a job's silence over a window this long is evidence of anything.
+ *
+ * Three cases, and the difference between the last two is the whole point of
+ * allowing a null period:
+ *
+ *   * a period at most as long as the window — the job should have run, so
+ *     silence is real and the banner says so;
+ *   * a longer period, or a grace not yet used up — it was never going to run
+ *     in a window this short, and the tile says "not due";
+ *   * null — nothing starts it, so there is no fire for it to have missed and
+ *     no length of window that makes its silence mean anything.
+ *
+ * A name not in `SCHEDULED_JOBS` at all is due by construction: it got into
+ * the panel by running. Nothing that could have been silent is excused by
+ * that default.
+ */
+export function expectation(
+  job: string,
+  windowMins: number,
+): { timed: boolean; due: boolean } {
+  const every = SILENT_AFTER.get(job);
+  return {
+    timed: every !== null,
+    due: every !== null && (every ?? 0) <= windowMins,
+  };
+}
 
 // `portals` runs every reader in one go and nothing schedules it — it is there
 // for a manual sweep. A tile for it therefore answers no question this panel
@@ -688,7 +758,7 @@ export const SCHEDULED_JOBS: { job: string; everyMins: number }[] = [
 const UNSCHEDULED_JOBS = ["portals"];
 
 export async function jobStates(win: Win): Promise<JobState[]> {
-  const rows = await query<Omit<JobState, "due">>(
+  const rows = await query<Omit<JobState, "due" | "timed">>(
     `WITH expected AS (SELECT unnest($2::text[]) AS job),
      seen AS (
        SELECT DISTINCT job FROM job_runs
@@ -740,13 +810,7 @@ export async function jobStates(win: Win): Promise<JobState[]> {
   ).catch(() => []);
 
   const length = win.mins - win.endMins;
-  const period = new Map(SCHEDULED_JOBS.map((one) => [one.job, one.everyMins]));
-  // A name not on the list got here by running, so it is due by construction:
-  // nothing that could have been silent is excused by this default.
-  return rows.map((row) => ({
-    ...row,
-    due: (period.get(row.job) ?? 0) <= length,
-  }));
+  return rows.map((row) => ({ ...row, ...expectation(row.job, length) }));
 }
 
 export type RunPoint = { label: string; ok: number; bad: number };

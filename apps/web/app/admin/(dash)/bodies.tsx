@@ -723,13 +723,16 @@ export async function Jobs({ span }: { span: string }) {
             : job.stuck > 0
               ? "bad"
               : JOB_TONE[job.last_status ?? ""] ?? "bad";
-        // Same grey tile either way — neither is a fault — but a job that was
+        // Same grey tile for all three — none is a fault — but a job that was
         // never going to run in this window should not be reported as having
-        // gone quiet.
+        // gone quiet, and one nothing starts at all should not be reported as
+        // waiting for its turn.
         const word =
-          state === "idle" && !job.due
-            ? "not due"
-            : JOB_WORD[state] ?? (job.last_status ?? "unknown");
+          state === "idle" && !job.timed
+            ? "no timer"
+            : state === "idle" && !job.due
+              ? "not due"
+              : JOB_WORD[state] ?? (job.last_status ?? "unknown");
         return (
           <div key={job.job} className={`card job job-${state}`}>
             <div className="job-name">
