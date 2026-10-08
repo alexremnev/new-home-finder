@@ -21,8 +21,25 @@ recorded here because every number below is load-bearing:
 Residential proxies bill by traffic, so "how much did we download" has to be
 the number that crossed the wire, not the number after decompression — they
 differ by a factor of ten here. `len(response.content)` is the decoded size;
-libcurl's `SIZE_DOWNLOAD_T` is the transfer. This module reports the transfer,
-and adds `REQUEST_SIZE` because a proxy bills what goes up as well.
+libcurl's `SIZE_DOWNLOAD_T` is the transfer. So this counts that, plus
+`HEADER_SIZE` for the response headers and `REQUEST_SIZE` for what went up: a
+proxy bills every byte through the tunnel and does not care which part of the
+exchange they belong to.
+
+── what it still cannot see, and by how much ───────────────────────────────
+
+The CONNECT exchange and the TLS handshake inside the tunnel. libcurl's
+counters are HTTP-level and those bytes are below it, so nothing here can
+report them — and they are real: a certificate chain alone is several KB, and
+it is paid once per tunnel, so a run that changes fingerprint or exit address
+pays it again.
+
+Measured against a DataImpulse invoice on 8 October 2026: three proxied
+requests came to 67KB by this counter and 90.49KB on theirs. Response headers
+accounted for about 9KB of the 23KB gap — that part is now counted — and the
+rest was three handshakes. So expect this figure to read a few per cent under
+the invoice, not a third under it, and expect the gap to widen if the proxy is
+set to a rotating port rather than a sticky one.
 """
 
 from __future__ import annotations
@@ -278,7 +295,7 @@ class Fetcher:
         identical request from a home connection — measured, and the reason
         `BLOCKED` carries 405 at all. `get` knew that and escalated; this did
         not, because it only reached for the proxy when some earlier `get` had
-        already been refused by the same host. On `openrent_v2` no earlier
+        already been refused by the same host. On `openrent` no earlier
         `get` ever is: the search page is served, and only the per-listing
         lookups are refused. So every lookup came back 405, forever, with no
         proxy attempt — which is most of why that reader stored 134 listings
@@ -406,8 +423,16 @@ class Fetcher:
             curl.perform()
             status = _number(curl.getinfo(CurlInfo.RESPONSE_CODE))
             # The transfer, not the decompressed body. See the module note.
-            wire = _number(curl.getinfo(CurlInfo.SIZE_DOWNLOAD_T)) + _number(
-                curl.getinfo(CurlInfo.REQUEST_SIZE)
+            # Body, response headers, request headers — all three, because a
+            # proxy bills every byte through the tunnel and does not care
+            # which part of the exchange they belong to. The response headers
+            # were missing and they are not small: measured 6.6KB against a
+            # 72.7KB body on a Zoopla search page, nine per cent, every
+            # request. See the module note on what is still not counted.
+            wire = (
+                _number(curl.getinfo(CurlInfo.SIZE_DOWNLOAD_T))
+                + _number(curl.getinfo(CurlInfo.HEADER_SIZE))
+                + _number(curl.getinfo(CurlInfo.REQUEST_SIZE))
             )
         except Exception:
             # A handle that failed mid-transfer may be holding a connection in
