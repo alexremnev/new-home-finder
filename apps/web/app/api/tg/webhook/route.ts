@@ -31,7 +31,7 @@ import {
   type Account,
   accountForChat,
   enabledDistricts,
-  EDIT_TTL_MINUTES,
+  filterUrl,
   issueToken,
   limitsOf,
   planIsLive,
@@ -97,6 +97,12 @@ export async function POST(request: Request): Promise<NextResponse> {
 // Two things are left alone: a message that already carries a url button (the
 // upgrade offer, the filter form), because a second button to the same place is
 // noise; and a body that already names the address.
+//
+// The link carries an edit token, so the form opens on the filter this person
+// already has: arriving from the bot and being shown the defaults is being
+// asked to type a search out again from memory. Built only when the button is
+// actually added, because it costs a query and a write and a message that
+// already points at the site has no use for it.
 async function reply(
   chatId: string,
   text: string,
@@ -107,7 +113,9 @@ async function reply(
     text.includes(site) ||
     (keyboard ?? []).some((row) => row.some((button) => Boolean(button.url)));
   const rows: Keyboard = [...(keyboard ?? [])];
-  if (!hasLink) rows.push([{ text: "🌐 Open the site", url: `${site}/` }]);
+  if (!hasLink) {
+    rows.push([{ text: "🌐 Open the site", url: await filterUrl(chatId) }]);
+  }
   return sendMessage(chatId, text, rows.length ? rows : undefined);
 }
 
@@ -282,18 +290,11 @@ async function offerUpgrade(chatId: string, account: Account): Promise<void> {
 }
 
 async function sendToForm(chatId: string, existing: boolean): Promise<void> {
-  // A returning subscriber gets a token on the link, so the form knows who
-  // they are and shows "back to Telegram" rather than a price list. Without
-  // one — or if issuing it fails — the plain form is still the right page.
-  let where = `${siteUrl()}/`;
-  if (existing) {
-    const account = await accountForChat(chatId).catch(() => null);
-    if (account) {
-      const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES)
-        .catch(() => null);
-      if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
-    }
-  }
+  // A returning subscriber gets a token on the link, so the form knows who they
+  // are: it opens on their current criteria and offers "back to Telegram"
+  // rather than a price list. Without one — or if issuing it fails — the plain
+  // form is still the right page.
+  const where = existing ? await filterUrl(chatId) : `${siteUrl()}/`;
   await reply(chatId, existing ? CHANGE_FILTER : SET_FILTERS, [
     [{ text: FILTERS_BUTTON, url: where }],
   ]);

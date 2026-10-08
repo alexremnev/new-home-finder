@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import type { Limits } from "./criteria";
+import type { Criteria, Limits } from "./criteria";
 import { query } from "./db";
 import { stripeMode } from "./stripe";
 
@@ -288,6 +288,56 @@ export function siteUrl(): string {
   return (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(/\/+$/, "");
 }
 
+/**
+ * The account's edit token, reused where there is a live one.
+ *
+ * Every message a bot sends offers a way back to the form, so this is asked for
+ * constantly — and `issueToken` deletes the account's previous token of the same
+ * purpose. Minting a new one each time would mean the link in the message
+ * before this one had just stopped working, which is the one failure the person
+ * cannot do anything about: the button looks fine and lands on a sign-up page.
+ *
+ * So the live token is kept and its expiry pushed out instead. One token per
+ * account either way, and every link they have been given works for an hour
+ * after the last thing the bot said to them.
+ */
+async function editToken(userId: number): Promise<string> {
+  const rows = await query<{ token: string }>(
+    `UPDATE user_tokens
+        SET expires_at = now() + make_interval(mins => $2::int)
+      WHERE user_id = $1 AND purpose = 'edit'
+        AND used_at IS NULL AND expires_at > now()
+      RETURNING token`,
+    [userId, EDIT_TTL_MINUTES],
+  );
+  const live = rows[0]?.token;
+  return live ?? (await issueToken(userId, "edit", EDIT_TTL_MINUTES));
+}
+
+/**
+ * The filter form, for somebody a bot already knows.
+ *
+ * Carries an `e=` token whenever the address belongs to an account, which is
+ * what lets the page open on their current criteria instead of the defaults —
+ * and what tells it to show "save and go back" rather than a price list. Every
+ * link a bot hands out goes through here, so there is no second route to the
+ * form that forgets the token and silently offers somebody a blank page.
+ *
+ * The plain form on anything unknown, and on any failure: a link without a
+ * token still works, where no link at all is a dead end.
+ */
+export async function filterUrl(
+  address: string,
+  channel: Channel = "telegram",
+): Promise<string> {
+  const plain = `${siteUrl()}/`;
+  const account = await accountForChat(address, channel).catch(() => null);
+  if (!account) return plain;
+
+  const token = await editToken(account.user_id).catch(() => null);
+  return token ? `${siteUrl()}/?e=${encodeURIComponent(token)}` : plain;
+}
+
 export function botLink(token: string): string {
   const bot = process.env.TELEGRAM_BOT_USERNAME;
   if (!bot) throw new Error("TELEGRAM_BOT_USERNAME is not set");
@@ -307,10 +357,16 @@ export async function accountForToken(
                JOIN channels c ON c.key = uc.channel AND c.enabled
               WHERE uc.user_id = u.id
               ORDER BY uc.is_primary DESC, uc.channel
-              LIMIT 1) AS channel
+              LIMIT 1) AS channel,
+            -- Whether the plan is live, and the allowance it is live against.
+            -- Missing here while accountForChat selected them, which left
+            -- planIsLive undefined for every token-based caller: a paying
+            -- subscriber opening /update was told their plan had ended.
+            e.live, e.alert_allowance, e.alerts_used
        FROM user_tokens t
        JOIN users u ON u.id = t.user_id
        JOIN plans p ON p.key = u.plan
+       JOIN user_entitlement e ON e.user_id = u.id
        LEFT JOIN subscriptions s ON s.user_id = u.id AND s.active
       WHERE t.token = $1 AND t.purpose = $2
         AND t.used_at IS NULL AND t.expires_at > now()
@@ -323,6 +379,12 @@ export async function accountForToken(
 
 export type Returning = {
   channel: Channel;
+  /**
+   * The filter they already have, so the form opens on it rather than on the
+   * defaults. Empty for an account with no active subscription — somebody who
+   * used /stop and came back — which is the blank form, correctly.
+   */
+  criteria: Criteria;
   /** Whether every match is being delivered, rather than a lapsed share. */
   full: boolean;
   /**
@@ -337,9 +399,10 @@ export type Returning = {
 /**
  * Who is changing their filter, for a token issued by /update.
  *
- * Only what the page needs: which messenger to send them back to, whether they
- * are still getting everything, and — if not — a link that can actually take
- * the payment. Anything more would be a sign-up page wearing a different hat.
+ * Only what the page needs: the filter to open the form on, which messenger to
+ * send them back to, whether they are still getting everything, and — if not —
+ * a link that can actually take the payment. Anything more would be a sign-up
+ * page wearing a different hat.
  */
 export async function returningFor(token: string): Promise<Returning | null> {
   const account = await accountForToken(token, "edit").catch(() => null);
@@ -354,8 +417,10 @@ export async function returningFor(token: string): Promise<Returning | null> {
   ).catch(() => []);
   const share = Number(rows[0]?.share ?? 0);
 
+  const criteria = (account.criteria ?? {}) as Criteria;
+
   const full = planIsLive(account) && share >= 100;
-  if (full) return { channel: account.channel, full, upgradeUrl: null };
+  if (full) return { channel: account.channel, full, upgradeUrl: null, criteria };
 
   // Its own token, because /upgrade needs one to know whose plan is being
   // bought — a bare /upgrade can only answer "that link has expired".
@@ -365,6 +430,7 @@ export async function returningFor(token: string): Promise<Returning | null> {
     channel: account.channel,
     full,
     upgradeUrl: paying ? `${siteUrl()}/upgrade?t=${encodeURIComponent(paying)}` : null,
+    criteria,
   };
 }
 

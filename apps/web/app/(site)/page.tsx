@@ -72,9 +72,11 @@ export default async function Page({
     campaign: tag("utm_campaign") ?? tag("utm_medium"),
   });
 
-  // `?e=` comes from /update. It says this is somebody changing a filter they
-  // already have, so the page drops the sign-up offer: they are on a messenger
-  // already, and prices answer a question they did not ask.
+  // `?e=` comes from /update, and from every other link the bots hand out to
+  // somebody they recognise. It says this is a person changing a filter they
+  // already have, so the page drops the sign-up offer — they are on a messenger
+  // already, and prices answer a question they did not ask — and the form opens
+  // on their current criteria rather than on the defaults.
   const editing = tag("e");
   const returning = editing ? await returningFor(editing).catch(() => null) : null;
 

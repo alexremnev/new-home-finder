@@ -2,8 +2,29 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import type { Criteria } from "@/lib/criteria";
 import { pounds } from "@/lib/money";
 import { matchAreas, neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
+// Every bound of every control on this form — the rent floor, the room
+// ceiling, the size stops — lives there, next to the code that reads a saved
+// filter back onto them. Two copies of "the rent slider starts at £400" is two
+// places for it to drift, and the drift would be invisible: the form would draw
+// one scale and reopen a saved filter on another.
+import {
+  AREA_MAX,
+  AREA_MIN,
+  AREA_STOPS,
+  asSqft,
+  BATHS_MIN,
+  BEDS_MIN,
+  DAY_WINDOW_MAX,
+  prefill,
+  RENT_MAX,
+  RENT_MIN,
+  RENT_STEP,
+  ROOMS_MAX,
+  SQFT_PER_SQM,
+} from "@/lib/prefill";
 
 import { TelegramMark, WhatsAppMark } from "./logos";
 import { PhonePreview } from "./phone";
@@ -29,6 +50,8 @@ type Props = {
     channel: Channel;
     full: boolean;
     upgradeUrl: string | null;
+    /** The filter they already have. Every control below opens on it. */
+    criteria: Criteria;
   } | null;
 
   names?: Record<string, string>;
@@ -52,17 +75,6 @@ export type Offer = {
 
 type Channel = "telegram" | "whatsapp";
 
-const RENT_MIN = 400;
-const RENT_MAX = 10_000;
-const RENT_STEP = 100;
-
-// Bedrooms start at nought because a studio is a real thing to search for.
-// Bathrooms do not: no flat is let with none, so a floor of zero was a value
-// nobody could ever want and a label that read as a mistake.
-const BEDS_MIN = 0;
-const BATHS_MIN = 1;
-const ROOMS_MAX = 5;
-
 const rooms = (value: number) => String(value);
 
 // "room" on its own reads as a bedroom count rather than as what it is.
@@ -73,36 +85,6 @@ const TYPE_LABELS: Record<string, string> = {
 };
 const beds = (value: number) => (value === 0 ? "Studio" : String(value));
 
-// How many days either side of the desired date a listing may be available.
-// Ten was hard-coded; it is now the starting point of a field.
-const DAY_WINDOW = 10;
-const DAY_WINDOW_MAX = 90;
-
-// The slider is in square metres, and so is everything the person reads. The
-// database keeps square feet, because that is the unit British listings quote
-// and one of the two sources states it that way — so the conversion happens
-// once, where the form is submitted. See `submit`.
-//
-// ── why the steps are uneven ─────────────────────────────────────────────
-//
-// The interesting part of this scale is the bottom. A studio is about 30 m² and
-// a two-bed about 70; the difference between 240 and 260 decides nothing. An
-// even step fine enough for the bottom would make the handle crawl across the
-// top, and one coarse enough for the top cannot tell a studio from a one-bed.
-//
-// So: 5 m² up to 100, then 10 to 200, then 20 to 300. Each stop gets the same
-// travel, which puts the precision where the pointing is hard.
-const AREA_STOPS = [
-  ...Array.from({ length: 21 }, (_, i) => i * 5),        // 0 … 100
-  ...Array.from({ length: 10 }, (_, i) => 110 + i * 10), // 110 … 200
-  ...Array.from({ length: 5 }, (_, i) => 220 + i * 20),  // 220 … 300
-];
-const AREA_MIN = AREA_STOPS[0]!;
-const AREA_MAX = AREA_STOPS[AREA_STOPS.length - 1]!;
-
-// 10.7639 square feet to the square metre.
-const SQFT_PER_SQM = 10.7639;
-const asSqft = (sqm: number) => Math.round(sqm * SQFT_PER_SQM);
 const sqm = (value: number) => value.toLocaleString("en-GB") + " m²";
 const sqft = (value: number) => asSqft(value).toLocaleString("en-GB") + " ft²";
 
@@ -114,11 +96,41 @@ export function SubscribeForm({
   districts, maxDistricts, furnished, types, whatsappReady, offers,
   returning = null, names = {},
 }: Props) {
+  // Where every control starts. Blank for a first visit; for somebody arriving
+  // from /update it is the filter they already have, read back off the criteria
+  // the bot is matching on — so the page they land on is their search rather
+  // than a sign-up form they have to fill in again from memory.
+  //
+  // Computed once, as the initial value of each piece of state: after that the
+  // controls own themselves, and re-deriving them would undo typing.
+  const start = prefill(returning?.criteria, districts);
+
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
-  const [chosen, setChosen] = useState<Area[]>([]);
+  const [chosen, setChosen] = useState<Area[]>(() =>
+    // The district code is the whole of what was saved — a neighbourhood name
+    // is a way of choosing one, not part of the filter — so the chip says the
+    // code. Guessing "Canary Wharf" for an E14 that was chosen as Poplar would
+    // be a detail we invented.
+    start.districts.map((code) => ({ code, name: code })),
+  );
   const [typed, setTyped] = useState("");
-  const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(null);
+  const [areaNote, setAreaNote] = useState<{ text: string; bad: boolean } | null>(() =>
+    // Said rather than swallowed. Saving replaces the filter, so an area that
+    // has gone out of coverage and quietly disappeared from this list would
+    // disappear from their search too, and the first they would know of it is
+    // the alerts thinning out.
+    start.dropped.length
+      ? {
+          text:
+            `${start.dropped.join(", ")} ` +
+            `${start.dropped.length === 1 ? "is" : "are"} not covered any more, ` +
+            `so ${start.dropped.length === 1 ? "it is" : "they are"} not in the ` +
+            "list below. Saving without it drops it from your search.",
+          bad: true,
+        }
+      : null,
+  );
   // The list below the box, and which of its rows the keyboard is on. A
   // `datalist` was doing this job and could not be styled at all — its width,
   // type and colours are the browser's, so it landed on the page as somebody
@@ -137,15 +149,15 @@ export function SubscribeForm({
   }, [open, cursor, typed]);
 
   const [mode, setMode] = useState<"name" | "postcode">("name");
-  const [rent, setRent] = useState<[number, number]>([RENT_MIN, RENT_MAX]);
-  const [bedrooms, setBedrooms] = useState<[number, number]>([BEDS_MIN, ROOMS_MAX]);
-  const [bathrooms, setBathrooms] = useState<[number, number]>([BATHS_MIN, ROOMS_MAX]);
+  const [rent, setRent] = useState<[number, number]>(start.rent);
+  const [bedrooms, setBedrooms] = useState<[number, number]>(start.bedrooms);
+  const [bathrooms, setBathrooms] = useState<[number, number]>(start.bathrooms);
   // Controlled, because two other fields depend on them: bedrooms is
   // meaningless for a room, and the date's window only matters with a date.
-  const [wantedTypes, setWantedTypes] = useState<string[]>([]);
-  const [availableOn, setAvailableOn] = useState("");
-  const [dayWindow, setDayWindow] = useState(DAY_WINDOW);
-  const [area, setArea] = useState<[number, number]>([AREA_MIN, AREA_MAX]);
+  const [wantedTypes, setWantedTypes] = useState<string[]>(start.types);
+  const [availableOn, setAvailableOn] = useState(start.availableOn);
+  const [dayWindow, setDayWindow] = useState(start.dayWindow);
+  const [area, setArea] = useState<[number, number]>(start.size);
   const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
@@ -628,7 +640,13 @@ export function SubscribeForm({
         <div className="choices">
           {furnished.map((option) => (
             <label key={option}>
-              <input type="checkbox" name="furnished" value={option} /> {option}
+              <input
+                type="checkbox"
+                name="furnished"
+                value={option}
+                defaultChecked={start.furnished.includes(option)}
+              />{" "}
+              {option}
             </label>
           ))}
         </div>
@@ -638,7 +656,12 @@ export function SubscribeForm({
         <span>Pets</span>
         <span className="choices">
           <label>
-            <input type="checkbox" name="pets_allowed" /> Must allow pets
+            <input
+              type="checkbox"
+              name="pets_allowed"
+              defaultChecked={start.pets}
+            />{" "}
+            Must allow pets
           </label>
         </span>
         <p className="hint">

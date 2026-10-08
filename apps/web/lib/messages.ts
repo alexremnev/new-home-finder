@@ -174,11 +174,15 @@ export const NOTHING_TO_RESUME = [
  * message that already carries the address — "change your search here" — is
  * left alone: two links to the same place in one short message is noise.
  *
- * Telegram gets a button instead; see `withSite` in its webhook.
+ * `url` is where that link should go, which for somebody the bot recognises is
+ * their own filter rather than the landing page. The bare site is the fallback,
+ * and the only thing to offer a number with no account behind it.
+ *
+ * Telegram gets a button instead; see `reply` in its webhook.
  */
-export function withSiteLink(text: string): string {
+export function withSiteLink(text: string, url?: string): string {
   const site = siteUrl();
-  return text.includes(site) ? text : `${text}\n🌐 ${site}`;
+  return text.includes(site) ? text : `${text}\n🌐 ${url ?? `${site}/`}`;
 }
 
 export function noFilterYet(site: string): string {

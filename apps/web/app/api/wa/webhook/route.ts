@@ -22,7 +22,7 @@ import {
   upgradeInvitation,
 } from "@/lib/messages";
 import {
-  accountForChat, EDIT_TTL_MINUTES, issueToken, planIsLive, siteUrl,
+  accountForChat, filterUrl, issueToken, planIsLive, siteUrl,
   UPGRADE_TTL_MINUTES,
 } from "@/lib/plans";
 import { dismiss } from "@/lib/dismiss";
@@ -130,7 +130,8 @@ export async function POST(request: Request): Promise<NextResponse> {
       // that does nothing — and the webhook still returns 200 either way.
       // Every reply carries the site, unless it already names it. One place,
       // so no command can be the one that forgets.
-      const sent = await sendWhatsApp(number, withSiteLink(reply)).catch((error) => {
+      const body = await withSite(number, reply);
+      const sent = await sendWhatsApp(number, body).catch((error) => {
         console.error("wa reply threw", { from: number.slice(-4), error: String(error) });
         return false;
       });
@@ -139,6 +140,19 @@ export async function POST(request: Request): Promise<NextResponse> {
   }
 
   return ok();
+}
+
+/**
+ * A reply with the site on the end of it, the link pointing at this person's
+ * own filter rather than at the landing page.
+ *
+ * The url is built only when it is going to be used: it costs a query and a
+ * write, and a message that already names the address — /update, which carries
+ * its own link — has no use for a second one.
+ */
+async function withSite(number: string, text: string): Promise<string> {
+  if (text.includes(siteUrl())) return text;
+  return withSiteLink(text, await filterUrl(number, "whatsapp"));
 }
 
 async function signed(request: Request, raw: string): Promise<boolean> {
@@ -214,17 +228,11 @@ async function commanded(
 
     case "start":
     case "update": {
-      // A token on the link, so the form knows who is editing and shows "back
-      // to WhatsApp" rather than the sign-up offer. Without an account — or if
-      // issuing it fails — the plain form is still the right page.
-      let where = `${siteUrl()}/`;
-      const account = await accountForChat(number, "whatsapp").catch(() => null);
-      if (account) {
-        const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES)
-          .catch(() => null);
-        if (token) where = `${siteUrl()}/?e=${encodeURIComponent(token)}`;
-      }
-      return `${CHANGE_FILTER}\n${where}`;
+      // A token on the link, so the form knows who is editing: it opens on
+      // their current criteria and offers "back to WhatsApp" rather than the
+      // sign-up offer. Without an account — or if issuing it fails — the plain
+      // form is still the right page.
+      return `${CHANGE_FILTER}\n${await filterUrl(number, "whatsapp")}`;
     }
 
     default:
@@ -274,7 +282,10 @@ async function pressed(number: string, id: string): Promise<string | null> {
   }
 
   if (id === "change") {
-    return `${CHANGE_FILTER}\n${siteUrl()}/`;
+    // The same tokenised link as /update. Without it, the one button on the
+    // evening digest that offers to change the search landed on a blank
+    // sign-up form.
+    return `${CHANGE_FILTER}\n${await filterUrl(number, "whatsapp")}`;
   }
 
   // Unknown. The tap has already reopened the window, which was most of the
