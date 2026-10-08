@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
-from worker.notify.fields import share_words
-
 SITE = os.environ.get("SITE_URL", "https://londonhomefinder.co.uk").rstrip("/")
 
 def checkout_link(token: str) -> str:
@@ -36,34 +34,34 @@ def _falls_back_to(share: int | None) -> str:
     # reads as a fault rather than as a limit.
     if not share or share >= 100:
         return "After that the alerts stop until you renew."
-    return (
-        f"After that you receive {share_words(share)} of what matches, "
-        "until you renew."
-    )
+    return f"After that you will only see {share}% of what matches, until you renew."
 
 def expiring_notice(
-    plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
+    plan: str, plan_until: datetime | None, share: int | None = None,
     link: str | None = None,
 ) -> str:
+    """The one warning before a plan ends, an hour out.
+
+    There was a second a day out, with its own wording — "ends tomorrow". It is
+    gone, and so is the `stage` argument that chose between the two: a day's
+    notice is a day too early to act on, and the hour is the one that arrives
+    while the decision is in front of the person. See `claim_plan_notices`,
+    which no longer produces the stage.
+    """
 
     what = "free trial" if plan == "trial" else "subscription"
     when = _when(plan_until)
 
-    if stage == "hour":
-        opening = f"Your {what} ends in about an hour"
-        opening += f" — {when}." if when else "."
-    else:
-        opening = f"Your {what} ends tomorrow"
-        opening += f", {when}." if when else "."
+    opening = f"Your {what} ends in about an hour"
+    opening += f" — {when}." if when else "."
 
-    return "\n".join(
-        [
-            f"⏳ {opening}",
-            _falls_back_to(share),
-            KEPT,
-            f"Full access: {link}" if link else "/pay — full access",
-        ]
-    )
+    # The link is a button rather than a line of text — see `plan_actions` in
+    # the outbox — so the body does not repeat it. A url in the body of a
+    # message is a url somebody has to select and copy.
+    lines = [f"⏳ {opening}", _falls_back_to(share), KEPT]
+    if not link:
+        lines.append("/pay — full access")
+    return "\n".join(lines)
 
 def expiry_notice(plan: str, share: int | None = None, link: str | None = None) -> str:
     """What somebody is told the moment their trial or their plan runs out.
@@ -79,19 +77,17 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
         opening = f"Your {what} has ended, so alerts have stopped."
     else:
         opening = (
-            f"Your {what} has ended. You now receive {share_words(share)} of "
-            "what matches your filter."
+            f"Your {what} has ended. You now receive {share}% of what matches "
+            "your filter."
         )
-    return "\n".join(
-        [
-            f"🔔 {opening}",
-            KEPT,
-            f"Pay here and the alerts resume at once: {link}" if link
-            else "/pay — a payment link, and the alerts resume at once",
-            "/update — change my search",
-            "/stop — delete my filter",
-        ]
-    )
+    # The button carries the link; KEPT above already says that paying turns
+    # the alerts back on with nothing to set up again, which is what the line
+    # of url here used to say in more characters.
+    lines = [f"🔔 {opening}", KEPT]
+    if not link:
+        lines.append("/pay — a payment link, and the alerts resume at once")
+    lines += ["/update — change my search", "/stop — delete my filter"]
+    return "\n".join(lines)
 
 def spent_notice(
     allowance: int | None, share: int | None = None, link: str | None = None
@@ -123,21 +119,17 @@ def spent_notice(
     else:
         opening = (
             f"You have had {how_many} alerts included in this month. You now "
-            f"receive {share_words(share)} of what matches your filter."
+            f"receive {share}% of what matches your filter."
         )
 
     # Three lines, and the commands are not among them. What happened, that
     # nothing has to be set up again, and the one tap that undoes it — anything
     # else here sits between the person and the button, and /update and /stop
     # are not what somebody reading this came to do.
-    return "\n".join(
-        [
-            f"🔔 {opening}",
-            KEPT,
-            f"Pay here and the alerts resume at once: {link}" if link
-            else "/pay — a payment link, and the alerts resume at once",
-        ]
-    )
+    lines = [f"🔔 {opening}", KEPT]
+    if not link:
+        lines.append("/pay — a payment link, and the alerts resume at once")
+    return "\n".join(lines)
 
 def notice_for(
     plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
@@ -148,7 +140,7 @@ def notice_for(
         return expiry_notice(plan, share, link)
     if stage == "spent":
         return spent_notice(allowance, share, link)
-    return expiring_notice(plan, plan_until, stage, share, link)
+    return expiring_notice(plan, plan_until, share, link)
 
 def checkin_notice() -> str:
     """Asked five minutes before WhatsApp's 24-hour window shuts.

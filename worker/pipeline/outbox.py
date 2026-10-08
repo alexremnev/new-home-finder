@@ -18,7 +18,6 @@ from worker.contracts.notify import (
     SendResult,
 )
 from worker.notify import build_notifier
-from worker.notify.fields import share_words
 from worker.notify.ops import tell_ops
 from worker.notify.plans import (
     checkin_notice,
@@ -717,6 +716,13 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             share = (
                 None if row.get("lapsed_share") is None else int(row["lapsed_share"])
             )
+            # A button, not a line of url in the body. A link written out in a
+            # message is a link somebody has to select and copy, and on the one
+            # message whose whole purpose is the tap, that was the tap missing.
+            # Telegram draws it as an inline button; WhatsApp, inside its
+            # window, as its one cta_url — and the notifier leaves it out of the
+            # text it is already drawn on.
+            link = checkout_for(conn, int(row["user_id"]))
             result = notifier.send(
                 Recipient(channel=str(row["channel"]), address=str(row["address"])),
                 Alert(
@@ -734,19 +740,26 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     params=[
                         "free trial" if str(row["plan"]) == "trial" else "subscription",
                         "no listings" if not share
-                        else f"{share_words(share)} of the listings",
+                        else f"{share}% of the listings",
                     ],
                     text=notice_for(
                         str(row["plan"]),
                         row["plan_until"],
                         notice_stage,
                         share,
-                        checkout_for(conn, int(row["user_id"])),
+                        link,
                         allowance=(
                             None if row.get("alert_allowance") is None
                             else int(row["alert_allowance"])
                         ),
                     ),
+                    actions=[
+                        Action(
+                            label="💎 Get full access",
+                            short="Get full access",
+                            url=link,
+                        )
+                    ],
                 ),
             )
             if result.ok:

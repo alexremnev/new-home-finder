@@ -3,7 +3,6 @@ import { pounds as price } from "@/lib/money";
 import type { Criteria } from "./criteria";
 import type { Account } from "./plans";
 import { lapsedShare, paidPlans, siteUrl } from "./plans";
-import { shareWords } from "./share";
 
 const MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -219,8 +218,7 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   // WhatsApp plan falls back to.
   if (share !== null && share > 0 && share < 100) {
     lines.push(
-      `Once a plan ends you receive ${shareWords(share)} of what matches. ` +
-        "A paid plan sends all of it.",
+      `Once a plan ends you receive ${share}% of what matches. A paid plan sends all of it.`,
     );
   } else if (share === 0) {
     lines.push("Once a plan ends the alerts stop. A paid plan sends everything that matches.");

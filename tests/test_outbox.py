@@ -438,6 +438,11 @@ def test_an_empty_filter_says_so_rather_than_reading_as_a_bug() -> None:
     # chat would look like a broken message rather than a wide search.
     assert criteria_line({}) == "no filter set — matches everything"
 
+# Any moment the notices can print. What they open with does not depend on it —
+# there is one warning before the end now — so one fixed time serves every case
+# below.
+ENDS_AT = datetime(2026, 10, 9, 20, 0, tzinfo=ZoneInfo("Europe/London"))
+
 class FakeRun:
 
     class Stage:
@@ -474,7 +479,7 @@ def test_a_spent_allowance_reads_as_an_ended_period_not_as_a_cap() -> None:
     assert "filter is kept" in text
 
 
-def test_a_spent_allowance_is_three_lines_and_a_link() -> None:
+def test_a_spent_allowance_is_two_lines_and_a_button() -> None:
     # The allowance exists on WhatsApp only, and a finished WhatsApp plan falls
     # back to nothing — so this is the message as it will actually be read.
     # Short on purpose: anything between the person and the button is in the
@@ -485,8 +490,60 @@ def test_a_spent_allowance_is_three_lines_and_a_link() -> None:
         "🔔 You have had all 900 alerts included in this month, so alerts have stopped.",
         "Your filter is kept — paying turns the alerts back on with nothing to "
         "set up again.",
-        "Pay here and the alerts resume at once: https://pay.test/x",
     ]
+
+def test_the_payment_link_is_a_button_rather_than_a_line_of_url() -> None:
+
+    # A url written out in a message is a url somebody has to select and copy,
+    # and on the one message whose whole purpose is the tap that was the tap
+    # missing. `notify_plan_changes` sends the link as an action instead, so the
+    # body must not carry it as well.
+    for stage in ("hour", "expired", "spent"):
+        text = notice_for("trial", ENDS_AT, stage, 20, "https://pay.test/x", allowance=900)
+        assert "https://pay.test/x" not in text
+        assert "http" not in text
+
+def test_without_a_link_the_command_is_still_offered() -> None:
+
+    # No link means no button either, and then the command is the only way
+    # back. This is the path every test above `notice_for` takes.
+    assert "/pay" in notice_for("trial", ENDS_AT, "hour", 20, None)
+    assert "/pay" in notice_for("trial", None, "expired", 20, None)
+    assert "/pay" in notice_for("wa_month", None, "spent", 0, None, allowance=900)
+
+def test_the_only_warning_before_the_end_is_the_hour_one() -> None:
+
+    # There was a second a day out — "Your free trial ends tomorrow" — and it
+    # is gone: two messages about one ending is one more than anybody asked
+    # for. `claim_plan_notices` no longer produces the stage, and the wording
+    # it had is no longer here to be produced by accident.
+    for stage in ("hour", "expired", "spent"):
+        text = notice_for("trial", ENDS_AT, stage, 20, None, allowance=900)
+        assert "tomorrow" not in text
+
+    assert "ends in about an hour" in notice_for("trial", ENDS_AT, "hour", 20, None)
+
+def test_a_trial_about_to_end_says_what_it_falls_back_to() -> None:
+
+    # Not "the alerts stop": on Telegram a finished plan drops to the lapsed
+    # tier, which 0046 put at a fifth of the listings precisely because a fifth
+    # is the best argument for the other four. Telling people the alerts stop
+    # was the opposite of the thing meant to bring them back — and it came from
+    # reading the share in force now (a live trial's hundred per cent) as the
+    # share that follows. See 0058.
+    text = notice_for("trial", ENDS_AT, "hour", 20, "https://pay.test/x")
+
+    assert "you will only see 20% of what matches" in text
+    assert "alerts stop" not in text
+
+def test_a_channel_that_falls_back_to_nothing_still_says_so() -> None:
+
+    # Nought is the real answer on WhatsApp, where every message is billed.
+    # "You will only see 0% of what matches" is a sentence about a number.
+    text = notice_for("wa_month", ENDS_AT, "hour", 0, "https://pay.test/x")
+
+    assert "the alerts stop until you renew" in text
+    assert "only see" not in text
 
 
 def test_nought_per_cent_is_said_as_stopped() -> None:
@@ -495,7 +552,7 @@ def test_nought_per_cent_is_said_as_stopped() -> None:
     # and nought is the commonest share on that channel now.
     assert "0%" not in notice_for("wa_month", None, "spent", 0, None, allowance=900)
     assert "0%" not in notice_for("wa_month", None, "expired", 0, None)
-    assert "0%" not in notice_for("wa_month", None, "day", 0, None)
+    assert "0%" not in notice_for("wa_month", None, "hour", 0, None)
 
 
 def test_an_allowance_nobody_configured_still_produces_a_sentence() -> None:

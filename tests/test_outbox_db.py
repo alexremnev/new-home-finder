@@ -463,6 +463,37 @@ def test_a_finished_telegram_plan_still_gets_a_fifth(conn: Any) -> None:
     assert entitlement(conn, user_id)["delivery_share"] == 20
 
 
+def test_a_live_trial_is_told_what_it_will_fall_back_to(conn: Any) -> None:
+    # The notice goes out the day before the end, while the trial is still
+    # delivering everything. `delivery_share` is therefore a hundred, and
+    # reading it for "what happens next" is what made the message say the
+    # alerts would stop — see 0058. `lapsed_share` answers the question the
+    # notice is actually asking, and answers it whether or not the plan has
+    # ended yet.
+    user_id = make_user(conn, plan="trial", plan_days=None, plan_hours=1)
+    one = entitlement(conn, user_id)
+
+    assert one["live"] is True
+    assert one["delivery_share"] == 100
+    assert one["lapsed_share"] == 20
+
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+    )
+    notices = store.claim_plan_notices(conn)
+    assert [row["stage"] for row in notices] == ["hour"]
+    assert int(notices[0]["lapsed_share"]) == 20
+
+
+def test_a_live_whatsapp_month_falls_back_to_nothing(conn: Any) -> None:
+    # Nought there, and for the reason 0057 gives: every WhatsApp message is
+    # billed, so a free share is a standing bill for somebody who has stopped
+    # paying. The notice says the alerts stop, which is what happens.
+    user_id = wa_subscriber(conn, used=10)
+
+    assert entitlement(conn, user_id)["lapsed_share"] == 0
+
+
 def test_the_notice_for_a_spent_allowance_is_claimed_once(conn: Any) -> None:
     user_id = wa_subscriber(conn, used=900)
     make_subscription(conn, user_id)
@@ -739,42 +770,52 @@ def test_an_expiry_is_announced_once(conn: Any, run: Run, notifier: FakeNotifier
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
 
-def test_a_day_out_is_warned_before_the_alerts_stop(
+def test_a_day_out_is_not_warned_at_all(
     conn: Any, run: Run, notifier: FakeNotifier
 ) -> None:
 
+    # There was a warning here, with its own wording — "ends tomorrow". Two
+    # messages about one ending is one more than anybody asked for, so the day
+    # out is silent and the hour out is the whole of the warning.
     make_subscription(conn, make_user(conn, plan="trial", plan_hours=23))
+
+    outbox.notify_plan_changes(conn, run)
+    assert notifier.sent == []
+
+def test_an_hour_out_is_warned_once(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+
+    user_id = make_user(conn, plan="trial", plan_hours=23)
+    make_subscription(conn, user_id)
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+    )
 
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
     _, alert = notifier.sent[0]
     assert alert.kind == "expiring"
-    assert "ends tomorrow" in (alert.text or "")
+    assert "about an hour" in (alert.text or "")
+    # The payment link is the button, not a line of url in the body.
+    assert len(alert.actions) == 1
+    assert alert.actions[0].url
+    assert "http" not in (alert.text or "")
 
+    # Said once per period: the unique key is (user, stage, plan_until), so a
+    # drain every two minutes does not say it thirty times an hour.
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
 
-def test_an_hour_out_is_warned_separately_from_the_day(
+def test_paying_re_arms_the_warning_with_nothing_reset(
     conn: Any, run: Run, notifier: FakeNotifier
 ) -> None:
 
-    user_id = make_user(conn, plan="trial", plan_hours=23)
+    user_id = make_user(conn, plan="trial", plan_hours=1)
     make_subscription(conn, user_id)
-    outbox.notify_plan_changes(conn, run)
-
     conn.execute(
         "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
     )
-    outbox.notify_plan_changes(conn, run)
-    assert len(notifier.sent) == 2
-    assert "about an hour" in (notifier.sent[1][1].text or "")
-
-def test_paying_re_arms_the_warnings_with_nothing_reset(
-    conn: Any, run: Run, notifier: FakeNotifier
-) -> None:
-
-    user_id = make_user(conn, plan="trial", plan_hours=23)
-    make_subscription(conn, user_id)
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
 
@@ -785,12 +826,14 @@ def test_paying_re_arms_the_warnings_with_nothing_reset(
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1, "nothing is due while the paid period is far off"
 
+    # `plan_until` is in the unique key, so moving it is what re-arms the
+    # warning — there is no flag to reset.
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '20 hours' WHERE id = %s", (user_id,)
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
     )
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 2
-    assert "subscription ends tomorrow" in (notifier.sent[1][1].text or "")
+    assert "subscription ends in about an hour" in (notifier.sent[1][1].text or "")
 
 def test_a_plan_that_lapsed_unnoticed_is_told_it_ended_not_that_it_will(
     conn: Any, run: Run, notifier: FakeNotifier

@@ -672,18 +672,27 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                        -- question. Otherwise a spent allowance is its own
                        -- stage, and it can fire with weeks still on the clock
                        -- — which is why the window below is not only "within
-                       -- a day of the end".
+                       -- an hour of the end".
+                       --
+                       -- One warning before the end, an hour out. There was a
+                       -- second a day out as well; two messages about one
+                       -- ending is one more than anybody asked for, and the
+                       -- hour is the one that arrives while the decision is in
+                       -- front of them. 'day' is left in the stage constraint
+                       -- rather than dropped: the rows already sent are a
+                       -- record of what was sent.
                        CASE
-                           WHEN u.plan_until <= now()                      THEN 'expired'
-                           WHEN e.out_of_alerts                            THEN 'spent'
-                           WHEN u.plan_until <= now() + interval '1 hour'  THEN 'hour'
-                           ELSE 'day'
+                           WHEN u.plan_until <= now() THEN 'expired'
+                           WHEN e.out_of_alerts       THEN 'spent'
+                           ELSE 'hour'
                        END AS stage
                   FROM users u
                   JOIN user_entitlement e ON e.user_id = u.id
                  WHERE u.status = 'active'
                    AND u.plan_until IS NOT NULL
-                   AND (u.plan_until <= now() + interval '1 day'
+                   -- The window and the CASE are one rule: narrowed to an
+                   -- hour, the ELSE above can only be the hour warning.
+                   AND (u.plan_until <= now() + interval '1 hour'
                      OR e.out_of_alerts)
                  ORDER BY u.plan_until
                  LIMIT %s
@@ -702,7 +711,14 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                    -- the channel — a fifth of the listings on Telegram, nothing
                    -- on WhatsApp — and a notice promising a share that is not
                    -- delivered is worse than one that promises nothing.
-                   e.delivery_share AS lapsed_share
+                   --
+                   -- `lapsed_share`, not `delivery_share`: three of these four
+                   -- stages fire while the plan is still running, and the share
+                   -- in force then is the plan's own. Reading it told a live
+                   -- trial it was on a hundred per cent, from which the notice
+                   -- concluded there was nothing to fall back to and said the
+                   -- alerts would stop. See 0058.
+                   e.lapsed_share
               FROM claimed c
               JOIN due d              ON d.user_id = c.user_id
               JOIN user_entitlement e ON e.user_id = c.user_id
