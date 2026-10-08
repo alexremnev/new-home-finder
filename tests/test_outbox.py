@@ -182,21 +182,56 @@ def test_the_digest_hour_is_london_not_utc() -> None:
     assert digest_due(datetime(2026, 9, 15, 19, 30, tzinfo=timezone.utc)) is True
     assert digest_due(datetime(2026, 9, 15, 18, 30, tzinfo=timezone.utc)) is False
 
-def test_the_digest_says_what_share_is_arriving() -> None:
-    assert digest_notice(12, 20) == (
-        "🔒 12 new listings today — you are seeing 20%. "
+def test_the_digest_counts_what_arrived_rather_than_quoting_a_percentage() -> None:
+
+    # "You are seeing 20%" is arithmetic the person has to do, about the thing
+    # they are being told they cannot have. The number of listings they got is
+    # the same fact with the sum done.
+    assert digest_notice(12, 2, 20) == (
+        "🔒 12 new listings today — you are seeing only 2 of them. "
         "Upgrade to get every one of them."
     )
+    assert "%" not in digest_notice(12, 2, 20)
+
+def test_the_count_is_the_one_from_the_database_not_a_share_of_the_matches() -> None:
+
+    # A fifth of twelve is two and two fifths. What was delivered is counted
+    # from `notifications` and passed in, so the line says four when four were
+    # sent — a sent listing missing from the count is the complaint this
+    # message would generate.
+    assert "only 4 of them" in digest_notice(12, 4, 20)
+
+def test_a_share_that_withheld_nothing_is_not_reported_as_a_loss() -> None:
+
+    # A small day can round that way. "You are seeing only 3 of them" about
+    # three listings reads as a fault in the bot rather than as a limit.
+    assert digest_notice(3, 3, 20) == "🔔 3 new listings matched your filter today."
+
+def test_a_share_of_nothing_says_none_rather_than_nought() -> None:
+
+    # WhatsApp falls back to nought, where every message is billed. "Only 0 of
+    # them" is a sentence about a number; "none of them" is what happened.
+    assert "you are seeing none of them" in digest_notice(12, 0, 0)
 
 def test_the_digest_agrees_with_itself_about_one_listing() -> None:
-    assert "1 new listing today" in digest_notice(1, 20)
-    assert "1 new listings" not in digest_notice(1, 20)
+    assert "1 new listing today" in digest_notice(1, 0, 20)
+    assert "1 new listings" not in digest_notice(1, 0, 20)
+
+def test_one_withheld_listing_is_it_rather_than_none_of_them() -> None:
+
+    # "You are seeing none of them" and "every one of them" are both about a
+    # plural that is not there.
+    text = digest_notice(1, 0, 20)
+    assert text == "🔒 1 new listing today, and you are not seeing it. Upgrade to get it."
+    assert "them" not in text
 
 def test_the_digest_names_no_price_at_all() -> None:
     # The average rent used to be here. It was removed along with the query
     # behind it: two numbers that could not be compared, in a message read at a
     # glance.
-    for text in (digest_notice(12, 20), digest_notice(12, 100), digest_notice(0, 20)):
+    for text in (
+        digest_notice(12, 2, 20), digest_notice(12, 12, 100), digest_notice(0, 0, 20)
+    ):
         assert "£" not in text
         assert "Average" not in text
 
@@ -204,18 +239,18 @@ def test_a_paying_subscriber_is_not_told_what_they_are_missing() -> None:
 
     # They are missing nothing, and an upgrade line to somebody who pays reads
     # as a bill.
-    text = digest_notice(12, 100, paid=True)
+    text = digest_notice(12, 12, 100, paid=True)
     assert text == "🔔 12 new listings matched your filter today."
     assert "Upgrade" not in text
 
 def test_full_access_on_a_trial_is_told_the_same_thing() -> None:
-    assert "seeing" not in digest_notice(5, 100)
+    assert "seeing" not in digest_notice(5, 5, 100)
 
 def test_a_quiet_day_says_so_rather_than_saying_nothing() -> None:
 
     # Silence is indistinguishable from a broken bot, and the usual cause is a
     # filter nobody can match.
-    text = digest_notice(0, 20)
+    text = digest_notice(0, 0, 20)
     assert "Nothing matched your filter today." in text
     assert "/update" in text
 
@@ -223,7 +258,9 @@ def test_no_message_carries_a_blank_line_it_does_not_need() -> None:
     # Every one of these is read in a chat window, where an empty line costs a
     # third of the visible message.
     for text in (
-        digest_notice(0, 20), digest_notice(12, 20), digest_notice(12, 100, paid=True),
+        digest_notice(0, 0, 20),
+        digest_notice(12, 2, 20),
+        digest_notice(12, 12, 100, paid=True),
     ):
         assert "\n\n" not in text
 

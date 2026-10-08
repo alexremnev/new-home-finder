@@ -164,7 +164,7 @@ def test_pets_appear_only_when_the_listing_allows_them() -> None:
 def test_an_ended_trial_is_named_as_a_trial() -> None:
     text = render_listing(view(share=20, lapsed="trial"))
     assert "🔒 <b>Your free trial has ended." in text
-    assert "only 20% of available properties" in text
+    assert "only 1 in 5 of available properties" in text
     assert "Please make a payment to restore full access.</b>" in text
     assert "plan has ended" not in text
 
@@ -177,17 +177,33 @@ def test_the_notice_sits_against_the_listing_with_no_gap() -> None:
 def test_an_ended_plan_is_not_called_a_trial() -> None:
     text = render_listing(view(share=20, lapsed="plan"))
     assert "🔒 <b>Your plan has ended." in text
-    assert "limited to 20% of property listings" in text
+    assert "limited to 1 in 5 of the listings that match" in text
     assert "Upgrade today for full access</b>" in text
-    assert "missing 80%" in text
+    assert "missing 4 in 5 of them" in text
     assert "free trial" not in text
+
+def test_the_share_is_told_as_a_count_rather_than_a_percentage() -> None:
+
+    # "20%" is arithmetic somebody has to do before it means anything, and it
+    # is arithmetic about what they are being told they cannot have.
+    text = render_listing(view(share=20, lapsed="plan"))
+    assert "%" not in text
 
 def test_the_share_comes_from_the_plan_rather_than_a_fixed_number() -> None:
 
-    assert "only 10% of available properties" in render_listing(
+    assert "only 1 in 10 of available properties" in render_listing(
         view(share=10, lapsed="trial")
     )
-    assert "missing 90%" in render_listing(view(share=10, lapsed="plan"))
+    assert "missing 9 in 10" in render_listing(view(share=10, lapsed="plan"))
+
+def test_a_share_that_does_not_divide_keeps_its_percentage() -> None:
+
+    # A third of thirty is not a whole number of listings. "1 in 3" would
+    # overstate what is delivered, so this is the one case that stays in per
+    # cent rather than being rounded into a lie.
+    text = render_listing(view(share=30, lapsed="plan"))
+    assert "limited to 30% of the listings that match" in text
+    assert "missing 70% of them" in text
 
 def test_full_access_is_told_nothing_about_upgrading() -> None:
     for full in (view(share=100), view(share=None), view()):

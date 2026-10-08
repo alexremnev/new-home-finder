@@ -84,8 +84,9 @@ def test_the_only_link_is_the_listing_so_the_preview_is_the_flat() -> None:
 def test_the_restricted_notice_is_emphasised_and_last() -> None:
     text = render_listing(view(share=20, lapsed="plan"))
     assert text.endswith(
-        "🔒 *Your plan has ended. Access is now limited to 20% of property "
-        "listings. Upgrade today for full access* — you are missing 80% of what matches."
+        "🔒 *Your plan has ended. Access is now limited to 1 in 5 of the "
+        "listings that match. Upgrade today for full access* — you are missing "
+        "4 in 5 of them."
     )
     # No gap before it, and none before the link either: the message reads as
     # one block.
@@ -531,7 +532,7 @@ def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
         Alert(
             kind="expired",
             text="Your free trial has ended.",
-            params=["free trial", "20% of the listings"],
+            params=["free trial", "1 in 5 of the listings"],
         ),
     )
     assert result.ok
@@ -540,7 +541,7 @@ def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
     assert body["template"]["name"] == "plan_notice"
     assert [p["text"] for p in body["template"]["components"][0]["parameters"]] == [
         "free trial",
-        "20% of the listings",
+        "1 in 5 of the listings",
     ]
 
 def test_without_that_template_nothing_is_invented() -> None:

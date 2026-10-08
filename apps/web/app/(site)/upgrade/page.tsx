@@ -1,5 +1,6 @@
 import { pounds } from "@/lib/money";
 import { accountForToken, lapsedShare, paidPlans } from "@/lib/plans";
+import { shareWords } from "@/lib/share";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +55,7 @@ export default async function UpgradePage({
           ? "Without a plan the alerts stop. A paid plan sends everything that " +
             "matches your filter — same filter, nothing else to set up."
           : `The free plan sends ${
-              share === null ? "a share" : `${share}%`
+              share === null ? "a share" : shareWords(share)
             } of what matches your filter. A paid plan sends all of it — same ` +
             "filter, nothing else to set up."}
       </p>
@@ -97,7 +98,7 @@ export default async function UpgradePage({
         {share === 0
           ? "When it ends the alerts stop, and your filter is kept either way."
           : `When it ends the alerts drop back to ${
-              share === null ? "the free share" : `${share}%`
+              share === null ? "the free share" : shareWords(share)
             } rather than stopping, and your filter is kept either way.`}
       </p>
     </>

@@ -19,6 +19,31 @@ class Line:
 def plural(count: int, word: str) -> str:
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
+# A delivery share, said as a count rather than as a percentage.
+#
+# "20%" is arithmetic somebody has to do before it means anything, and it is
+# arithmetic about the thing they are being told they cannot have. "1 in 5" is
+# the same fact with the sum already done.
+#
+# Only where it comes out whole. A share of 30 is "3 in 10" at best, and
+# rounding it to "1 in 3" would overstate what is delivered — so anything that
+# does not divide keeps the percentage it arrived as.
+def share_words(share: int) -> str:
+
+    if 0 < share < 100 and 100 % share == 0:
+        return f"1 in {100 // share}"
+    return f"{share}%"
+
+# The other side of the same share: what is being withheld. Kept next to it
+# because the two appear in one sentence — "limited to 1 in 5 … missing 80%"
+# would be one fact told two ways inside a single line.
+def missing_words(share: int) -> str:
+
+    if 0 < share < 100 and 100 % share == 0:
+        every = 100 // share
+        return f"{every - 1} in {every}"
+    return f"{100 - share}%"
+
 def money(amount: int) -> str:
     return f"£{amount:,}".replace(",", ",")
 
@@ -149,14 +174,19 @@ def restriction_text(view: ListingView) -> tuple[str, str] | None:
     if view.lapsed == "trial":
         return (
             f"Your free trial has ended. You are currently receiving only "
-            f"{view.share}% of available properties. Please make a payment to "
-            f"restore full access.",
+            f"{share_words(view.share)} of available properties. Please make a "
+            f"payment to restore full access.",
             "",
         )
+    # "of the listings that match" rather than "of property listings", because
+    # the share now reads as a count: "1 in 5 of property listings" is not a
+    # sentence, and "1 in 5 of the listings that match" is. The tail then says
+    # "of them" rather than naming them again.
     return (
-        f"Your plan has ended. Access is now limited to {view.share}% of "
-        f"property listings. Upgrade today for full access",
-        f" — you are missing {100 - view.share}% of what matches.",
+        f"Your plan has ended. Access is now limited to "
+        f"{share_words(view.share)} of the listings that match. Upgrade today "
+        f"for full access",
+        f" — you are missing {missing_words(view.share)} of them.",
     )
 
 __all__ = [
@@ -166,8 +196,10 @@ __all__ = [
     "listing_fields",
     "long_date",
     "maps_link",
+    "missing_words",
     "money",
     "plural",
     "restriction_text",
+    "share_words",
     "size_of",
 ]

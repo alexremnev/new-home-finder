@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from datetime import datetime
 
+from worker.notify.fields import share_words
+
 SITE = os.environ.get("SITE_URL", "https://londonhomefinder.co.uk").rstrip("/")
 
 def checkout_link(token: str) -> str:
@@ -34,7 +36,10 @@ def _falls_back_to(share: int | None) -> str:
     # reads as a fault rather than as a limit.
     if not share or share >= 100:
         return "After that the alerts stop until you renew."
-    return f"After that you receive {share}% of what matches, until you renew."
+    return (
+        f"After that you receive {share_words(share)} of what matches, "
+        "until you renew."
+    )
 
 def expiring_notice(
     plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
@@ -74,8 +79,8 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
         opening = f"Your {what} has ended, so alerts have stopped."
     else:
         opening = (
-            f"Your {what} has ended. You now receive {share}% of what matches "
-            "your filter."
+            f"Your {what} has ended. You now receive {share_words(share)} of "
+            "what matches your filter."
         )
     return "\n".join(
         [
@@ -118,7 +123,7 @@ def spent_notice(
     else:
         opening = (
             f"You have had {how_many} alerts included in this month. You now "
-            f"receive {share}% of what matches your filter."
+            f"receive {share_words(share)} of what matches your filter."
         )
 
     # Three lines, and the commands are not among them. What happened, that
@@ -181,8 +186,15 @@ def carrying_on(criteria_card: str) -> str:
         ]
     )
 
-def digest_notice(matched: int, share: int, *, paid: bool = False) -> str:
-    """The evening summary. Short on purpose: it is read at a glance."""
+def digest_notice(matched: int, sent: int, share: int, *, paid: bool = False) -> str:
+    """The evening summary. Short on purpose: it is read at a glance.
+
+    `sent` is how many of the day's matches actually reached them, counted from
+    `notifications` by the same query that counts the matches — not worked out
+    here from the share. A number this message derived could disagree with what
+    was delivered, and on the one line that says what somebody is missing, a
+    figure that is nearly right is worse than a percentage.
+    """
 
     listings = "listing" if matched == 1 else "listings"
 
@@ -196,10 +208,24 @@ def digest_notice(matched: int, share: int, *, paid: bool = False) -> str:
             ]
         )
 
+    # Nothing is being withheld by the plan, so there is nothing to sell.
     if paid or share >= 100:
         return f"🔔 {matched} new {listings} matched your filter today."
 
+    # The share held nothing back today — a small day can round that way. Saying
+    # "you are seeing only 3 of them" about 3 listings reads as a fault in the
+    # bot, so the day is reported as what it was. The upgrade button is on the
+    # message either way; `notify_plan_changes` puts it there.
+    if sent >= matched:
+        return f"🔔 {matched} new {listings} matched your filter today."
+
+    # One listing, withheld, is "it". "None of them" and "every one of them" are
+    # both about a plural that is not there.
+    if matched == 1:
+        return "🔒 1 new listing today, and you are not seeing it. Upgrade to get it."
+
+    seen = "none of them" if sent == 0 else f"only {sent} of them"
     return (
-        f"🔒 {matched} new {listings} today — you are seeing {share}%. "
+        f"🔒 {matched} new {listings} today — you are seeing {seen}. "
         "Upgrade to get every one of them."
     )

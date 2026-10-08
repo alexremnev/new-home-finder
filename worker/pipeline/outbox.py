@@ -18,6 +18,7 @@ from worker.contracts.notify import (
     SendResult,
 )
 from worker.notify import build_notifier
+from worker.notify.fields import share_words
 from worker.notify.ops import tell_ops
 from worker.notify.plans import (
     checkin_notice,
@@ -694,7 +695,10 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     ),
                     Alert(
                         kind="expiring",
-                        text=digest_notice(int(row["matched"]), share, paid=paid),
+                        text=digest_notice(
+                            int(row["matched"]), int(row["sent"] or 0), share,
+                            paid=paid,
+                        ),
                         actions=actions,
                     ),
                 )
@@ -729,7 +733,8 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     # notifier. Nothing else reads them.
                     params=[
                         "free trial" if str(row["plan"]) == "trial" else "subscription",
-                        "no listings" if not share else f"{share}% of the listings",
+                        "no listings" if not share
+                        else f"{share_words(share)} of the listings",
                     ],
                     text=notice_for(
                         str(row["plan"]),
