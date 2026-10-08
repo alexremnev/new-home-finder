@@ -578,6 +578,12 @@ export const STUCK_AFTER_MINUTES = 15;
 // point of the split: a job that has stopped shows as silent here, where
 // combined it hid behind the two that still worked.
 //
+// `purge` is deliberately absent, and must stay absent. A job missing from
+// the window is drawn as silent and takes the whole banner to Degraded with
+// it, which is right for a reader that ticks every few minutes and wrong for
+// one that fires once at one in the morning: on any window shorter than a day
+// it would be permanently, pointlessly red. It still appears in the panel on
+// the windows it actually ran in, through the `seen` half of the query below.
 export const EXPECTED_JOBS = [
   "ingest", "rightmove", "zoopla", "zoopla_london", "openrent",
   "drain", "rollup", "report",

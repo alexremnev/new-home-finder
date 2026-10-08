@@ -68,6 +68,12 @@ How often a job runs is a systemd timer — `OnUnitInactiveSec` in
 to decide this was dropped in migration 0021, along with the `tick` command and
 the `hot` job that went with it.
 
+One job is a clock rather than an interval: `purge` fires at 01:00 and is the
+only job that deletes anything. What it keeps and for how long is `RULES` in
+`worker/pipeline/purge.py` — abandoned sign-ups go at the end of the day they
+were created, listings two months after they were last advertised, the run log
+after a month. `python -m worker purge --dry-run` counts without deleting.
+
 Request pacing within a single run is a separate knob, per source, and does live
 in the database:
 

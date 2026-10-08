@@ -1898,6 +1898,32 @@ form p.error {
 .dash tbody tr:hover { background: var(--d-bg); }
 .dash td.num, .dash th.num { text-align: right; }
 
+/* Who we are serving, at row scale: green while the plan is live, amber once
+   it has run out. The wash is the same pair the cards and pills use, so a
+   colour means one thing across the console, and it is a wash rather than a
+   fill because twenty tinted rows must still read as a table. The left edge
+   carries the stronger colour — that is what survives being scanned down the
+   page, and it is also the half that stays visible on hover. */
+.dash tbody tr.row-live,
+.dash tbody tr.row-lapsed {
+  box-shadow: inset 3px 0 0 0 var(--edge);
+}
+
+.dash tbody tr.row-live {
+  --edge: var(--d-ok);
+  background: var(--d-ok-wash);
+}
+
+.dash tbody tr.row-lapsed {
+  --edge: var(--d-warn);
+  background: var(--d-warn-wash);
+}
+
+/* Specific enough to beat the hover rule above, which would otherwise wipe
+   the tint off whichever row the cursor is on — the one row you are reading. */
+.dash tbody tr.row-live:hover   { background: #ddf0e5; }
+.dash tbody tr.row-lapsed:hover { background: #f8ead1; }
+
 .scroll-x { overflow-x: auto; }
 
 .mono {

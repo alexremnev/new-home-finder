@@ -16,6 +16,7 @@ from worker.pipeline.outbox import (
     seed_new_subscriptions,
     watch_whatsapp_cost,
 )
+from worker.pipeline.purge import run_purge
 from worker.pipeline.rollup import run_rollup
 
 Row = dict[str, Any]
@@ -83,6 +84,16 @@ def run_job(
 
     if job == "rollup":
         run_rollup(conn, run, dry_run=cfg.dry_run)
+        return "ok"
+
+    if job == "purge":
+        # Once a night, and the only job that removes rows. Deliberately not
+        # folded into `rollup`, which runs every two minutes: a mistake in a
+        # retention rule would then be applied seven hundred times before
+        # anybody noticed, and the two jobs want opposite things from a
+        # failure — a missed rollup repairs itself on the next tick, a missed
+        # purge simply waits a day.
+        run_purge(conn, run, dry_run=cfg.dry_run)
         return "ok"
 
     if job == "drain":

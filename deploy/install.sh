@@ -109,7 +109,7 @@ systemctl disable --now london-home-finder-openrent_v2.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-openrent_v2.timer
 
 systemctl daemon-reload
-for job in ingest rightmove zoopla_london drain rollup report; do
+for job in ingest rightmove zoopla_london drain rollup report purge; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 

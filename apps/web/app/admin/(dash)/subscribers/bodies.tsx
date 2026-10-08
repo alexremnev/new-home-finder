@@ -21,6 +21,13 @@ export const PER_PAGE = 20;
 
 // Green means alerts are reaching them. Anything else is a reason, not a
 // colour: a paused filter and a dead channel look the same in a list of dots.
+//
+// `tint` is the same judgement at row scale, and it answers a different
+// question from the dot: not "is delivery working" but "is this account one we
+// are serving". Live plan — trial, paid or granted — is green; a plan that has
+// run out of days or out of alerts is amber, because that is the list to work
+// through. Everything else (pending, stopped, blocked) is left plain: a row
+// nobody is waiting on should not compete for attention with one that is.
 function state(row: {
   status: string;
   sent_window: number;
@@ -30,10 +37,16 @@ function state(row: {
   plan_live: boolean;
   alert_allowance: number | null;
   alerts_used: number;
-}): { dot: string; why: string } {
-  if (row.status !== "active") return { dot: "idle", why: row.status };
-  if (!row.channel) return { dot: "bad", why: "not connected" };
-  if (row.failed_window > 0) return { dot: "bad", why: `${row.failed_window} failed` };
+}): { dot: string; why: string; tint: "live" | "lapsed" | null } {
+  // Read before the delivery checks below, so the tint says what the account
+  // is entitled to even when its channel is broken — the dot is what says
+  // delivery is broken, and the two are different facts.
+  const tint = row.status !== "active" ? null : row.plan_live ? "live" : "lapsed";
+  if (row.status !== "active") return { dot: "idle", why: row.status, tint };
+  if (!row.channel) return { dot: "bad", why: "not connected", tint };
+  if (row.failed_window > 0) {
+    return { dot: "bad", why: `${row.failed_window} failed`, tint };
+  }
   // Read, not recomputed from the date. A WhatsApp month also ends at its
   // allowance, and this row said "delivering" for somebody who had spent
   // theirs — which is the one case where the page has to explain itself,
@@ -45,10 +58,11 @@ function state(row: {
         row.alert_allowance !== null && row.alerts_used >= row.alert_allowance
           ? `all ${row.alert_allowance} alerts used`
           : "plan ended",
+      tint,
     };
   }
-  if (row.sent_window > 0) return { dot: "ok", why: "delivering" };
-  return { dot: "idle", why: "nothing matched" };
+  if (row.sent_window > 0) return { dot: "ok", why: "delivering", tint };
+  return { dot: "idle", why: "nothing matched", tint };
 }
 
 // Judged on the newest page of accounts rather than on all of them: the three
@@ -158,7 +172,7 @@ export async function everyonePage(
     rows: rows.map((row) => {
       const how = state(row);
       return (
-        <tr key={row.user_id}>
+        <tr key={row.user_id} className={how.tint ? `row-${how.tint}` : undefined}>
           <td>
             <span className={`dot dot-${how.dot}`} title={how.why} />
           </td>
@@ -227,7 +241,16 @@ export async function EveryoneTable({ span }: { span: string }) {
           <th className="num">WA today</th>
           <th>Areas</th>
           <th className="num">Last {win.short}</th>
-          <th className="num">All time</th>
+          {/* Not "all time" any more: the nightly purge deletes delivery
+              history older than two months, so this is what is still stored.
+              A column that says "all time" and means "since August" is the
+              kind of number somebody builds an argument on. */}
+          <th
+            className="num"
+            title="Alerts still on record. Delivery history older than two months is deleted nightly."
+          >
+            All kept
+          </th>
           <th className="num">Last alert</th>
           <th>Joined</th>
         </tr>

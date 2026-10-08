@@ -24,7 +24,7 @@ Row = dict[str, Any]
 JOBS = (
     "ingest", "portals",
     *PORTAL_JOBS,
-    "drain", "rollup",
+    "drain", "rollup", "purge",
 )
 
 def main(argv: list[str] | None = None) -> int:

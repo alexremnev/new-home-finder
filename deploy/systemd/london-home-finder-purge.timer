@@ -1,0 +1,18 @@
+[Unit]
+Description=Delete what we have decided not to keep, nightly
+
+[Timer]
+Unit=london-home-finder@purge.service
+# One in the morning, when nobody is looking at the admin and the portal
+# readers are in their overnight pause. No timezone suffix on purpose: the
+# retention boundaries are computed inside the query from London midnight, so
+# the only thing this hour decides is when the work happens, not what counts
+# as yesterday.
+OnCalendar=*-*-* 01:00:00
+AccuracySec=5min
+# A server that was asleep at one o'clock still purges when it comes back,
+# rather than skipping a night and leaving the backlog to the next one.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
