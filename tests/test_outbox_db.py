@@ -519,6 +519,71 @@ def test_out_of_days_outranks_out_of_alerts(conn: Any) -> None:
     assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
 
 
+def test_a_notice_that_could_not_be_sent_is_offered_again(conn: Any) -> None:
+    # The claim is an INSERT, so a failed send used to be a notice nobody ever
+    # heard: the row stood and the stage never came round again. On WhatsApp
+    # that is the ordinary case for a paying subscriber — the hour warning
+    # travels as `expiring`, which has no template, and a month's subscriber
+    # has not written in for weeks, so the window is shut.
+    user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=1)
+    make_subscription(conn, user_id)
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        (user_id,),
+    )
+
+    first = store.claim_plan_notices(conn)
+    assert [row["stage"] for row in first] == ["hour"]
+    assert store.claim_plan_notices(conn) == []
+
+    store.release_plan_notice(conn, user_id, "hour", first[0]["plan_until"])
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
+def test_a_released_notice_becomes_the_expiry_once_the_plan_has_gone(conn: Any) -> None:
+    # Which is why releasing cannot loop for ever: the stage is worked out
+    # afresh, so an hour warning nobody could be told turns into the expiry
+    # notice — a different stage, a fresh claim, and the one template that can
+    # reach a shut window.
+    user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=1)
+    make_subscription(conn, user_id)
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        (user_id,),
+    )
+    claimed = store.claim_plan_notices(conn)
+    store.release_plan_notice(conn, user_id, "hour", claimed[0]["plan_until"])
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
+        (user_id,),
+    )
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
+
+def test_a_nought_share_withholds_everything(conn: Any, run: Run) -> None:
+    # A finished plan on WhatsApp falls back to nothing, and `or 100` read that
+    # nought as "no share was set, so send the lot" — so the one group that was
+    # meant to receive nothing received all of it, each message billed and
+    # carrying a notice saying their access was limited to 0% of listings.
+    user_id = make_user(conn, address="", plan="paid", plan_days=None, plan_hours=None)
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 day' WHERE id = %s", (user_id,)
+    )
+    make_subscription(conn, user_id)
+    conn.execute(
+        "INSERT INTO user_channels (user_id, channel, address, verified_at, "
+        "last_inbound_at) VALUES (%s, 'whatsapp', '447700900111', now(), now())",
+        (user_id,),
+    )
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+
+    assert [row["delivery_share"] for row in store.active_subscriptions(conn)] == [0]
+
+    outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")])
+
+    assert counts(conn) == {"skipped": 1}
+    assert notification(conn)["error"] == "share"
+
 def photo_pending(conn: Any, listing_id: int, *, looked: bool) -> None:
 
     # A source message carrying a photograph, which either has or has not been
@@ -663,6 +728,87 @@ def test_a_window_reopened_before_the_old_question_was_answered(
     )
 
     assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+def wa_window_closing(
+    conn: Any, *, plan: str = "paid", plan_hours: int | None = 20 * 24,
+    plan_minutes: int | None = None, inbound_minutes: int = 24 * 60 - 4,
+) -> int:
+    """A WhatsApp account whose 24-hour window is about to shut.
+
+    `plan_minutes` overrides `plan_hours` for the cases that turn on how close
+    the end of the plan is; a negative value is a plan that has already ended.
+    """
+
+    user_id = make_user(conn, address="", plan=plan, plan_days=None, plan_hours=plan_hours)
+    if plan_minutes is not None:
+        conn.execute(
+            "UPDATE users SET plan_until = now() + make_interval(mins => %s) WHERE id = %s",
+            (plan_minutes, user_id),
+        )
+    conn.execute("UPDATE users SET plan_from = now() - interval '10 days' WHERE id = %s",
+                 (user_id,))
+    make_subscription(conn, user_id)
+    conn.execute(
+        """
+        INSERT INTO user_channels (user_id, channel, address, verified_at, last_inbound_at)
+        VALUES (%s, 'whatsapp', %s, now(), now() - make_interval(mins => %s))
+        """,
+        (user_id, f"4477009{user_id:05d}", inbound_minutes),
+    )
+    return user_id
+
+def asked(conn: Any) -> list[int]:
+    return [int(row["user_id"]) for row in store.closing_windows(conn, minutes=5)]
+
+def test_a_paying_subscriber_is_asked_before_the_window_shuts(conn: Any) -> None:
+    # The case the question exists for: there are weeks of alerts left and the
+    # only thing about to stop them is WhatsApp's window.
+    user_id = wa_window_closing(conn)
+
+    assert asked(conn) == [user_id]
+
+def test_a_whatsapp_trial_is_not_asked_to_carry_on(conn: Any) -> None:
+    # The trial runs one day from the first alert, so its end lands inside the
+    # window it started. "Tap below and the alerts carry on" is then false —
+    # and it arrived just after the notice saying the trial was ending, which
+    # is the one message that is true.
+    wa_window_closing(conn, plan="trial", plan_hours=None, plan_minutes=4)
+
+    assert asked(conn) == []
+
+def test_nobody_is_asked_within_an_hour_of_their_plan_ending(conn: Any) -> None:
+    # Not a trial rule. Inside the hour the plan notice is the message, and
+    # this one would contradict it on the same conversation.
+    wa_window_closing(conn, plan_hours=None, plan_minutes=30)
+
+    assert asked(conn) == []
+
+def test_a_lapsed_whatsapp_plan_is_not_asked(conn: Any) -> None:
+    # A finished plan falls back to nothing on WhatsApp — 0058 — so there is
+    # nothing for a reopened window to carry.
+    wa_window_closing(conn, plan_hours=None, plan_minutes=-60)
+
+    assert asked(conn) == []
+
+def test_a_spent_allowance_is_not_asked_either(conn: Any) -> None:
+    # The other half of `live`: three weeks still on the clock and no alerts
+    # left to send, so the window is worth nothing.
+    user_id = wa_window_closing(conn)
+    conn.execute("UPDATE plans SET alert_allowance = 2 WHERE key = 'paid'")
+    for n in range(2):
+        listing_id = make_listing(conn, f"spent-{n}")
+        conn.execute(
+            "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
+            "sent_at) VALUES (%s, %s, 'whatsapp', 'new_listing', 'sent', now())",
+            (user_id, listing_id),
+        )
+
+    try:
+        assert asked(conn) == []
+    finally:
+        # `plans` is not in WIPE, so an allowance of two left behind would be
+        # the allowance every later test runs under.
+        conn.execute("UPDATE plans SET alert_allowance = NULL WHERE key = 'paid'")
 
 def held_reasons(conn: Any) -> list[str | None]:
     return [

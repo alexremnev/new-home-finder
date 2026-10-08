@@ -89,7 +89,14 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
                     stage.count("not_eligible")
                     continue
 
-                share = int(subscription.get("delivery_share") or 100)
+                # `or 100` here read a nought share as "nothing was set, so
+                # send everything" — and nought is exactly what a lapsed plan
+                # falls back to on WhatsApp, where every message is billed. So
+                # the people 0058 says must receive nothing were the one group
+                # receiving all of it, each alert carrying a notice telling them
+                # their access was limited to 0% of listings.
+                raw = subscription.get("delivery_share")
+                share = 100 if raw is None else int(raw)
                 withheld = not in_share(user_id, int(listing["id"]), share)
 
                 pending.append({
@@ -711,6 +718,10 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             notice_stage = str(row["stage"])
             notifier = build_notifier(str(row["channel"]))
             if notifier is None or not row["address"]:
+                # Given back, so an address added later still gets the notice.
+                store.release_plan_notice(
+                    conn, int(row["user_id"]), notice_stage, row["plan_until"]
+                )
                 stage.count("unreachable")
                 continue
             share = (
@@ -765,6 +776,29 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             if result.ok:
                 stage.count(f"sent_{notice_stage}")
             else:
+                # The claim is given back when the same send could work later —
+                # which on WhatsApp is the ordinary case for a paying
+                # subscriber, whose window is shut and whose hour warning has
+                # no template. See `store.release_plan_notice`. A refusal that
+                # will be repeated keeps its claim rather than being retried
+                # every two minutes for ever.
+                if result.retryable:
+                    store.release_plan_notice(
+                        conn, int(row["user_id"]), notice_stage, row["plan_until"]
+                    )
+                    # Info, not warn, and for the same reason `_apply` draws
+                    # that line: a notice waiting for a window to reopen is
+                    # tried every two minutes, and thirty warnings an hour
+                    # about something nothing is wrong with is how a log stops
+                    # being read.
+                    stage.count("send_deferred")
+                    stage.log(
+                        "info",
+                        f"the {notice_stage} plan notice for user "
+                        f"{row['user_id']} is waiting: {result.error}",
+                        user_id=int(row["user_id"]),
+                    )
+                    continue
                 stage.count("send_failed")
                 stage.log(
                     "warn",

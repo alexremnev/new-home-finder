@@ -562,6 +562,24 @@ def closing_windows(conn: Conn, *, minutes: int = 5, limit: int = 200) -> list[R
 
     Only people with an active subscription, because the question is whether to
     carry on receiving — there is nothing to carry on with otherwise.
+
+    And only people who will still be receiving something once the window
+    reopens, which is the rest of the WHERE clause. "Tap below and the alerts
+    carry on" has to be true when it is read:
+
+      * `live` and a share above nought is "alerts are being delivered at all".
+        A lapsed plan falls back to nothing on WhatsApp — see 0058 — so the
+        window is worth nothing to them, and a spent allowance is the same
+        answer by the other half of `live`.
+      * the hour's grace is so that this never follows "your plan ends in about
+        an hour" on the same conversation. Within that hour the plan notice is
+        the message, and this one would contradict it.
+
+    Which is what takes the WhatsApp trial out: it runs a single day from the
+    first alert, so its end always falls inside the window it was started in
+    and within the hour before that window shuts. A trial-length change does
+    not reopen the hole — a trial with two days left on it is somebody who has
+    alerts to carry on with, and the rule says so rather than naming the plan.
     """
 
     return list(
@@ -569,12 +587,19 @@ def closing_windows(conn: Conn, *, minutes: int = 5, limit: int = 200) -> list[R
             """
             SELECT uc.user_id, uc.address, uc.last_inbound_at, s.criteria
               FROM user_channels uc
-              JOIN users u         ON u.id = uc.user_id AND u.status = 'active'
-              JOIN subscriptions s ON s.user_id = uc.user_id AND s.active
+              JOIN users u            ON u.id = uc.user_id AND u.status = 'active'
+              JOIN subscriptions s    ON s.user_id = uc.user_id AND s.active
+              JOIN user_entitlement e ON e.user_id = uc.user_id
              WHERE uc.channel = 'whatsapp'
                AND uc.is_primary
                AND uc.verified_at IS NOT NULL
                AND uc.last_inbound_at IS NOT NULL
+               -- Something to carry on with, and not about to be told the
+               -- opposite by the plan notice.
+               AND e.live
+               AND e.delivery_share > 0
+               AND (u.plan_until IS NULL
+                 OR u.plan_until > now() + interval '1 hour')
                -- Inside the window, but with less than `minutes` of it left.
                AND uc.last_inbound_at <=
                    now() - interval '24 hours' + make_interval(mins => %(minutes)s)
@@ -691,6 +716,42 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
             """,
             (limit,),
         ).fetchall()
+    )
+
+def release_plan_notice(
+    conn: Conn, user_id: int, stage: str, plan_until: datetime | None
+) -> None:
+    """Give a claimed notice back after a send that could still succeed.
+
+    `claim_plan_notices` claims by inserting, so the row is what stops a drain
+    every two minutes saying the same thing thirty times an hour. The cost is
+    that a send which failed is a notice nobody ever hears: the claim stands and
+    the stage never comes round again.
+
+    That is not a rare corner on WhatsApp, it is the ordinary case for a paying
+    subscriber. The hour warning travels as `expiring`, only the `expired`
+    notice has an approved template, and a month's subscriber has — by
+    definition — not written in for the best part of thirty days, so the window
+    is shut and the free-form path with it. The one warning before a £19.99
+    month ran out was being dropped in silence, for everybody except the trial
+    whose window happens to still be open.
+
+    Released, it is tried again on the next drain and lands if the person taps
+    anything in that hour. If they do not, `plan_until` passes and the stage
+    becomes `expired` by itself — a different stage, a fresh claim, and the one
+    template that can reach them.
+
+    Only for a failure worth repeating. A refusal Meta will give again is left
+    claimed, because retrying it every two minutes for ever is a worse answer
+    than losing one message.
+    """
+
+    conn.execute(
+        """
+        DELETE FROM plan_notices
+         WHERE user_id = %s AND stage = %s AND plan_until = %s
+        """,
+        (user_id, stage, plan_until),
     )
 
 def queue_notifications(conn: Conn, rows: list[dict[str, Any]]) -> set[tuple[int, int]]:
