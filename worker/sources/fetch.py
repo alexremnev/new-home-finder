@@ -268,19 +268,40 @@ class Fetcher:
         headers come to about 3KB where the page is 300KB, so this is a
         hundredfold saving on a question asked once per new listing.
 
-        Not routed through the fingerprint rotation in `get`: a redirect is not
-        something a portal refuses selectively, and if it does the caller can
-        fall back to the page itself.
+        Not routed through the fingerprint rotation: a redirect is not something
+        a portal refuses by fingerprint. It IS something a portal refuses by
+        address, though, and that is what this escalates on.
+
+        ── why it has to escalate, and what happened when it did not ─────────
+
+        OpenRent answers this server 405 on a listing url and serves the
+        identical request from a home connection — measured, and the reason
+        `BLOCKED` carries 405 at all. `get` knew that and escalated; this did
+        not, because it only reached for the proxy when some earlier `get` had
+        already been refused by the same host. On `openrent_v2` no earlier
+        `get` ever is: the search page is served, and only the per-listing
+        lookups are refused. So every lookup came back 405, forever, with no
+        proxy attempt — which is most of why that reader stored 134 listings
+        in a fortnight and announced none of them.
         """
 
+        status, where = self._head_once(url, through_proxy=False)
+        if status in BLOCKED:
+            # Remembered for the rest of the run, exactly as `get` does, so the
+            # next few hundred lookups go straight through the proxy instead of
+            # each paying for its own refusal first.
+            self.blocked.add(host_of(url))
+            if self.proxy and not self.never_proxy(url):
+                return self._head_once(url, through_proxy=True)
+        return status, where
+
+    def _head_once(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
         body = io.BytesIO()
         headers = io.BytesIO()
-        # The same escalation as `get`, decided from what that already
-        # learned: a host known to refuse this address is asked through the
-        # proxy straight away.
-        through_proxy = bool(self.proxy) and not self.never_proxy(url) and (
-            host_of(url) in self.blocked
-        )
+        # A host already known to refuse this address skips the direct probe
+        # altogether — `head` passes True and this does as it is told.
+        if not through_proxy and self.proxy and not self.never_proxy(url):
+            through_proxy = host_of(url) in self.blocked
         target = self._best or self.targets[0]
         curl = self._handle(target)
 

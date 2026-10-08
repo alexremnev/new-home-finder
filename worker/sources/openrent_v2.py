@@ -73,6 +73,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from worker.obs.log import Stage
+from worker.sources.fetch import BLOCKED as REFUSALS
 from worker.sources.fetch import Fetcher, Refused
 from worker.sources.openrent import as_listing, read_slug
 from worker.sources.sweep import Catch, Harvest, Memory
@@ -270,13 +271,47 @@ class OpenRentV2:
         # Everything learned this pass, written once at the end.
         learned: dict[str, str | None] = {}
 
+        # ── the first pass, which is where this reader was getting stuck ────
+        #
+        # An undated portal settles a district by reading it through — see the
+        # rule in worker.sources.sweep — and until it settles, `_announceable`
+        # refuses everything, so nothing in it is ever sent. This reader never
+        # got there: a district is about 330 ids, the slug budget is 400 for
+        # the whole run across ten districts, so the budget ran out, the read
+        # was reported incomplete, the district never settled, and the next run
+        # started again. Measured over a fortnight: 2,413 part-reads, 721 runs,
+        # and not one listing announced.
+        #
+        # The resolving was never the point of a first pass. Nothing found in
+        # an unsettled district can be announced whatever we learn about it, so
+        # the only thing the first pass owes the next one is "these ids are not
+        # new". Writing them down is one database round trip; asking OpenRent
+        # about each of them is 330 requests that buy nothing.
+        #
+        # So: record the lot, settle the district, and start announcing
+        # tomorrow. The cost is that existing stock in a brand new district is
+        # never stored — which is exactly what the read-through rule means by
+        # settling, and what it was already doing on purpose for every listing
+        # the budget did reach.
+        if not settled:
+            stage.count("backfilled", len(unknown))
+            if memory is not None and unknown:
+                memory.remember(dict.fromkeys(unknown, None))
+            return Harvest(caught=[], complete=True, pages=1)
+
         slugs = slugs_in(reply.body)
         pictures = images_in(reply.body)
         paths = paths_in(reply.body)
 
         caught: list[Catch] = []
         complete = True
-        pages = 1
+        # One search page, which is what this reader reads. The redirect
+        # lookups and the listing pages are requests, not pages, and they get
+        # their own counters below — `pages` was counting all three, so a run
+        # that spent its slug budget reported 439 "pages" and the admin's
+        # chart of pages per run meant nothing.
+        lookups = 0
+        details = 0
 
         for listing_id in unknown:
             slug = slugs.get(listing_id)
@@ -290,17 +325,36 @@ class OpenRentV2:
                     complete = False
                     break
                 self._slugs -= 1
-                pages += 1
+                lookups += 1
                 try:
                     status, where = get.head(short_url(listing_id))
                 except (Refused, OSError) as error:
+                    # Could not ask, so nothing is learned and the district is
+                    # not settled on the strength of it.
                     stage.count("slug_unreachable")
                     stage.log("warn", f"{listing_id}: {type(error).__name__}: {error}")
                     complete = False
                     continue
                 if not where or status not in (301, 302, 307, 308):
-                    stage.count("no_slug")
-                    complete = False
+                    # Two different things, and conflating them is what made
+                    # this reader ask the same questions for ever.
+                    #
+                    # A refusal — 401, 403, 405, 429 — means we could not ask.
+                    # Nothing is learned, the district stays incomplete, and the
+                    # id comes round again next run. `Fetcher.head` has already
+                    # tried the proxy by this point.
+                    #
+                    # Any other answer is an answer: OpenRent replied and there
+                    # is no slug behind that id. Written down, so it is asked
+                    # about once rather than on every run — which is what 0053
+                    # exists for — and the read is NOT called incomplete,
+                    # because there is nothing left to come back for.
+                    if status in REFUSALS:
+                        stage.count("slug_refused")
+                        complete = False
+                    else:
+                        stage.count("no_slug")
+                        learned[listing_id] = None
                     continue
                 path = where
                 slug = slug_from_path(where)
@@ -322,19 +376,6 @@ class OpenRentV2:
                 # The two-kilometre radius, doing what it does. Not an error,
                 # and not ours to store under this district.
                 stage.count("outside_district")
-                continue
-
-            if not settled:
-                # This district has never been read through, so nothing found
-                # in it will be announced whatever we do — see the read-through
-                # rule in worker.sources.sweep. Resolving the id is enough to
-                # stop it looking new tomorrow, and the 300KB listing page
-                # would be spent on a listing nobody is ever told about.
-                #
-                # This is what makes the first pass affordable: a district of
-                # 328 ids costs 328 redirects at 3KB instead of 150 listing
-                # pages at 300KB, and it settles in one run instead of four.
-                stage.count("backfilled")
                 continue
 
             if self._details <= 0:
@@ -359,7 +400,7 @@ class OpenRentV2:
                 stage.log("warn", f"{listing_id}: {type(error).__name__}: {error}")
                 complete = False
                 continue
-            pages += 1
+            details += 1
 
             found = _found(listing_id, url, where_it_is, read)
             try:
@@ -387,7 +428,9 @@ class OpenRentV2:
         if memory is not None and learned:
             memory.remember(learned)
         stage.count("resolved", len(caught))
-        return Harvest(caught=caught, complete=complete, pages=pages)
+        stage.count("slug_lookups", lookups)
+        stage.count("detail_pages", details)
+        return Harvest(caught=caught, complete=complete, pages=1)
 
 
 def _found(listing_id: str, url: str, district: str, read: tuple[str, int, str | None]) -> Any:

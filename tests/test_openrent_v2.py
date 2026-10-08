@@ -132,10 +132,12 @@ class Fake:
         *,
         redirects: dict[str, str] | None = None,
         detail: str = DETAIL,
+        refuses: bool = False,
     ) -> None:
         self.page = page
         self.detail = detail
         self.redirects = redirects or {}
+        self.refuses = refuses
         self.got: list[str] = []
         self.headed: list[str] = []
 
@@ -148,6 +150,11 @@ class Fake:
 
     def head(self, url: str) -> tuple[int, str | None]:
         self.headed.append(url)
+        if self.refuses:
+            # 405 is what OpenRent actually answers this server — see the note
+            # on `Fetcher.head`. It means "we could not ask", not "there is no
+            # slug", and the two have to behave differently.
+            return (405, None)
         where = self.redirects.get(url.rsplit("/", 1)[-1])
         return (301, where) if where else (404, None)
 
@@ -263,10 +270,13 @@ def test_a_district_never_read_through_costs_no_listing_pages() -> None:
 
     assert harvest.complete is True, "so that the engine can settle it"
     assert harvest.caught == [], "nothing stored, because nothing would be sent"
-    # The search page only. Every id was resolved by redirect, and not one
-    # listing page was fetched.
+    # One request, the search page. Not a single redirect either: resolving an
+    # id in a district that cannot announce anything buys nothing, and asking
+    # about 330 of them is what exhausted the run's budget and left the
+    # district unsettled for ever. The ids are written down instead, which is
+    # all the next run needs from this one.
     assert [one for one in fetch.got if "/property-to-rent/" in one] == []
-    assert len(fetch.headed) == len(ids) - len(slugs_in(PAGE))
+    assert fetch.headed == []
     assert stage.counts["backfilled"] == len(ids)
     assert set(written) == set(ids)
 
@@ -298,19 +308,61 @@ def test_a_listing_outside_the_district_is_not_stored_under_it() -> None:
     assert len(fetch.got) == 1
 
 
-def test_an_unresolvable_id_leaves_the_district_incomplete() -> None:
-    # A district that could not be fully read must not be settled: settling it
-    # would announce its whole standing backlog on the next run.
+def test_an_id_with_no_redirect_is_written_off_rather_than_re_asked() -> None:
+    # OpenRent answered and there is no slug behind that id, so there is
+    # nothing to come back for: the district still counts as read through, and
+    # the id is remembered so it is not asked about on every run for ever.
+    # Not remembering it is most of why this reader never settled a district.
     ids = ids_in(PAGE)
     carded = set(slugs_in(PAGE))
     unrendered = next(one for one in ids if one not in carded)
     fetch = Fake(PAGE)  # every redirect answers 404
     stage = Quiet()
-    mem, _ = remember(stored={one for one in ids if one != unrendered})
+    mem, written = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.complete is True
+    assert stage.counts.get("no_slug", 0) >= 1
+    assert written.get(unrendered) is None and unrendered in written
+
+
+def test_a_refused_lookup_leaves_the_district_incomplete() -> None:
+    # The other half of the same branch, and the one that matters on this
+    # server: 405 means we could not ask. Nothing is learned, the district is
+    # not settled on the strength of it, and the id comes round again.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    unrendered = next(one for one in ids if one not in carded)
+    fetch = Fake(PAGE, refuses=True)
+    stage = Quiet()
+    mem, written = remember(stored={one for one in ids if one != unrendered})
     harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
 
     assert harvest.complete is False
-    assert stage.counts.get("no_slug", 0) >= 1
+    assert stage.counts.get("slug_refused", 0) >= 1
+    assert unrendered not in written, "a refusal teaches us nothing"
+
+
+def test_pages_counts_pages_and_not_requests() -> None:
+    # It counted the search page, every redirect and every listing page, so a
+    # run that spent its slug budget reported 439 "pages" and the admin's
+    # pages-per-run chart meant nothing.
+    ids = ids_in(PAGE)
+    carded = set(slugs_in(PAGE))
+    unrendered = next(one for one in ids if one not in carded)
+    fetch = Fake(
+        PAGE,
+        redirects={
+            unrendered: f"/property-to-rent/london/1-bed-flat-somewhere-e14/{unrendered}"
+        },
+    )
+    stage = Quiet()
+    mem, _ = remember(stored={one for one in ids if one != unrendered})
+    harvest = OpenRentV2().harvest("E14", fetch, stage, SETTLED, mem)  # type: ignore[arg-type]
+
+    assert harvest.pages == 1
+    assert stage.counts.get("slug_lookups") == 1
+    assert stage.counts.get("detail_pages") == 1
 
 
 def test_the_detail_budget_stops_a_run_rather_than_the_district() -> None:
