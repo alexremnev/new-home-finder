@@ -98,9 +98,6 @@ const JOB_WHY: Record<string, string> = {
     "новых. OpenRent тоже отвечает серверу 405, оговорка та же, что у Zoopla. " +
     "Если молчит — OpenRent перестанет приходить вовсе: фид его не публикует, " +
     "это и была причина завести отдельный читатель.",
-  portals:
-    "Все портальные читатели одним прогоном. По расписанию не стоит — это " +
-    "для ручного обхода. Если появился здесь, значит кто-то запускал вручную.",
   drain:
     "Отправляет то, что стоит в очереди: уведомления об окончании плана, вечерний " +
     "дайджест и сами алерты. Каждые две минуты. Если молчит — объявления есть, но " +
@@ -155,10 +152,14 @@ export async function Health({ span }: { span: string }) {
   // silent when it has not run at all in the window. Both are degraded; the
   // wording tells them apart, because the fixes differ.
   // Running is neither broken nor silent; it is the healthy middle of a run.
+  //
+  // `due` is what keeps a nightly job out of this: `purge` has not run in the
+  // past half hour because it is not supposed to have, and calling that
+  // silence made the banner red around the clock.
   const broken = jobs.filter(
     (job) => job.last_status === "failed" || job.last_status === "degraded",
   );
-  const silent = jobs.filter((job) => job.runs === 0);
+  const silent = jobs.filter((job) => job.runs === 0 && job.due);
   const healthy = jobs.length > 0 && broken.length === 0 && silent.length === 0;
 
   return (
@@ -169,7 +170,7 @@ export async function Health({ span }: { span: string }) {
         {jobs.length === 0
           ? `nothing ran ${spanWords(win)}`
           : healthy
-            ? `all ${jobs.length} jobs ran successfully · ${spanWords(win)}`
+            ? `all ${jobs.filter((job) => job.runs > 0).length} jobs ran successfully · ${spanWords(win)}`
             : [
                 broken.length > 0 && `${broken.map((j) => j.job).join(", ")} failing`,
                 silent.length > 0 && `${silent.map((j) => j.job).join(", ")} silent`,
@@ -184,8 +185,11 @@ export async function Health({ span }: { span: string }) {
 // The checks return a handful of grouped rows, so the whole list is fetched and
 // cut here rather than paged in SQL. The cut is still worth having: one noisy
 // check would otherwise bury every other one.
-export async function faultsPage(page: number): Promise<MorePage & { total: number }> {
-  const faults = await problems().catch(() => []);
+export async function faultsPage(
+  span: string,
+  page: number,
+): Promise<MorePage & { total: number }> {
+  const faults = await problems(windowFor(span)).catch(() => []);
   const from = (page - 1) * FAULTS_PER_PAGE;
   const shown = faults.slice(from, from + FAULTS_PER_PAGE);
 
@@ -205,15 +209,19 @@ export async function faultsPage(page: number): Promise<MorePage & { total: numb
   };
 }
 
-export async function Faults() {
-  const first = await faultsPage(1);
+export async function Faults({ span }: { span: string }) {
+  const first = await faultsPage(span, 1);
   if (first.total === 0) {
-    return <p className="hint">Nothing is wrong that these checks can see.</p>;
+    return (
+      <p className="hint">
+        Nothing is wrong that these checks can see {spanWords(windowFor(span))}.
+      </p>
+    );
   }
 
   return (
     <Paged
-      load={moreFaults}
+      load={moreFaults.bind(null, span)}
       more={first.more}
       per={FAULTS_PER_PAGE}
       total={first.total}
@@ -691,13 +699,18 @@ export async function Jobs({ span }: { span: string }) {
             : job.stuck > 0
               ? "bad"
               : JOB_TONE[job.last_status ?? ""] ?? "bad";
+        // Same grey tile either way — neither is a fault — but a job that was
+        // never going to run in this window should not be reported as having
+        // gone quiet.
+        const word =
+          state === "idle" && !job.due
+            ? "not due"
+            : JOB_WORD[state] ?? (job.last_status ?? "unknown");
         return (
           <div key={job.job} className={`card job job-${state}`}>
             <div className="job-name">
               {job.job}
-              <span className={`pill pill-${state}`}>
-                {JOB_WORD[state] ?? (job.last_status ?? "unknown")}
-              </span>
+              <span className={`pill pill-${state}`}>{word}</span>
               {job.job in JOB_WHY && <Why text={JOB_WHY[job.job] as string} />}
             </div>
             <div className="metric-note">

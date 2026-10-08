@@ -128,7 +128,29 @@ export type Problem = {
   last_at: string | null;
 };
 
-export async function problems(): Promise<Problem[]> {
+/**
+ * The checks that look past a job's exit code, over the window the dashboard
+ * is set to.
+ *
+ * Every check used to carry its own period — failures over 48 hours, silence
+ * over 6, unparseable messages over a week — regardless of the picker. It read
+ * as a bug: with "Past 30 minutes" chosen the panel still listed a run that
+ * failed two days ago, and nothing on the row said why it was there. So all
+ * five now answer the same question as the rest of the page, "what happened in
+ * this range", and the two that are about a state rather than an event say so
+ * in the only way a window allows:
+ *
+ *   * `nothing read` needs a window of at least six hours. On a shorter one it
+ *     cannot tell a broken reader from a quiet feed — the channel goes minutes
+ *     without a message at the best of times, and overnight it goes hours —
+ *     and a check that cries wolf on every short window is worse than absent.
+ *     Its timestamp is the last message ever stored, which is deliberately
+ *     outside the window: that is the fact you need.
+ *   * `delivery stalled` counts what was queued inside the window and has
+ *     since sat for over an hour. Nothing queued in the past half hour can be
+ *     an hour old, so a short window is empty here, and correctly so.
+ */
+export async function problems(win: Win): Promise<Problem[]> {
   return query<Problem>(
     `SELECT 'run failed' AS kind,
             -- job_runs records the job and the error, and no source: a run is a
@@ -137,7 +159,9 @@ export async function problems(): Promise<Problem[]> {
             count(*)::int AS count,
             max(started_at)::text AS last_at
        FROM job_runs
-      WHERE status IN ('failed', 'degraded') AND started_at > now() - interval '48 hours'
+      WHERE status IN ('failed', 'degraded')
+        AND started_at >  now() - make_interval(mins => $1::int)
+        AND started_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1, 2
 
      UNION ALL
@@ -163,14 +187,18 @@ export async function problems(): Promise<Problem[]> {
             count(*)::int, max(e.ts)::text
        FROM job_events e
        JOIN job_runs r ON r.id = e.run_id
-      WHERE e.level IN ('warn', 'error') AND e.ts > now() - interval '48 hours'
+      WHERE e.level IN ('warn', 'error')
+        AND e.ts >  now() - make_interval(mins => $1::int)
+        AND e.ts <= now() - make_interval(mins => $2::int)
       GROUP BY 1, r.job, e.stage
 
      UNION ALL
      SELECT 'unparseable', coalesce(left(parse_error, 110), 'no reason recorded'),
             count(*)::int, max(received_at)::text
        FROM source_messages
-      WHERE status = 'unparseable' AND received_at > now() - interval '7 days'
+      WHERE status = 'unparseable'
+        AND received_at >  now() - make_interval(mins => $1::int)
+        AND received_at <= now() - make_interval(mins => $2::int)
       GROUP BY 1, 2
 
      UNION ALL
@@ -180,10 +208,19 @@ export async function problems(): Promise<Problem[]> {
      -- stored something, the second is when the feed posted it. A broken reader
      -- leaves stored_at old while the feed carries on, and that is the failure
      -- worth catching — the one nothing else reports.
-     SELECT 'nothing read', 'no message stored in the last 6 hours', 1,
-            max(stored_at)::text
+     --
+     -- The six hours below is a floor on the window, not on the silence: see
+     -- the note above this query for why a half-hour window cannot ask this.
+     -- The date beside this row is the last message ever stored, which is
+     -- the one timestamp on the panel that sits outside the range. No point
+     -- repeating it in the text: the when column already renders it, in
+     -- London, which a to_char here would not have been.
+     SELECT 'nothing read', 'nothing stored in this range',
+            1, max(stored_at)::text
        FROM source_messages
-      HAVING max(stored_at) < now() - interval '6 hours'
+      WHERE stored_at <= now() - make_interval(mins => $2::int)
+     HAVING $1::int - $2::int >= 6 * 60
+        AND max(stored_at) < now() - make_interval(mins => $1::int)
 
      UNION ALL
      -- held IS NULL, or this says "stalled" about a WhatsApp backlog that is
@@ -192,11 +229,15 @@ export async function problems(): Promise<Problem[]> {
      SELECT 'delivery stalled', 'queued with nothing holding them',
             count(*)::int, min(created_at)::text
        FROM queued_notifications
-      WHERE held IS NULL AND created_at < now() - interval '1 hour'
-      HAVING count(*) > 0
+      WHERE held IS NULL
+        AND created_at <  now() - interval '1 hour'
+        AND created_at >  now() - make_interval(mins => $1::int)
+        AND created_at <= now() - make_interval(mins => $2::int)
+     HAVING count(*) > 0
 
       ORDER BY 4 DESC NULLS LAST
       LIMIT 40`,
+    [Math.round(win.mins), Math.round(win.endMins)],
   );
 }
 
@@ -564,6 +605,13 @@ export type JobState = {
   //: how a job that died eleven times showed 0 failed.
   stuck: number;
   median_secs: number | null;
+  //: Whether the window is long enough for this job to have been expected.
+  //:
+  //: False only for a job whose timer fires less often than the window is
+  //: long — `purge`, nightly, on anything under a day. Silence from one of
+  //: those is not evidence of anything, so the banner ignores it and the tile
+  //: says "not due" rather than "silent".
+  due: boolean;
 };
 
 // Beyond this a run marked 'running' is not running. The longest job here
@@ -571,31 +619,63 @@ export type JobState = {
 // sweep is never mislabelled.
 export const STUCK_AFTER_MINUTES = 15;
 
-// Every job that has run in the window, plus the ones that should have. A job
-// missing from job_runs is the interesting case — silence, not health — and a
-// name that stopped existing should not haunt the page forever.
+// Every job a timer starts, with how often that timer fires, plus whatever
+// else has run in the window. A job missing from `job_runs` is the interesting
+// case — silence, not health — and a name that stopped existing should not
+// haunt the page forever.
+//
 // One entry per portal reader, not one combined `portals` job. That is the
 // point of the split: a job that has stopped shows as silent here, where
 // combined it hid behind the two that still worked.
 //
-// `purge` is deliberately absent, and must stay absent. A job missing from
-// the window is drawn as silent and takes the whole banner to Degraded with
-// it, which is right for a reader that ticks every few minutes and wrong for
-// one that fires once at one in the morning: on any window shorter than a day
-// it would be permanently, pointlessly red. It still appears in the panel on
-// the windows it actually ran in, through the `seen` half of the query below.
-export const EXPECTED_JOBS = [
-  "ingest", "rightmove", "zoopla", "zoopla_london", "openrent",
-  "drain", "rollup", "report",
-] as const;
+// ── why a period, and not just a list of names ───────────────────────────
+//
+// A job missing from the window is drawn as silent, and silence takes the
+// whole banner to Degraded with it. That is right for a reader that ticks
+// every few minutes and wrong for `purge`, which fires once at one in the
+// morning: on any window shorter than a day it has legitimately not run, so
+// listed flatly it made the dashboard permanently, pointlessly red — which is
+// why it was left off the list altogether and then missing from the panel.
+//
+// With a period, absence only counts against a job on a window at least as
+// long as its own: any window of a day contains 01:00, so a silent `purge`
+// there is real, and on a half-hour window the tile says "not due" instead of
+// dragging the banner down. Every job keeps its tile either way.
+//
+// The minutes are read off the timers in deploy/systemd — the gap each one
+// leaves between fires, during the hours it fires at all. The readers pause
+// overnight, which is a longer gap than any number here, so a window at four
+// in the morning can still call one silent; that is as it was before this
+// list grew a period, and a separate question from the one above.
+export const SCHEDULED_JOBS: { job: string; everyMins: number }[] = [
+  { job: "ingest", everyMins: 2 },
+  { job: "drain", everyMins: 2 },
+  { job: "rollup", everyMins: 2 },
+  { job: "zoopla_london", everyMins: 5 },
+  { job: "rightmove", everyMins: 10 },
+  { job: "zoopla", everyMins: 20 },
+  { job: "openrent", everyMins: 20 },
+  { job: "report", everyMins: 60 },
+  { job: "purge", everyMins: 24 * 60 },
+];
+
+// `portals` runs every reader in one go and nothing schedules it — it is there
+// for a manual sweep. A tile for it therefore answers no question this panel
+// asks: it appeared only because somebody had run it by hand, and said nothing
+// about whether anything is working. Hidden here rather than left to age out,
+// because what it was is the first thing it makes you ask. Runs of it are
+// still in Last runs and the run log, which is where a run you started
+// yourself belongs.
+const UNSCHEDULED_JOBS = ["portals"];
 
 export async function jobStates(win: Win): Promise<JobState[]> {
-  return query<JobState>(
+  const rows = await query<Omit<JobState, "due">>(
     `WITH expected AS (SELECT unnest($2::text[]) AS job),
      seen AS (
        SELECT DISTINCT job FROM job_runs
         WHERE started_at >  now() - make_interval(mins => $1::int)
           AND started_at <= now() - make_interval(mins => $3::int)
+          AND job <> ALL($5::text[])
      ),
      all_jobs AS (SELECT job FROM expected UNION SELECT job FROM seen),
      windowed AS (
@@ -633,11 +713,21 @@ export async function jobStates(win: Win): Promise<JobState[]> {
       ORDER BY a.job`,
     [
       Math.round(win.mins),
-      [...EXPECTED_JOBS],
+      SCHEDULED_JOBS.map((one) => one.job),
       Math.round(win.endMins),
       STUCK_AFTER_MINUTES,
+      UNSCHEDULED_JOBS,
     ],
   ).catch(() => []);
+
+  const length = win.mins - win.endMins;
+  const period = new Map(SCHEDULED_JOBS.map((one) => [one.job, one.everyMins]));
+  // A name not on the list got here by running, so it is due by construction:
+  // nothing that could have been silent is excused by this default.
+  return rows.map((row) => ({
+    ...row,
+    due: (period.get(row.job) ?? 0) <= length,
+  }));
 }
 
 export type RunPoint = { label: string; ok: number; bad: number };

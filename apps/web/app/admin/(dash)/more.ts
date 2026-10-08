@@ -9,8 +9,8 @@ import type { MorePage } from "./paged";
 // one definition of what a row contains. Every argument is a plain string or
 // number, so nothing about the page's state has to be smuggled into a button.
 
-export async function moreFaults(page: number): Promise<MorePage> {
-  return faultsPage(page);
+export async function moreFaults(span: string, page: number): Promise<MorePage> {
+  return faultsPage(span, page);
 }
 
 export async function moreLastRuns(page: number): Promise<MorePage> {
