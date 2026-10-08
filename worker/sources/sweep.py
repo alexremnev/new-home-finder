@@ -124,6 +124,11 @@ CATCH_UP = timedelta(hours=3)
 # Consecutive refusals before a run gives up. A portal that has declined three
 # times running is not having a bad moment, and the honest answer is to stop
 # asking rather than to spend the whole budget finding out.
+#
+# A spending rule, and only that. What the run was worth is decided separately,
+# on whether anything was read at all — see the verdict at the end of
+# `_collect`. This number cannot answer that: a reader sweeping one name has a
+# whole run to lose on the first refusal and never reaches a second.
 REFUSALS_ALLOWED = 3
 
 
@@ -530,7 +535,14 @@ def _collect(
 
         order = sweep_order(to_read, watching)
 
-        refused = 0
+        # Three counters and not one, because one was answering two
+        # questions and getting the second wrong. `in_a_row` is about money:
+        # a portal that has just declined three times is not having a bad
+        # moment, so stop spending the budget on it. `refusals` and `read`
+        # are about honesty — see the verdict below the loop.
+        in_a_row = 0
+        refusals = 0
+        read = 0
         postcodes = POSTCODE_BUDGET
         for nth, district in enumerate(order[:budget]):
             if nth:
@@ -576,20 +588,28 @@ def _collect(
                     memory,
                 )
             except Refused as exc:
-                refused += 1
+                in_a_row += 1
+                refusals += 1
                 # Only the first is described. Twenty-five copies of one
-                # sentence is not twenty-five pieces of information.
-                if refused == 1:
+                # sentence is not twenty-five pieces of information. On
+                # `refusals` rather than `in_a_row`: a run refused at the
+                # first district and again at the tenth has had one thing
+                # happen to it, not two.
+                if refusals == 1:
                     stage.log("warn", f"{district}: {exc}")
                 stage.count("refused")
-                if refused >= REFUSALS_ALLOWED and not stored:
-                    stage.degrade(
-                        f"{portal.key} refused {refused} requests in a row and "
-                        f"gave nothing — stopping this run rather than asking again"
+                if in_a_row >= REFUSALS_ALLOWED and not stored:
+                    # Says why it stopped and nothing about what the run was
+                    # worth: that is decided once, below, on what was read.
+                    stage.log(
+                        "warn",
+                        f"{portal.key} refused {in_a_row} requests in a row and "
+                        f"gave nothing — stopping this run rather than asking again",
                     )
                     break
                 continue
-            refused = 0
+            in_a_row = 0
+            read += 1
             stage.count("pages", harvest.pages)
 
             ids = [one.listing.external_id for one in harvest.caught]
@@ -726,6 +746,29 @@ def _collect(
                     )
 
         stage.count("over_budget", max(0, len(order) - budget))
+        stage.set("districts_read", read)
+        # A run that read nothing is not an ok run.
+        #
+        # `REFUSALS_ALLOWED` was doing duty as the reporting rule as well as
+        # the spending one, and that only works for a reader with districts to
+        # spare. `zoopla_london` sweeps one name, so its entire run is one
+        # district: refused once it has read nothing at all, three in a row is
+        # unreachable, and the run was recorded ok with 0 stored. It happened
+        # twice inside half an hour on 8 October 2026 and the dashboard stayed
+        # green through both; the only evidence was a warn in the run log.
+        #
+        # Deliberately not "nothing was stored": a district read through with
+        # no new flats on it is the normal quiet case, and most runs are that.
+        # What makes this a fault is that nothing was read.
+        if refusals and not read:
+            stage.degrade(
+                f"{portal.key} read nothing — "
+                + (
+                    "the one district it asked for was refused"
+                    if refusals == 1
+                    else f"all {refusals} districts it asked for were refused"
+                )
+            )
         stage.set("requests", fetcher.requests)
         # The transfer, not the decompressed body — see the module note. Named
         # `bytes` because that is the counter the admin System tab charts.

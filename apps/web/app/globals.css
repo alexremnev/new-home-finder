@@ -1732,10 +1732,12 @@ form p.error {
 }
 
 .verdict-ok   { border-color: #b9e3c9; background: var(--d-ok-wash);  color: #14683a; }
+.verdict-warn { border-color: #eed9a8; background: var(--d-warn-wash); color: #8a5a00; }
 .verdict-bad  { border-color: #f4bcbe; background: var(--d-bad-wash); color: #a12126; }
 .verdict-dot  { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-.verdict-ok  .verdict-dot { background: var(--d-ok); }
-.verdict-bad .verdict-dot { background: var(--d-bad); }
+.verdict-ok   .verdict-dot { background: var(--d-ok); }
+.verdict-warn .verdict-dot { background: var(--d-warn); }
+.verdict-bad  .verdict-dot { background: var(--d-bad); }
 .verdict-note { margin-left: auto; font-weight: 400; font-size: 12px; opacity: 0.85; }
 
 /* ── the time range ─────────────────────────────────────────────────────── */

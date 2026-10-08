@@ -7,13 +7,17 @@ silence. Both are pure functions so that neither needs a database to pin down.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from worker import store
 from worker.contracts.listing import Listing
 from worker.sources import geo, sweep
-from worker.sources.sweep import GAP_HOURS, Catch, stale_watches, sweep_order
-from worker.store import Watch
+from worker.sources.fetch import Fetcher, Refused
+from worker.sources.sweep import GAP_HOURS, Catch, Harvest, stale_watches, sweep_order
+from worker.store import Sighted, Watch
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
 
@@ -208,3 +212,152 @@ def test_nothing_to_ask_about_costs_no_request(monkeypatch: Any) -> None:
     monkeypatch.setattr(geo, "nearest", never)
 
     assert sweep._derive_postcodes([catch("a", postcode="E14 4AP")], Counting()) == {}  # type: ignore[arg-type]
+
+
+# ── what a run that read nothing is worth ────────────────────────────────
+#
+# The rule being pinned here is `collect`'s verdict, not the fetcher's
+# retrying: a sweep that was refused everywhere it asked has to record
+# `degraded`, and a sweep that read every district and found nothing new has
+# to stay `ok`. Those two look identical in the counters — 0 stored either
+# way — and telling them apart is the whole point.
+#
+# Driven through `collect` with the database stubbed out rather than through a
+# helper, because the bug was never in a helper. `zoopla_london` sweeps one
+# name, so one refusal is a whole run lost, and the consecutive-refusals rule
+# that decides when to stop spending cannot reach three to say so. Both runs
+# on 8 October 2026 that read nothing were recorded ok.
+
+class Note:
+    """A stage that remembers what it was told."""
+
+    def __init__(self) -> None:
+        self.status = "ok"
+        self.counts: dict[str, int] = {}
+        self.values: dict[str, Any] = {}
+        self.said: list[str] = []
+
+    def log(self, level: str, message: str, **_: object) -> None:
+        self.said.append(f"{level}: {message}")
+
+    def count(self, name: str, delta: int = 1) -> None:
+        self.counts[name] = self.counts.get(name, 0) + delta
+
+    def set(self, name: str, value: Any) -> None:
+        self.values[name] = value
+
+    def degrade(self, reason: str) -> None:
+        self.status = "degraded"
+        self.log("warn", reason)
+
+
+class Job:
+    """Just enough of `obs.log.Run` to be recorded against."""
+
+    def __init__(self) -> None:
+        self.stages: list[Note] = []
+
+    @contextmanager
+    def stage(self, name: str, *, source_key: str | None = None) -> Iterator[Note]:
+        note = Note()
+        self.stages.append(note)
+        yield note
+
+
+class Portal:
+    """A portal that answers some districts and refuses the rest."""
+
+    key = "zoopla"
+    dated = True
+
+    def __init__(self, *, refuses: set[str]) -> None:
+        self.refuses = refuses
+        self.asked: list[str] = []
+
+    def harvest(self, district: str, *_: object) -> Harvest:
+        self.asked.append(district)
+        if district in self.refuses:
+            raise Refused(
+                f"https://example.test/{district} answered 403 under every "
+                f"fingerprint tried, from the proxy"
+            )
+        return Harvest(caught=[])
+
+
+def sweeping(monkeypatch: Any, districts: list[str]) -> None:
+    """The database, answering as it would for a reader watching `districts`."""
+
+    monkeypatch.setattr(store, "subscribed_districts", lambda conn: set(districts))
+    monkeypatch.setattr(store, "district_watch", lambda conn, key: {})
+    monkeypatch.setattr(
+        store,
+        "sighted_by",
+        lambda conn, **_: Sighted(ids={}, known=frozenset()),
+    )
+    for quiet in ("record_sightings", "settle_district", "mark_swept"):
+        monkeypatch.setattr(store, quiet, lambda *_, **__: None)
+
+
+def swept(monkeypatch: Any, districts: list[str], refuses: set[str]) -> Note:
+    sweeping(monkeypatch, districts)
+    job = Job()
+    sweep.collect(
+        None,  # type: ignore[arg-type]
+        job,  # type: ignore[arg-type]
+        Portal(refuses=refuses),  # type: ignore[arg-type]
+        pause=0,
+        get=Fetcher(),
+    )
+    return job.stages[0]
+
+
+def test_a_sweep_refused_everywhere_it_asked_is_degraded(monkeypatch: Any) -> None:
+    stage = swept(monkeypatch, ["E14"], refuses={"E14"})
+
+    # The case the dashboard was green through: one district, one refusal,
+    # nothing read, and the consecutive count stuck at one of the three that
+    # used to be what set the status.
+    assert stage.status == "degraded"
+    assert stage.counts["refused"] == 1
+    assert stage.values["districts_read"] == 0
+
+
+def test_every_district_refused_is_degraded_whatever_the_count(monkeypatch: Any) -> None:
+    # Below REFUSALS_ALLOWED and still a run that read nothing.
+    stage = swept(monkeypatch, ["E14", "SE16"], refuses={"E14", "SE16"})
+
+    assert stage.status == "degraded"
+    assert stage.values["districts_read"] == 0
+
+
+def test_a_quiet_sweep_that_read_everything_stays_ok(monkeypatch: Any) -> None:
+    # Nothing new on either district, which is what most runs are. Same 0
+    # stored as the refused run above, and not a fault.
+    stage = swept(monkeypatch, ["E14", "SE16"], refuses=set())
+
+    assert stage.status == "ok"
+    assert stage.counts.get("refused", 0) == 0
+    assert stage.values["districts_read"] == 2
+
+
+def test_one_refusal_among_districts_that_were_read_is_a_note_not_a_fault(
+    monkeypatch: Any,
+) -> None:
+    stage = swept(monkeypatch, ["E14", "SE16"], refuses={"E14"})
+
+    assert stage.status == "ok"
+    assert stage.counts["refused"] == 1
+    assert stage.values["districts_read"] == 1
+
+
+def test_the_refusal_is_described_once_however_many_districts_hit_it(
+    monkeypatch: Any,
+) -> None:
+    # It used to be once per unbroken streak, so a portal refusing the first
+    # and the tenth district said the same sentence twice about one fault.
+    stage = swept(
+        monkeypatch, ["E14", "SE16", "SW11"], refuses={"E14", "SW11"}
+    )
+
+    assert stage.status == "ok"
+    assert sum("answered 403" in one for one in stage.said) == 1

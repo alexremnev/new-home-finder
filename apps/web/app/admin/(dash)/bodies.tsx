@@ -148,31 +148,53 @@ export async function Health({ span }: { span: string }) {
   const win = windowFor(span);
   const jobs = await jobStatesOnce(win);
 
-  // A job counts as broken when its most recent run was not successful, and as
-  // silent when it has not run at all in the window. Both are degraded; the
-  // wording tells them apart, because the fixes differ.
-  // Running is neither broken nor silent; it is the healthy middle of a run.
+  // Three states and not two, matching the three a run can end in.
   //
-  // `due` is what keeps a nightly job out of this: `purge` has not run in the
-  // past half hour because it is not supposed to have, and calling that
+  // Failed and degraded used to share one red banner, and the red was then the
+  // argument for not recording degraded at all: a portal refused for one sweep
+  // is a thing that happens, and a header that says the system is broken every
+  // time it does is a header nobody reads. So the two are separated here
+  // instead — degraded is amber, something was lost and the next run may well
+  // get it, and red is kept for a job that failed outright or stopped running.
+  //
+  // Running is none of these; it is the healthy middle of a run.
+  //
+  // `due` is what keeps a nightly job out of `silent`: `purge` has not run in
+  // the past half hour because it is not supposed to have, and calling that
   // silence made the banner red around the clock.
-  const broken = jobs.filter(
-    (job) => job.last_status === "failed" || job.last_status === "degraded",
-  );
+  const failing = jobs.filter((job) => job.last_status === "failed");
+  const degraded = jobs.filter((job) => job.last_status === "degraded");
   const silent = jobs.filter((job) => job.runs === 0 && job.due);
-  const healthy = jobs.length > 0 && broken.length === 0 && silent.length === 0;
+  // Silence sits with failed rather than with degraded: a job that is not
+  // running at all is the one fault nothing else on this page reports.
+  const tone =
+    jobs.length === 0 || failing.length > 0 || silent.length > 0
+      ? "bad"
+      : degraded.length > 0
+        ? "warn"
+        : "ok";
 
   return (
-    <div className={healthy ? "verdict verdict-ok" : "verdict verdict-bad"}>
+    <div className={`verdict verdict-${tone}`}>
       <span className="verdict-dot" />
-      <span>{jobs.length === 0 ? "No runs" : healthy ? "Healthy" : "Degraded"}</span>
+      <span>
+        {jobs.length === 0
+          ? "No runs"
+          : tone === "ok"
+            ? "Healthy"
+            : tone === "warn"
+              ? "Degraded"
+              : "Failing"}
+      </span>
       <span className="verdict-note">
         {jobs.length === 0
           ? `nothing ran ${spanWords(win)}`
-          : healthy
+          : tone === "ok"
             ? `all ${jobs.filter((job) => job.runs > 0).length} jobs ran successfully · ${spanWords(win)}`
             : [
-                broken.length > 0 && `${broken.map((j) => j.job).join(", ")} failing`,
+                failing.length > 0 && `${failing.map((j) => j.job).join(", ")} failing`,
+                degraded.length > 0 &&
+                  `${degraded.map((j) => j.job).join(", ")} degraded`,
                 silent.length > 0 && `${silent.map((j) => j.job).join(", ")} silent`,
               ]
                 .filter(Boolean)
@@ -199,7 +221,9 @@ export async function faultsPage(
     rows: shown.map((fault) => (
       <div key={fault.kind + fault.detail} className="log-line">
         <span className="log-when">{at(fault.last_at)}</span>
-        <span className="log-level bad">{fault.kind}</span>
+        <span className={`log-level ${fault.level === "error" ? "bad" : "warn"}`}>
+          {fault.kind}
+        </span>
         <span className="log-message">
           {fault.detail}
           {fault.count > 1 ? ` · ×${fault.count}` : ""}

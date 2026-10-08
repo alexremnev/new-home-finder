@@ -126,6 +126,14 @@ export type Problem = {
   detail: string;
   count: number;
   last_at: string | null;
+  /**
+   * How loud the row should be. A warning is something the system expected and
+   * handled — a portal refusing one district and the proxy carrying the rest —
+   * and painting it the same red as a stalled delivery queue taught me to stop
+   * reading the panel. The level comes from the event's own `level`, which the
+   * worker has always set correctly; only this panel was flattening it.
+   */
+  level: "warn" | "error";
 };
 
 /**
@@ -152,17 +160,22 @@ export type Problem = {
  */
 export async function problems(win: Win): Promise<Problem[]> {
   return query<Problem>(
-    `SELECT 'run failed' AS kind,
+    `SELECT CASE WHEN bool_or(status = 'failed') THEN 'run failed'
+                 ELSE 'run degraded' END AS kind,
             -- job_runs records the job and the error, and no source: a run is a
             -- job, and which source it touched is a property of its stages.
             job || coalesce(' · ' || left(error, 90), '') AS detail,
             count(*)::int AS count,
-            max(started_at)::text AS last_at
+            max(started_at)::text AS last_at,
+            CASE WHEN bool_or(status = 'failed') THEN 'error'
+                 ELSE 'warn' END AS level
        FROM job_runs
       WHERE status IN ('failed', 'degraded')
         AND started_at >  now() - make_interval(mins => $1::int)
         AND started_at <= now() - make_interval(mins => $2::int)
-      GROUP BY 1, 2
+      -- Not GROUP BY 1, 2: the first column is now an aggregate over the
+      -- statuses in the group, so it cannot also be grouped on.
+      GROUP BY job, left(error, 90)
 
      UNION ALL
      -- One row per job, not one per distinct message.
@@ -175,7 +188,8 @@ export async function problems(win: Win): Promise<Problem[]> {
      --
      -- The column here is ts, not created_at. Every other table uses
      -- created_at, which is exactly why this one is easy to get wrong.
-     SELECT 'error logged',
+     SELECT CASE WHEN bool_or(e.level = 'error') THEN 'error logged'
+                 ELSE 'warning logged' END,
             r.job
               || coalesce(' · ' || e.stage, '')
               || ' · ' || left(
@@ -184,17 +198,22 @@ export async function problems(win: Win): Promise<Problem[]> {
               || CASE WHEN count(DISTINCT e.message) > 1
                       THEN ' (+' || (count(DISTINCT e.message) - 1) || ' other)'
                       ELSE '' END,
-            count(*)::int, max(e.ts)::text
+            count(*)::int, max(e.ts)::text,
+            CASE WHEN bool_or(e.level = 'error') THEN 'error' ELSE 'warn' END
        FROM job_events e
        JOIN job_runs r ON r.id = e.run_id
       WHERE e.level IN ('warn', 'error')
         AND e.ts >  now() - make_interval(mins => $1::int)
         AND e.ts <= now() - make_interval(mins => $2::int)
-      GROUP BY 1, r.job, e.stage
+      -- A warn-only group and a group with one error in it are two different
+      -- rows now, so the kind is an aggregate and the ordinal has to go.
+      GROUP BY r.job, e.stage
 
      UNION ALL
+     -- A message the parser could not read is one listing missed, not a
+     -- broken system: the feed carries plenty that was never a listing.
      SELECT 'unparseable', coalesce(left(parse_error, 110), 'no reason recorded'),
-            count(*)::int, max(received_at)::text
+            count(*)::int, max(received_at)::text, 'warn'
        FROM source_messages
       WHERE status = 'unparseable'
         AND received_at >  now() - make_interval(mins => $1::int)
@@ -216,7 +235,7 @@ export async function problems(win: Win): Promise<Problem[]> {
      -- repeating it in the text: the when column already renders it, in
      -- London, which a to_char here would not have been.
      SELECT 'nothing read', 'nothing stored in this range',
-            1, max(stored_at)::text
+            1, max(stored_at)::text, 'error'
        FROM source_messages
       WHERE stored_at <= now() - make_interval(mins => $2::int)
      HAVING $1::int - $2::int >= 6 * 60
@@ -227,7 +246,7 @@ export async function problems(win: Win): Promise<Problem[]> {
      -- waiting for a shut window to reopen, which is the system working and
      -- lasts up to two days. See 0055; the Held tile is where those are shown.
      SELECT 'delivery stalled', 'queued with nothing holding them',
-            count(*)::int, min(created_at)::text
+            count(*)::int, min(created_at)::text, 'error'
        FROM queued_notifications
       WHERE held IS NULL
         AND created_at <  now() - interval '1 hour'

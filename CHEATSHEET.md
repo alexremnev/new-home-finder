@@ -466,6 +466,10 @@ SELECT sw.source_key,
 --
 -- Что значат счётчики:
 --   districts  сколько районов взято в этот прогон (бюджет — 25)
+--   read       сколько из них реально прочитано. Ноль при непустом refused —
+--              прогон не принёс ничего и записывается degraded, сколько бы
+--              отказов это ни было: zoopla_london обходит одно имя, так что
+--              один отказ — это весь прогон
 --   seen       сколько объявлений портал показал всего
 --   new        из них незнакомых нам
 --   stored     сколько строк реально записано (new минус копии)
@@ -491,6 +495,7 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        round((s.counters->>'bytes')::numeric / 1048576, 2)  AS mb,
        round((s.counters->>'proxy_bytes')::numeric / 1048576, 2) AS mb_proxy,
        (s.counters->>'districts')::int                      AS districts,
+       (s.counters->>'districts_read')::int                 AS read,
        (s.counters->>'seen')::int                           AS seen,
        (s.counters->>'new')::int                            AS new,
        (s.counters->>'stored')::int                         AS stored,
