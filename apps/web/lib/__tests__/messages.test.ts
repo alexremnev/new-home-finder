@@ -87,19 +87,30 @@ describe("the announcement", () => {
     expect(text).toContain("/stop — delete my filter");
   });
 
-  it("reads the same after a change as it does the first time", () => {
-
-    // One message for both, so there is nothing to keep in step. The test names
-    // the requirement: a replacement filter is confirmed in full, identically.
-    expect(criteriaSet(full)).toBe(criteriaSet(full));
-    expect(criteriaSet(full)).not.toContain("replaces");
-    expect(criteriaSet(full)).not.toContain("updated");
+  it("says a change was a change", () => {
+    // What somebody who has just edited their filter came back to the chat to
+    // find out. "Your search is set" cannot answer it: it reads the same
+    // whether the new criteria saved or the old ones are still running.
+    const text = criteriaSet(full, true);
+    expect(text.startsWith("✅ Your search is updated")).toBe(true);
+    expect(text).toContain("replaced");
+    // Still the promise that follows from it, which is the same promise.
+    expect(text).toContain("the moment a new listing matches");
   });
 
-  it("lists every criterion, not a summary of what changed", () => {
-    const text = criteriaSet(full);
-    for (const line of criteriaCard(full).split("\n")) {
-      expect(text).toContain(line);
+  it("does not claim a first filter replaced anything", () => {
+    expect(criteriaSet(full)).not.toContain("updated");
+    expect(criteriaSet(full)).not.toContain("replaced");
+  });
+
+  it("lists every criterion either way, not a summary of what changed", () => {
+    // The receipt is the point, and it is the half that must not differ: the
+    // card is built once and both openings sit above the same thing.
+    for (const text of [criteriaSet(full), criteriaSet(full, true)]) {
+      for (const line of criteriaCard(full).split("\n")) {
+        expect(text).toContain(line);
+      }
+      expect(text).toContain("/stop — delete my filter");
     }
   });
 });

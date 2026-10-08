@@ -90,18 +90,29 @@ export function criteriaCard(criteria: Criteria): string {
   return lines.join("\n");
 }
 
-// The same message whether this is a first filter or a replacement. Saving the
-// form sets backfill_from to now either way, so the closing sentence is equally
-// true of both, and a person who has just changed their criteria wants to read
-// the criteria rather than be told that they changed them.
-export function criteriaSet(criteria: Criteria): string {
-  return [
-    "✅ Your search is set — I'll message you the moment a new listing matches.",
-    "",
-    criteriaCard(criteria),
-    "",
-    COMMAND_HELP,
-  ].join("\n");
+/**
+ * What somebody is told the moment their filter is live.
+ *
+ * `replaced` is whether this one took the place of a filter that was already
+ * running. The body is the same either way — every criterion, in full, so the
+ * message is the receipt — but the opening line has to say which happened. A
+ * person who has just changed their search came back to this chat to check that
+ * the change took, and "your search is set" answers a different question: it
+ * reads the same whether the new criteria saved or the old ones are still
+ * running, which is the one thing they are looking for.
+ *
+ * One function rather than two, so the half that matters cannot drift: the card
+ * below the line is built once.
+ */
+export function criteriaSet(criteria: Criteria, replaced = false): string {
+  const opening = replaced
+    ? [
+        "✅ Your search is updated — the filter you had before is replaced.",
+        "I'll message you the moment a new listing matches.",
+      ]
+    : ["✅ Your search is set — I'll message you the moment a new listing matches."];
+
+  return [...opening, "", criteriaCard(criteria), "", COMMAND_HELP].join("\n");
 }
 
 export const LINK_EXPIRED =

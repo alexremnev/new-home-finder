@@ -193,9 +193,14 @@ async function start(chatId: string, token: string | null): Promise<void> {
     return sendToForm(chatId, false);
   }
 
-  type Claim = null | { userId: number };
+  // `replaced` is for the message at the end: whether a filter that was already
+  // running has just been taken out of service by this one. Answered by the
+  // UPDATE that does it rather than guessed at from the merge — a chat that was
+  // linked before is not the same thing as a filter that was live.
+  type Claim = null | { userId: number; replaced: boolean };
 
   const claimed: Claim = await transaction<Claim>(async (run) => {
+    let replaced = false;
 
     const rows = await run(
       `UPDATE user_tokens SET used_at = now()
@@ -226,9 +231,14 @@ async function start(chatId: string, token: string | null): Promise<void> {
 
     if (existing !== undefined) {
 
-      await run(`UPDATE subscriptions SET active = false WHERE user_id = $1 AND active`, [
-        existing,
-      ]);
+      const stood = await run(
+        `UPDATE subscriptions SET active = false
+          WHERE user_id = $1 AND active
+          RETURNING id`,
+        [existing],
+      );
+      replaced = stood.length > 0;
+
       await run(`UPDATE subscriptions SET user_id = $1 WHERE user_id = $2`, [existing, userId]);
 
       await run(
@@ -268,7 +278,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
     );
 
     await beginSubscription(run, Number(userId));
-    return { userId: Number(userId) };
+    return { userId: Number(userId), replaced };
   });
 
   if (claimed === null) {
@@ -278,7 +288,10 @@ async function start(chatId: string, token: string | null): Promise<void> {
   // Read back rather than trust the form: this is what the filter will actually
   // match on, after the district limit and the rest of enforceLimits.
   const account = await accountForChat(chatId);
-  await reply(chatId, criteriaSet((account?.criteria ?? {}) as Criteria));
+  await reply(
+    chatId,
+    criteriaSet((account?.criteria ?? {}) as Criteria, claimed.replaced),
+  );
 }
 
 async function offerUpgrade(chatId: string, account: Account): Promise<void> {

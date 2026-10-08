@@ -317,9 +317,15 @@ async function handle(number: string, text: string): Promise<string | null> {
     return commanded(number, Number(known[0]?.id), text);
   }
 
-  type Claim = null | { criteria: Criteria };
+  // `replaced` is for the message at the end: whether a filter that was already
+  // running has just been taken out of service by this one. Answered by the
+  // UPDATE that does it rather than guessed at from the merge — a number that
+  // was linked before is not the same thing as a filter that was live.
+  type Claim = null | { criteria: Criteria; replaced: boolean };
 
   const claimed: Claim = await transaction<Claim>(async (run) => {
+    let replaced = false;
+
     const rows = await run(
       `UPDATE user_tokens SET used_at = now()
         WHERE token = $1 AND purpose = 'whatsapp'
@@ -353,9 +359,14 @@ async function handle(number: string, text: string): Promise<string | null> {
     const existing = owner[0]?.user_id as number | undefined;
 
     if (existing !== undefined) {
-      await run(`UPDATE subscriptions SET active = false WHERE user_id = $1 AND active`, [
-        existing,
-      ]);
+      const stood = await run(
+        `UPDATE subscriptions SET active = false
+          WHERE user_id = $1 AND active
+          RETURNING id`,
+        [existing],
+      );
+      replaced = stood.length > 0;
+
       await run(`UPDATE subscriptions SET user_id = $1 WHERE user_id = $2`, [existing, userId]);
       await run(
         `DELETE FROM users u
@@ -398,7 +409,7 @@ async function handle(number: string, text: string): Promise<string | null> {
         WHERE user_id = $1 AND active ORDER BY created_at DESC LIMIT 1`,
       [userId],
     );
-    return { criteria: (found[0]?.criteria ?? {}) as Criteria };
+    return { criteria: (found[0]?.criteria ?? {}) as Criteria, replaced };
   });
 
   if (claimed === null) {
@@ -407,5 +418,5 @@ async function handle(number: string, text: string): Promise<string | null> {
   }
   console.log("wa inbound: linked");
 
-  return criteriaSet(claimed.criteria);
+  return criteriaSet(claimed.criteria, claimed.replaced);
 }
