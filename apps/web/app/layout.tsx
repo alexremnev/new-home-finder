@@ -53,7 +53,6 @@ export const metadata: Metadata = {
     "be first to new listings",
     "London rental notifications",
   ],
-  alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     siteName: "London Home Finder",

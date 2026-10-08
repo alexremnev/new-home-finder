@@ -1,3 +1,7 @@
+// The one page under /admin the middleware lets through unauthenticated,
+// so it is the one that needs saying out loud.
+export const metadata = { robots: { index: false, follow: false } };
+
 export const dynamic = "force-dynamic";
 
 const REASONS: Record<string, string> = {

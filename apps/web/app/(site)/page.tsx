@@ -8,6 +8,12 @@ import {
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
 
+// The canonical lives here and not in the root layout: metadata is
+// inherited, so a canonical up there would have every url on the site —
+// /upgrade, /admin/login, the search-param variants — claim to be a copy
+// of the landing page.
+export const metadata = { alternates: { canonical: "/" } };
+
 export const dynamic = "force-dynamic";
 
 export default async function Page({
