@@ -16,6 +16,18 @@ And `dated` — whether the portal says when each listing first appeared. It
 decides which of the two rules below applies, and they are very different in
 cost.
 
+── what counts as new, and to whom ──────────────────────────────────────────
+
+"Is this listing new" is asked of `listing_sightings` — has *this reader* seen
+this id — and not of `listings`. The two look the same until something else is
+writing to `listings`, and something is: the Telegram feed posts a flat under
+the portal that hosts it, as a push, so it wins the race against a five-minute
+timer almost every time. A reader asking "is there a row" therefore filed most
+of the market as already known and never got as far as deciding whether to
+announce it, which was harmless only for as long as the feed did the
+announcing. See `store.sighted_by`, and `CATCH_UP` for the bound on how far
+back a reader may catch up.
+
 ── the first run problem, and the two answers to it ─────────────────────────
 
 The first time a district is read, everything in it is new to us and almost
@@ -51,6 +63,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from collections.abc import Set as IdSet
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -89,6 +102,24 @@ POSTCODE_BUDGET = 40
 # watch is void — see the note in `collect`. Must exceed the schedule's own
 # overnight pause: nine hours on a weekday, fourteen at the weekend.
 GAP_HOURS = 24
+
+# How long after a listing reaches the database another reader may still treat
+# it as news.
+#
+# This exists because of the race described in `store.sighted_by`: the
+# Telegram feed is a push and the scrapers poll, so the feed stores most flats
+# first and a reader asking "is there a row for this id" concluded it had
+# nothing to do. Asking "have I seen this id" instead closes that, and this
+# bounds how far back the catching-up reaches.
+#
+# Three hours, from the schedules in deploy/systemd: the slowest portal timer
+# is twenty minutes in the busy part of the day and hourly at the quiet ends,
+# so this clears a missed run comfortably at either cadence. What it must NOT
+# clear is the standing backlog — an undated portal announces anything in a
+# settled district, so without a bound the first run after this change would
+# have sent a subscriber every OpenRent flat the feed had ever posted, and
+# spent a few hundred listing pages establishing it.
+CATCH_UP = timedelta(hours=3)
 
 # Consecutive refusals before a run gives up. A portal that has declined three
 # times running is not having a bad moment, and the honest answer is to stop
@@ -162,8 +193,15 @@ class Memory:
     pass learned.
     """
 
-    #: Which of these external ids are already in `listings` for this source.
-    stored: Callable[[list[str]], set[str]]
+    #: Which of these external ids this reader has nothing left to learn
+    #: from. Not the same as "already in `listings`": the Telegram feed stores
+    #: a flat under the portal that hosts it and usually gets there first, and
+    #: a reader that read that as "mine, done" never announced it. See
+    #: `store.sighted_by`.
+    #:
+    #: Read-only, hence the abstract set: the answer is a frozenset, and the
+    #: callers only ask whether an id is in it.
+    stored: Callable[[list[str]], IdSet[str]]
 
     #: Which have already been resolved, and to which district — including the
     #: ones deliberately not stored because they turned out to belong to a
@@ -502,10 +540,18 @@ def _collect(
             read_since = watch.swept_at if watch else None
             # What decides whether any of it is worth telling anybody.
             news_since = watch.settled_at if watch else None
-            def already(ids: list[str]) -> set[str]:
-                return store.known_external_ids(
-                    conn, source_key=portal.key, external_ids=ids
-                )
+            # Not "is this id stored" but "is this id one I have nothing
+            # left to learn from" — see `store.sighted_by`. The reader
+            # label is the source key: that is what the scrapers write in
+            # `listing_sightings`, and what 0059 renamed openrent_v2's rows to.
+            def already(ids: list[str]) -> IdSet[str]:
+                return store.sighted_by(
+                    conn,
+                    source_key=portal.key,
+                    reader=portal.key,
+                    external_ids=ids,
+                    catch_up=CATCH_UP,
+                ).known
 
             memory = Memory(
                 stored=already,
@@ -547,19 +593,34 @@ def _collect(
             stage.count("pages", harvest.pages)
 
             ids = [one.listing.external_id for one in harvest.caught]
-            # id-carrying, because both answers are wanted at once: which of
-            # these are new to us, and which row to record a sighting against
-            # for the ones that are not.
-            have = store.listing_ids_for(
-                conn, source_key=portal.key, external_ids=ids
+            # Both answers at once: which of these this reader has nothing left
+            # to learn from, and — for the ones already stored — which row to
+            # record a sighting against.
+            sighted = store.sighted_by(
+                conn,
+                source_key=portal.key,
+                reader=portal.key,
+                external_ids=ids,
+                catch_up=CATCH_UP,
             )
-            known = set(have)
+            have = dict(sighted.ids)
             fresh = [
-                one for one in harvest.caught if one.listing.external_id not in known
+                one
+                for one in harvest.caught
+                if one.listing.external_id not in sighted.known
             ]
             stage.count("seen", len(harvest.caught))
             stage.count("already_known", len(harvest.caught) - len(fresh))
             stage.count("new", len(fresh))
+            # Stored by somebody else — the feed, almost always — and this is
+            # the first time this reader has caught up with it. The number that
+            # says whether the feed is still winning the race, and the one to
+            # watch when its delivery is switched off: these are precisely the
+            # listings the feed used to announce and this reader now must.
+            stage.count(
+                "caught_up",
+                sum(1 for one in fresh if one.listing.external_id in sighted.ids),
+            )
 
             # One request for the whole district, before the loop, because
             # the loop stores as it goes and a postcode arriving afterwards
@@ -717,7 +778,8 @@ def _announceable(portal: Portal, catch: Catch, since: datetime | None) -> bool:
 
 
 __all__ = [
-    "DISTRICT_BUDGET", "GAP_HOURS", "PAUSE_SECONDS", "POSTCODE_BUDGET",
+    "CATCH_UP", "DISTRICT_BUDGET", "GAP_HOURS", "PAUSE_SECONDS",
+    "POSTCODE_BUDGET",
     "REFUSALS_ALLOWED", "Catch", "Harvest",
     "Kept", "Memory", "Portal", "Sweep", "collect", "keep", "stale_watches",
     "sweep_order",

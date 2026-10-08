@@ -1047,6 +1047,33 @@ async function bucketed(
 // them is salted with the day — so "unique over a week" cannot be asked. What
 // these return is unique visitors per day, which is the honest number, and the
 // total is the sum of those days rather than a count of people.
+//
+// ── which rows the range covers ──────────────────────────────────────────
+//
+// `first_at`, the instant the visitor first appeared — the same column, and so
+// the same arithmetic, as the chart above the tiles. These used to read whole
+// London dates instead, which answered a different question from the one the
+// picker asked: "past 1 day" is a 24-hour window and it touches two dates, so
+// both were read whole, up to 48 hours of visitors went into a tile labelled
+// one day, and the tiles disagreed with the chart beside them.
+//
+// Not `day`, even as a cheap prefilter on its index: that column is written
+// from `toISOString()`, so it is a UTC date, and between midnight and 01:00
+// London in summer it names the day before. A range inside that hour would
+// have excluded exactly the rows it was asking for. The table holds one row per
+// visitor per day, so scanning it is not something worth being clever about.
+//
+// `hits` is the one number the window cannot cut finely: it is a per-day
+// counter on the visitor's row, so a visitor who arrived inside the window
+// brings that whole day's page views with them.
+
+/** The window, as the two clauses every visitor query filters by. */
+const VISIT_WINDOW = `first_at >  now() - make_interval(mins => $1::int)
+        AND first_at <= now() - make_interval(mins => $2::int)`;
+
+function visitWindow(win: Win): [number, number] {
+  return [Math.round(win.mins), Math.round(win.endMins)];
+}
 
 export type VisitDay = { day: string; visitors: number; hits: number };
 
@@ -1056,10 +1083,10 @@ export async function visitorsByDay(win: Win): Promise<VisitDay[]> {
             count(*)::int      AS visitors,
             sum(hits)::int     AS hits
        FROM site_visits
-      WHERE day BETWEEN $1::date AND $2::date
+      WHERE ${VISIT_WINDOW}
       GROUP BY day
       ORDER BY day DESC`,
-    [win.fromDay, win.toDay],
+    visitWindow(win),
   ).catch(() => []);
 }
 
@@ -1254,11 +1281,11 @@ export async function visitorsBy(
   return query<VisitSlice>(
     `SELECT ${column} AS name, count(*)::int AS visitors
        FROM site_visits
-      WHERE day BETWEEN $1::date AND $2::date
+      WHERE ${VISIT_WINDOW}
       GROUP BY ${column}
       ORDER BY visitors DESC, name
       LIMIT $3 OFFSET $4`,
-    [win.fromDay, win.toDay, limit, offset],
+    [...visitWindow(win), limit, offset],
   ).catch(() => []);
 }
 

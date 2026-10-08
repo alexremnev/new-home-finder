@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import psycopg
@@ -340,22 +340,105 @@ def settle_district(conn: Conn, source_key: str, district: str) -> None:
         (source_key, district.upper()),
     )
 
-def known_external_ids(
-    conn: Conn, *, source_key: str, external_ids: list[str]
-) -> set[str]:
+@dataclass(frozen=True)
+class Sighted:
+    """What the database already holds for a batch of one portal's own ids.
 
-    # Asked in one query rather than one per id: the sitemap has no lastmod, so
-    # every run compares its whole list against what is already stored.
+    Two answers from one round trip, because a sweep needs both and they are
+    not the same question. `ids` is every listing already stored, so a sighting
+    can be recorded against the right row. `known` is the subset this reader
+    should *not* treat as news — see `sighted_by` for why those differ.
+    """
+
+    #: external_id -> listing id, for every one of them already stored.
+    ids: dict[str, int]
+
+    #: The ones this reader has nothing left to learn from. Everything else in
+    #: the batch is news to it, whether or not some other reader stored it.
+    known: frozenset[str]
+
+
+def sighted_by(
+    conn: Conn,
+    *,
+    source_key: str,
+    reader: str,
+    external_ids: list[str],
+    catch_up: timedelta,
+) -> Sighted:
+    """What a reader already knows about these ids.
+
+    ── why this is not "is there a row in `listings`" ───────────────────────
+
+    It was, and that was load-bearing in a way nobody chose. The Telegram feed
+    stores a listing under the portal that hosts it — `source_key =
+    'rightmove'`, the portal's own `external_id` — so a flat the feed posted a
+    minute ago is already a row by the time the scraper's five-minute timer
+    comes round. Asked "is there a row", the scraper answered yes, filed the
+    listing as `already_known`, and never reached `_announceable`.
+
+    That was invisible while the feed did the announcing: whichever path got
+    there first sent the alert and `notifications` UNIQUE (user_id, listing_id)
+    discarded the second. Switch the feed's delivery off and the same race
+    becomes a hole — the feed wins it, because it is a push and the scrapers
+    poll, and then nobody announces at all.
+
+    So the question is "has *this reader* seen it", which is what
+    `listing_sightings` records and what 0052 was written to make answerable.
+
+    ── why `catch_up`, and not sightings alone ──────────────────────────────
+
+    On sightings alone, every listing stored by any other path and never seen
+    by this one becomes news again at once — for Rightmove and Zoopla that
+    announces nothing, because they are dated and `_announceable` still holds
+    them to `first_listed > settled_at`, but OpenRent is undated and a settled
+    district would announce its whole backlog in one run. It would also be
+    fetched: OpenRent spends a redirect lookup and a 300KB page per id it
+    considers new, and a few hundred of those exhausts the run's budget, which
+    leaves the district incomplete, which stops it being swept, which voids its
+    watch after a day. A blackout, from a change meant to close a gap.
+
+    A listing stored more than `catch_up` ago is therefore left alone. What the
+    scraper can still catch up on is the last few hours, which is the only part
+    where the race against the feed is actually in play. Everything older is
+    somebody else's history.
+
+    Backfilling `listing_sightings` from `listings` would have done the same
+    job and was rejected: those are the rows the feed-versus-scraper comparison
+    is read from, and inventing a sighting for every listing ever stored would
+    make `feed_first` and `median_lead_secs` say whatever we had written into
+    them. See 0052 on why nothing was backfilled there either.
+    """
+
     if not external_ids:
-        return set()
-    return {
-        str(row["external_id"])
-        for row in conn.execute(
-            "SELECT external_id FROM listings "
-            "WHERE source_key = %s AND external_id = ANY(%s)",
-            (source_key, external_ids),
-        ).fetchall()
-    }
+        return Sighted(ids={}, known=frozenset())
+
+    rows = conn.execute(
+        """
+        SELECT l.external_id,
+               l.id,
+               (g.listing_id IS NOT NULL) AS seen,
+               (l.first_seen_at < now() - %(catch_up)s) AS stale
+          FROM listings l
+          LEFT JOIN listing_sightings g
+                 ON g.listing_id = l.id AND g.reader = %(reader)s
+         WHERE l.source_key = %(source_key)s
+           AND l.external_id = ANY(%(ids)s)
+        """,
+        {
+            "source_key": source_key,
+            "reader": reader,
+            "ids": external_ids,
+            "catch_up": catch_up,
+        },
+    ).fetchall()
+
+    return Sighted(
+        ids={str(row["external_id"]): int(row["id"]) for row in rows},
+        known=frozenset(
+            str(row["external_id"]) for row in rows if row["seen"] or row["stale"]
+        ),
+    )
 
 def enabled_sources(conn: Conn) -> set[str]:
     """Which source keys are switched on.
@@ -372,35 +455,12 @@ def enabled_sources(conn: Conn) -> set[str]:
     }
 
 
-def listing_ids_for(
-    conn: Conn, *, source_key: str, external_ids: list[str]
-) -> dict[str, int]:
-    """external_id -> listing id, for the ones already stored.
-
-    The id-carrying form of `known_external_ids`. A scraper needs both answers
-    at once: which of these are new to us, and — for the ones that are not —
-    which row to record the sighting against. Asking twice would be a second
-    round trip for a question the first one already answered.
-    """
-
-    if not external_ids:
-        return {}
-    return {
-        str(row["external_id"]): int(row["id"])
-        for row in conn.execute(
-            "SELECT id, external_id FROM listings "
-            "WHERE source_key = %s AND external_id = ANY(%s)",
-            (source_key, external_ids),
-        ).fetchall()
-    }
-
-
 def seen_ids(
     conn: Conn, *, source_key: str, external_ids: list[str]
 ) -> dict[str, str | None]:
     """Which of these ids this source has already resolved, and to where.
 
-    Separate from `listing_ids_for` because a listing we decided not to store
+    Separate from `sighted_by` because a listing we decided not to store
     is still a listing we resolved. OpenRent's district search is a
     two-kilometre radius, so a third of what it returns belongs to a
     neighbouring district: those are correctly absent from `listings`, and

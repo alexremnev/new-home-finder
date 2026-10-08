@@ -26,19 +26,30 @@ import {
 // `RangeFrame` owns that transition because the thing it has to mark as busy
 // (the body) is a sibling of the thing that starts it (the picker).
 
-type Busy = { pending: boolean; go: (href: string) => void };
+type Busy = { pending: boolean; go: (href: string, scroll?: boolean) => void };
 
 const Nav = createContext<Busy>({ pending: false, go: () => {} });
+
+/**
+ * The dashboard's one navigation, for anything in the frame that changes the
+ * page: the range picker and the tabs. Sharing it is what makes a tab change
+ * look like the range changes — dimmed body, progress line, nothing unmounted
+ * — rather than a frozen page.
+ */
+export function useNav(): Busy {
+  return useContext(Nav);
+}
 
 export function RangeFrame({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [pending, start] = useTransition();
 
   const go = useCallback(
-    (href: string) => {
+    (href: string, scroll = false) => {
       // scroll: false — the panel you were reading when you changed the range
-      // is the panel you want to still be looking at.
-      start(() => router.push(href, { scroll: false }));
+      // is the panel you want to still be looking at. A tab asks for the top,
+      // because it is a different page.
+      start(() => router.push(href, { scroll }));
     },
     [router],
   );

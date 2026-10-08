@@ -17,11 +17,15 @@ export async function moreLastRuns(page: number): Promise<MorePage> {
   return lastRunsPage(page);
 }
 
+// Serves both the pager and the two filters above the list: the filters ask
+// for page 1 of a different question, which is the same query with a different
+// `job`. `total` comes back with it because the footer's count changes with
+// the filter too.
 export async function moreLog(
   span: string,
   job: string | undefined,
   level: string | undefined,
   page: number,
-): Promise<MorePage> {
+): Promise<MorePage & { total: number }> {
   return logRows(span, job, level, page);
 }

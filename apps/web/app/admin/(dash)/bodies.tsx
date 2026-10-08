@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import type { PortalRun, ReaderOverlap, ReaderTally } from "@/lib/admin-queries";
 import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
@@ -13,6 +11,7 @@ import { ago, at } from "@/lib/when";
 import { jobStatesOnce, windowFor } from "./cached";
 import { Metric, RunBars, Series, Why } from "./charts";
 import { Paged, type MorePage } from "./paged";
+import { LogView } from "./log";
 import { moreFaults, moreLastRuns, moreLog } from "./more";
 import { bucketMinutes, spanWords } from "./span";
 
@@ -912,71 +911,27 @@ export async function LogLines({
   // link: any value means "only runs worth a look".
   level?: string;
 }) {
-  const win = windowFor(span);
-  const bad = Boolean(level);
+  // The first page for whatever the URL asked for; every page and every change
+  // of filter after this one is a server action, so changing the filter costs
+  // this one query rather than a re-render of the whole tab. See ./log.tsx.
   const [first, jobNames] = await Promise.all([
     logRows(span, job, level, 1),
     knownJobs().catch(() => []),
   ]);
 
-  // The two filters stay in the URL — they are part of what you would send
-  // somebody — while the position in the list does not. Changing a filter is a
-  // navigation; reading further down is not.
-  const link = (over: Record<string, string | undefined>) => {
-    const next = new URLSearchParams();
-    for (const [name, value] of Object.entries({ w: win.key, job, level, ...over })) {
-      if (value) next.set(name, value);
-    }
-    return `/admin?${next.toString()}`;
-  };
-
   return (
-    <>
-      <div className="dash-head" style={{ marginBottom: "0.6rem" }}>
-        <div className="window-picker">
-          <Link className={!job ? "win win-on" : "win"} href={link({ job: undefined })}>
-            all jobs
-          </Link>
-          {jobNames.map((name) => (
-            <Link
-              key={name}
-              className={job === name ? "win win-on" : "win"}
-              href={link({ job: name })}
-            >
-              {name}
-            </Link>
-          ))}
-        </div>
-        <div className="window-picker">
-          <Link
-            className={bad ? "win win-on" : "win"}
-            href={link({ level: bad ? undefined : "bad" })}
-          >
-            only with problems
-          </Link>
-        </div>
-      </div>
-
-      {first.total === 0 ? (
-        <p className="metric-note">
-          {bad
-            ? "No run in this range had anything to complain about."
-            : "No job ran in this range."}
-        </p>
-      ) : (
-        // Keyed on the filters: a different question is a different list, and
-        // the pages already loaded for the old one must not be kept.
-        <Paged
-          key={`${win.key}|${job ?? ""}|${level ?? ""}`}
-          load={moreLog.bind(null, span, job, level)}
-          more={first.more}
-          per={LOG_PER_PAGE}
-          total={first.total}
-          unit="runs"
-        >
-          {first.rows}
-        </Paged>
-      )}
-    </>
+    // Keyed on what the server was asked for: changing the range is a real
+    // navigation and has to drop the rows this panel is holding, while a
+    // filter change from inside the panel does not go through the server at
+    // all and so leaves the key alone.
+    <LogView
+      key={`${span}|${job ?? ""}|${level ?? ""}`}
+      span={windowFor(span).key}
+      jobNames={jobNames}
+      job={job}
+      level={level}
+      per={LOG_PER_PAGE}
+      first={first}
+    />
   );
 }
