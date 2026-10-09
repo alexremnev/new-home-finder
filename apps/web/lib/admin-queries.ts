@@ -696,6 +696,9 @@ export const SCHEDULED_JOBS: {
   { job: "drain", everyMins: 2 },
   { job: "rollup", everyMins: 2 },
   { job: "zoopla_london", everyMins: 5 },
+  // The same timer as zoopla_london, deliberately: this reader's own paging
+  // cycle is measured in runs of it. See the unit file.
+  { job: "spareroom", everyMins: 5 },
   { job: "rightmove", everyMins: 10 },
   // Stopped on purpose, so its silence is the intended state and not a fault.
   // `zoopla_london` reads the whole city in one search, which is what this

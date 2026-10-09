@@ -43,6 +43,20 @@ def _openrent() -> Any:
     return OpenRent()
 
 
+def _spareroom() -> Any:
+    """SpareRoom, read as a rotating window over the whole London feed.
+
+    A region reader like `zoopla_london`, and for a different reason: Zoopla
+    reads the city in one search because it is cheaper than reading twenty
+    districts, while SpareRoom has no district page to read at all — an outcode
+    url redirects into the one place its robots.txt forbids. See the module.
+    """
+
+    from worker.sources.spareroom import SpareRoom
+
+    return SpareRoom()
+
+
 def _zoopla_london() -> Any:
     """Zoopla, read as one search of the whole city rather than district by
     district.
@@ -69,6 +83,7 @@ PORTAL_JOBS: dict[str, Any] = {
     "zoopla": _zoopla,
     "zoopla_london": _zoopla_london,
     "openrent": _openrent,
+    "spareroom": _spareroom,
 }
 
 def run_job(

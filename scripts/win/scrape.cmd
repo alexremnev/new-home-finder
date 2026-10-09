@@ -1,10 +1,11 @@
 @echo off
 REM Run the portal scrapers here, now, and show what happened.
 REM
-REM   scrape.cmd                       all three, in order
+REM   scrape.cmd                       the three this machine runs, in order
 REM   scrape.cmd zoopla                just that one
+REM   scrape.cmd spareroom             a server reader, by hand
 REM   scrape.cmd rightmove --dry-run   flags are passed straight through
-REM   scrape.cmd --dry-run             all three, flags only
+REM   scrape.cmd --dry-run             the default three, flags only
 REM
 REM ── why this machine is a good place to run them ────────────────────────────
 REM
@@ -36,13 +37,24 @@ for %%I in ("%~dp0..\..") do set PROJECT=%%~fI
 set PY=%PROJECT%\.venv\Scripts\python.exe
 set LOGDIR=%PROJECT%\logs
 REM Trailing space included on purpose — see the match below.
-set KNOWN=rightmove zoopla openrent portals 
+REM
+REM Every job name `python -m worker` accepts as a portal reader, not only the
+REM ones this machine runs on a schedule: this list is the typo guard below, and
+REM rejecting a name that really exists is worse than the typo it is catching.
+REM `zoopla_london` and `spareroom` are both server jobs and both perfectly
+REM runnable here by hand.
+set KNOWN=rightmove zoopla zoopla_london spareroom openrent portals 
 
 REM ── what to run ────────────────────────────────────────────────────────────
 REM
 REM Named here rather than deferred to the `portals` job, so that one reader
 REM failing does not stop the next: `portals` is a single run with a single exit
 REM code, and a Zoopla outage would take Rightmove's listings down with it.
+REM
+REM The three this machine exists to run — the ones the server's address is
+REM refused by, plus Rightmove. `spareroom` is deliberately not among them: the
+REM server reads it directly and a second schedule here would only duplicate
+REM the traffic. It is still accepted as an argument, for a run by hand.
 set JOBS=rightmove zoopla openrent
 set PASSTHRU=
 

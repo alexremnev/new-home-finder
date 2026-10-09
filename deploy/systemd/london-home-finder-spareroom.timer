@@ -1,0 +1,99 @@
+# SpareRoom, read as a rotating window over the whole London feed.
+#
+# ── the same schedule as zoopla_london, and why that is the right one ────
+#
+#   weekdays  07:20–17:00   every 5 minutes
+#   weekdays  17:00–22:00   every 15 minutes
+#   weekdays  22:00–07:20   not at all
+#   weekends  10:00–20:00   every 15 minutes
+#
+# Deliberately identical to `london-home-finder-zoopla_london.timer`, because
+# this reader's own cycle is measured against that interval: it reads six of a
+# sixty-page window per run, so ten consecutive runs cover the window once.
+# At five minutes that is a fifty-minute cycle. Change the interval and the
+# cycle changes with it — a quarter-hourly band strides three slices at a time,
+# still covering everything but over more runs, which is the trade the evening
+# and the weekend are already making.
+#
+# ── what it costs, measured ──────────────────────────────────────────────
+#
+# One search page is 31KB across the wire and carries ten listings, measured
+# against the live site on 9 October 2026. Six pages a run is 186KB; about 136
+# runs on a weekday is some 25MB a day, and 40 runs at the weekend about 7MB.
+# Three to four times `zoopla_london`, for a source the Telegram feed does not
+# publish at all.
+#
+# Advert pages are extra and rare: one is read only for a listing that is new
+# *and* in a district somebody subscribes to, capped at fifteen a run. With the
+# districts the seed enables that is usually nought.
+#
+# ── why this reader cannot do better than ~25 minutes ────────────────────
+#
+# Worth knowing before anybody reads the five-minute interval as a promise.
+# SpareRoom's robots.txt forbids `sort_by=days_since_placed`, so the feed can
+# only be read in its default order — which is their own ranking, driven by
+# paid upgrades. Measured the same day: pages 1-8 read an hour apart held 87 of
+# the same 88 adverts, while the newest listing ids turned up on pages 1, 20 and
+# 40 alike. So there is no front of the feed to watch; the window has to be
+# walked, and a new advert waits up to one cycle. See the module note in
+# worker/sources/spareroom.py.
+#
+# ── the minute is :01/5, which is the last free series ───────────────────
+#
+# The two readers on the server must not start in the same minute as this one.
+# Rightmove takes the top of the five-minute grid — :00, :05, :10… — and
+# zoopla_london takes :03, :08, :13…. That leaves :01, :02 and :04, and of
+# those :01 and :02 are each a minute from one series and two from the other,
+# where :04 is a minute from both. So :01.
+#
+# One minute of separation is all that is available and it is enough: the
+# advisory lock means two runs of the *same* job cannot overlap at all — the
+# second records `skipped_locked` — and two different readers overlapping costs
+# nothing but bandwidth on one machine.
+#
+# Hence 30 seconds of jitter rather than Rightmove's 90, for the same reason
+# zoopla_london uses 30: at a five-minute period, ninety seconds is a third of
+# the interval and would both slide runs into each other and undo this spacing.
+#
+# ── the zone is stated here, not taken from the machine ──────────────────
+#
+# Every line carries `Europe/London`. Without it systemd reads OnCalendar in
+# whatever zone the machine happens to be in: the server runs on UTC, so the
+# schedule would sit an hour early through British Summer Time, quietly correct
+# itself in October and break again in March.
+#
+# Needs systemd 252 or later. Check a line with
+#
+#     systemd-analyze calendar 'Mon..Fri 08..16:01/5 Europe/London'
+
+[Unit]
+Description=Read the whole of SpareRoom London as a rotating window
+
+[Timer]
+Unit=london-home-finder@spareroom.service
+
+# Weekdays, the working day. Two lines because the day does not start on the
+# hour: the first covers the runs before 08:00, the second the whole hours
+# after it. Folded into one `07..16` line it would add runs at 07:01 and 07:06
+# that the schedule deliberately excludes.
+OnCalendar=Mon..Fri 07:21/5 Europe/London
+OnCalendar=Mon..Fri 08..16:01/5 Europe/London
+# Weekday evenings, quarter-hourly.
+OnCalendar=Mon..Fri 17..21:01/15 Europe/London
+# Weekends, a shorter day and the same quarter-hour.
+OnCalendar=Sat,Sun 10..19:01/15 Europe/London
+
+# Half a minute of jitter — enough to be off the stroke of the minute, small
+# enough that two runs of a five-minute timer cannot meet.
+RandomizedDelaySec=30s
+AccuracySec=15s
+
+# Deliberately NOT Persistent. A run missed because the machine was off should
+# be skipped, not fired the moment it boots. This reader in particular gains
+# nothing from catching up: its slice is a function of the clock, so a late run
+# reads the slice belonging to the minute it actually starts in, and the next
+# scheduled run takes the one after that either way.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

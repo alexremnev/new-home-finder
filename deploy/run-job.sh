@@ -17,8 +17,9 @@
 #   bash deploy/run-job.sh rightmove --dry-run
 #   bash deploy/run-job.sh zoopla
 #   bash deploy/run-job.sh zoopla_london    # the whole city in one search
+#   bash deploy/run-job.sh spareroom        # a slice of the SpareRoom feed
 #   bash deploy/run-job.sh openrent
-#   bash deploy/run-job.sh portals          # all three in one go
+#   bash deploy/run-job.sh portals          # every reader in one go
 #   bash deploy/run-job.sh drain
 #
 # A run with no flags can equally be `systemctl start london-home-finder@zoopla`,
@@ -34,7 +35,7 @@ USER_NAME=finder
 if [ "$#" -eq 0 ]; then
   echo "Usage: bash deploy/run-job.sh <job> [flags]" >&2
   echo "Jobs: ingest, rightmove, zoopla, zoopla_london," >&2
-  echo "      openrent, portals," >&2
+  echo "      spareroom, openrent, portals," >&2
   echo "      drain, rollup, scrape" >&2
   exit 2
 fi

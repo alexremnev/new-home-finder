@@ -477,6 +477,11 @@ SELECT sw.source_key,
 --              stored без sent означает район, который ещё дочитывается
 --   mb         ровно то, что прошло по сети в сжатом виде (счётчик libcurl),
 --              а не размер распакованных страниц — разница десятикратная
+--   window_from  только у spareroom: с какой страницы ленты начался этот
+--              прогон. Читатель крутит окно из 60 страниц по 6 за прогон, так
+--              что эта цифра должна меняться от прогона к прогону; если она
+--              стоит на месте — значит прогоны попадают в один пятиминутный
+--              слот, то есть таймер не тикает
 --   mb_proxy   сколько из этого ушло через резидентский прокси: эту цифру
 --              сверять со счётом DataImpulse
 --   refused    портал отказал; смотреть address_refused рядом
@@ -521,7 +526,7 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY je.id DESC LIMIT 1
   ) AS e ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'openrent', 'portals')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent', 'portals')
  ORDER BY r.started_at DESC;
 
 
@@ -529,7 +534,11 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
 --
 -- Rightmove отдаёт серверу напрямую. Zoopla отвечает адресу сервера 403, а
 -- OpenRent — 405, поэтому они либо стоят в планировщике на Windows, либо идут
--- через резидентский прокси. Здесь видно, что где крутится и во что обходится.
+-- через резидентский прокси. SpareRoom отдаёт напрямую и прокси ему запрещён в
+-- коде: mb_proxy у него обязан быть нулём, а непустой `refused_and_pinned` в
+-- счётчиках стадии означает, что он начал отказывать адресу сервера и прогон
+-- сознательно не пошёл платить. Здесь видно, что где крутится и во что
+-- обходится.
 SELECT coalesce(r.host, '(до 0044)')                        AS host,
        r.job,
        count(*)                                              AS runs,
@@ -554,7 +563,7 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY js.started_at LIMIT 1
   ) AS s ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'openrent', 'portals')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent', 'portals')
  GROUP BY 1, 2
  ORDER BY 1, 2;
 

@@ -243,6 +243,12 @@ class Portal(Protocol):
     #: every district in London. See worker.sources.zoopla.REGION.
     regions: tuple[str, ...]
 
+    #: Hosts this reader must never reach through the paid proxy, whatever
+    #: SCRAPE_PROXY says. Optional; absent means the usual escalation.
+    #:
+    #: See `_pin_direct` for why a reader would want this and what it costs.
+    direct_only: tuple[str, ...]
+
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
     ) -> str | None:
@@ -251,6 +257,20 @@ class Portal(Protocol):
         Optional: a portal that always states one — or that has nowhere to
         look — returns None and costs nothing. See worker.sources.postcode for
         why this is worth a request per stored listing.
+        """
+
+    def enrich(self, catch: Catch, get: Fetcher, stage: Stage) -> Catch:
+        """The same catch with whatever only the listing's own page states.
+
+        Optional, and for one situation: a portal whose *search* page withholds
+        fields the filters ask about. SpareRoom's cards carry the rent, the
+        outcode and the availability date but say nothing about furnishing,
+        pets or the minimum term, which are three of the nine filters the web
+        form offers — so for that reader the page has to be read or those
+        filters silently do nothing.
+
+        Called only for a listing in a district somebody subscribes to, and the
+        portal owns the budget. See `_enrich`.
         """
 
     def harvest(
@@ -387,6 +407,82 @@ def _derive_postcodes(fresh: list[Catch], stage: Stage) -> dict[str, str]:
     return found
 
 
+def _pin_direct(portal: Portal, fetcher: Fetcher) -> None:
+    """Pin a portal's own hosts to a direct route, whatever SCRAPE_PROXY says.
+
+    `Fetcher.get` treats the proxy as an escalation: refused directly, ask
+    again through it. That is right for a portal we have already decided to
+    pay for, and wrong for one still being watched — the escalation is silent,
+    and the first evidence of it would be next month's invoice.
+
+    So a reader can pin its own host and the pin beats the environment. What
+    it costs is that a portal which starts refusing this address simply stops
+    being read, rather than quietly carrying on at a price. The refusal is
+    still recorded either way — `refused_this_address` in the stage counters
+    and a warn in the run log — which is what the decision wants making on.
+
+    Added to `direct_hosts` rather than replacing it: that tuple already holds
+    the image CDNs, and dropping those would put every photograph on the
+    metered connection. See `Fetcher.direct_hosts`.
+    """
+
+    extra = tuple(
+        one.strip().lower()
+        for one in (getattr(portal, "direct_only", ()) or ())
+        if one.strip() and one.strip().lower() not in fetcher.direct_hosts
+    )
+    if extra:
+        fetcher.direct_hosts = fetcher.direct_hosts + extra
+
+
+def _enrich(
+    portal: Portal,
+    fresh: list[Catch],
+    wanted: set[str],
+    get: Fetcher,
+    stage: Stage,
+) -> list[Catch]:
+    """Each catch with whatever only its own listing page states.
+
+    Optional, exactly like `postcode_for`: a portal whose search page already
+    answers every filter does not implement it and pays nothing.
+
+    Only for a district somebody is waiting for. A region reader sweeps the
+    whole city, so without that gate this would fetch a page for every new
+    listing in London on every run — and `worth_a_page` below is the same
+    judgement applied to the same question for the postcode.
+
+    The portal owns the budget and hands the catch back unchanged once it is
+    spent; this decides who is worth asking about, not how much may be spent.
+    A limit belongs beside the measurement of what one page costs, which is in
+    the reader.
+    """
+
+    ask = getattr(portal, "enrich", None)
+    if ask is None:
+        return fresh
+    filled: list[Catch] = []
+    for one in fresh:
+        if one.listing.postcode_district not in wanted:
+            filled.append(one)
+            continue
+        try:
+            filled.append(ask(one, get, stage))
+        except (Refused, OSError) as error:
+            # One unreadable page is not worth losing the listing over: it is
+            # stored with what the search page said, which is most of it, and
+            # the filters it could not answer are left unstated rather than
+            # guessed. `match._range` lets a missing value through.
+            stage.count("enrich_unreachable")
+            stage.log(
+                "info",
+                f"{one.listing.external_id}: could not read the listing page — "
+                f"{type(error).__name__}",
+            )
+            filled.append(one)
+    return filled
+
+
 def _fill_postcode(
     portal: Portal, catch: Catch, get: Fetcher, stage: Stage
 ) -> Catch:
@@ -452,6 +548,7 @@ def collect(
     """Read every subscribed district on one portal and store what is new."""
 
     fetcher = get or Fetcher.from_env()
+    _pin_direct(portal, fetcher)
     # Ours to close if we made it; the caller's to keep if they passed one.
     mine = get is None
     stored: list[int] = []
@@ -642,6 +739,13 @@ def _collect(
                 sum(1 for one in fresh if one.listing.external_id in sighted.ids),
             )
 
+            # The fields a search page withheld, for the listings worth a page.
+            # Before the postcodes, not after: for a portal that states no full
+            # postcode anywhere, the page this reads is also the only place its
+            # coordinates appear, and `_derive_postcodes` has nothing to work
+            # from without them. See worker.sources.spareroom.
+            fresh = _enrich(portal, fresh, wanted_set, fetcher, stage)
+
             # One request for the whole district, before the loop, because
             # the loop stores as it goes and a postcode arriving afterwards
             # would arrive after the duplicate rule had already run without
@@ -780,15 +884,34 @@ def _collect(
             # the difference between "we are paying for traffic" and "we are
             # paying for traffic because we have to" is this line.
             stage.set("refused_this_address", sorted(fetcher.blocked))
-            stage.log(
-                "info" if fetcher.proxy else "warn",
-                f"{', '.join(sorted(fetcher.blocked))} refused this server's "
-                + (
-                    "address; the run went through the proxy instead"
-                    if fetcher.proxy
-                    else "address and no proxy is configured — set SCRAPE_PROXY"
-                ),
+            # A pinned host was never going to be retried, so neither half of
+            # the sentence below is true of it: there is a proxy configured and
+            # the run did not use it. Said separately, because "we chose not to
+            # pay for this one" and "we cannot pay for this one" are different
+            # pieces of news and only the first needs no action.
+            pinned = sorted(
+                one for one in fetcher.blocked if fetcher.never_proxy(f"https://{one}/")
             )
+            if pinned:
+                stage.set("refused_and_pinned", pinned)
+                stage.log(
+                    "warn",
+                    f"{', '.join(pinned)} refused this server's address and is "
+                    f"pinned to a direct route, so nothing was retried through "
+                    f"the proxy; paying for this one would be a code change, "
+                    f"which is the decision this line exists to prompt",
+                )
+            rest = sorted(set(fetcher.blocked) - set(pinned))
+            if rest:
+                stage.log(
+                    "info" if fetcher.proxy else "warn",
+                    f"{', '.join(rest)} refused this server's "
+                    + (
+                        "address; the run went through the proxy instead"
+                        if fetcher.proxy
+                        else "address and no proxy is configured — set SCRAPE_PROXY"
+                    ),
+                )
         # What DataImpulse will invoice. Zero with no proxy configured, and
         # always below `bytes` while pictures stay on the CDN exemption.
         stage.set("proxy_bytes", fetcher.proxy_wire)

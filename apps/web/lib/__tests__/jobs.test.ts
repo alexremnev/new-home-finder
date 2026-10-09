@@ -14,6 +14,7 @@ const DAY = 24 * 60;
 describe("whose silence means something", () => {
   it("expects a reader that ticks every few minutes on any window", () => {
     expect(expectation("zoopla_london", 30)).toEqual({ timed: true, due: true });
+    expect(expectation("spareroom", 30)).toEqual({ timed: true, due: true });
     expect(expectation("ingest", 30)).toEqual({ timed: true, due: true });
   });
 
