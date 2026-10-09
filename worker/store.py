@@ -1250,14 +1250,40 @@ def unseeded_subscriptions(conn: Conn) -> list[Row]:
     )
 
 def recent_listings(conn: Conn, *, days: int, limit: int) -> list[Row]:
+    """The pool a new subscriber's starter batch is chosen from.
+
+    Only listings some announcing reader has actually seen. `queue_matches`
+    gates a live alert on `sources.announces` at the moment a reader hands its
+    catch over (see 0060), and the starter batch is the other way a listing
+    reaches somebody — it reads `listings` directly, long after whoever stored
+    the row has gone, so the same rule has to be asked of the row itself.
+
+    Without this, muting the feed muted the alerts and not the welcome: every
+    new subscriber's first five flats were drawn from everything stored,
+    including what only the feed ever found. Which also quietly spoiled the
+    measurement the muting exists for — a listing no scraper saw was still
+    being sent, so "would this have reached them without the feed" had an
+    answer the Coverage panel could not see.
+
+    `listing_sightings` is the record of who saw what (0052) and nothing before
+    it was backfilled, so this filter can only be used over a window shorter
+    than that table's history. `SEED_DAYS` is three; the table is months old.
+    """
 
     columns = ", ".join(_LISTING_VIEW_COLUMNS)
     return list(
         conn.execute(
             f"""
-            SELECT id, first_seen_at, {columns} FROM listings
+            SELECT id, first_seen_at, {columns} FROM listings l
              WHERE status = 'active'
                AND first_seen_at > now() - make_interval(days => %s)
+               AND EXISTS (
+                     SELECT 1
+                       FROM listing_sightings s
+                       JOIN sources src ON src.key = s.reader
+                      WHERE s.listing_id = l.id
+                        AND src.announces
+                   )
              ORDER BY first_seen_at DESC
              LIMIT %s
             """,

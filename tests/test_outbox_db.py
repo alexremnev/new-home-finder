@@ -1064,3 +1064,74 @@ def test_renewing_starts_the_alerts_again(conn: Any, run: Run) -> None:
     )
     outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "2")])
     assert counts(conn) == {"queued": 1}
+
+
+# ── the starter batch is the other way a listing reaches somebody ────────
+#
+# `queue_matches` asks `sources.announces` of the reader handing its catch
+# over, which is the right place for a live alert and reaches nothing else. A
+# new subscriber's first five flats are chosen from `listings` directly, by
+# which time the reader is long gone — so the same rule is asked of the row,
+# through `listing_sightings`. Pinned on `recent_listings` rather than through
+# `seed_new_subscriptions`, because the pool is where the rule now lives and
+# the seeding around it announces itself to ops over the network.
+
+
+def seen_by(conn: Any, listing_id: int, *readers: str) -> None:
+    for reader in readers:
+        store.record_sightings(conn, [listing_id], reader)
+
+
+def pool(conn: Any) -> list[str]:
+    return [
+        str(row["url"]).rsplit("/", 1)[-1]
+        for row in store.recent_listings(conn, days=3, limit=400)
+    ]
+
+
+def test_the_starter_pool_offers_what_a_scraper_saw(conn: Any) -> None:
+    seen_by(conn, make_listing(conn, "scraped"), "openrent")
+
+    assert pool(conn) == ["scraped"]
+
+
+def test_the_starter_pool_leaves_out_what_only_a_muted_source_saw(conn: Any) -> None:
+    """The leak this closes. See 0060.
+
+    Muting the feed muted the alerts and not the welcome: a flat only the feed
+    ever found was still one of the five a new subscriber was greeted with,
+    which also spoiled the measurement the muting exists for.
+    """
+
+    conn.execute("UPDATE sources SET announces = false WHERE key = 'tg_feed'")
+    seen_by(conn, make_listing(conn, "feed_only"), "tg_feed")
+
+    assert pool(conn) == []
+
+
+def test_a_flat_both_of_them_saw_is_offered_exactly_once(conn: Any) -> None:
+    # Two sightings of one listing, and the filter must not turn that into two
+    # rows in the pool — which is what a join in place of EXISTS would do, and
+    # would spend two of the five offers on one flat.
+    conn.execute("UPDATE sources SET announces = false WHERE key = 'tg_feed'")
+    seen_by(conn, make_listing(conn, "both"), "tg_feed", "openrent")
+
+    assert pool(conn) == ["both"]
+
+
+def test_the_feed_s_own_finds_are_offered_while_it_still_announces(conn: Any) -> None:
+    # The rule is `announces`, not the name of the feed. Un-muting has to put
+    # the welcome back along with the alerts, in one UPDATE and no deploy.
+    seen_by(conn, make_listing(conn, "from_the_feed"), "tg_feed")
+
+    assert pool(conn) == ["from_the_feed"]
+
+
+def test_a_listing_no_reader_recorded_is_not_offered(conn: Any) -> None:
+    # The honest cost of reading the evidence rather than guessing: nothing
+    # before 0052 was backfilled, so a row with no sighting is not offered.
+    # Safe only because the pool is three days wide and that table is months
+    # old — which is why `recent_listings` says so.
+    make_listing(conn, "unwitnessed")
+
+    assert pool(conn) == []

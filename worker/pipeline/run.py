@@ -143,12 +143,17 @@ def run_job(
 
     if job in PORTAL_JOBS or job == "portals":
 
-        # One job per portal, and the job name *is* the source key. Each has
-        # its own timer so they do not land on the server together, and each
-        # gets its own row in `job_runs` — which is what makes the admin Jobs
-        # panel say "zoopla has not run since Tuesday" instead of hiding it
-        # inside one combined job that looks healthy because the others
-        # worked.
+        # One job per portal, each with its own timer so they do not land on
+        # the server together, and each with its own row in `job_runs` — which
+        # is what makes the admin Jobs panel say "zoopla has not run since
+        # Tuesday" instead of hiding it inside one combined job that looks
+        # healthy because the others worked.
+        #
+        # The job name is NOT the source key, though it reads like one for
+        # three of the five: `zoopla_london` and `zoopla` are two jobs reading
+        # one site under one key. Everything below that asks the database about
+        # a source therefore asks the reader for its key and never uses the
+        # name of the job.
         #
         # `portals` still runs all of them, for a manual sweep. Nothing
         # schedules it.
@@ -193,7 +198,12 @@ def run_job(
                     f"try one of {sorted(PORTAL_JOBS)}",
                 )
                 return "failed"
-            wanted = {source_key: PORTAL_JOBS[source_key]}
+            # Built, like the ones above. This used to assign the thunk
+            # itself, so `--source` on a portal job handed `sweep.collect` a
+            # function where a reader belongs and the run died on the first
+            # attribute it asked for — reported as "degraded" by the handler
+            # below, which looks like the portal refused us.
+            wanted = {source_key: PORTAL_JOBS[source_key]()}
 
         status = "ok"
         for key, reader in wanted.items():
@@ -209,8 +219,19 @@ def run_job(
             # Only what the engine is willing to call new — see the note on
             # the first run in worker.sources.sweep.
             if sweep.announce:
+                # Keyed to the source the reader WRITES to, not to the job
+                # name — the same distinction the `enabled` gate above makes,
+                # and for a worse consequence. `zoopla_london` writes `zoopla`
+                # and has no `sources` row of its own (0061 says so, and it
+                # should not have one), while `store.announces` answers False
+                # for a key the table has never heard of. So keyed by job name
+                # the whole-city sweep stored everything it found and queued
+                # none of it, every five minutes, silently.
+                #
+                # Which job did the reading is not lost by this: `job_runs.job`
+                # is the job name, and the stage is recorded against that run.
                 queue_matches(
-                    conn, run, source_key=key, listing_ids=sweep.announce
+                    conn, run, source_key=reader.key, listing_ids=sweep.announce
                 )
         return status
 
