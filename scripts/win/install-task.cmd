@@ -8,9 +8,15 @@ REM rollup totals the day into daily_stats so the console reads counts instead o
 REM computing them, report checks for silence, and three portal readers fetch
 REM the sites directly — two of which refuse the server's address outright.
 REM
-REM The offsets matter: drain at +2 so a batch goes out in the cycle it was queued
-REM in rather than waiting for the next, and rollup at +3 so it counts a delivery
-REM that has already happened rather than one about to.
+REM drain is the one task on its own interval: every minute, because it only
+REM sends what is already in the queue and any wait before it is latency bought
+REM with nothing. It used to run on ingest's 5-minute cycle offset by two, which
+REM made the offset itself the floor on delivery time. Overlapping runs are safe
+REM — drain holds a Postgres advisory lock, which is shared with the server, so
+REM whichever starts second exits without sending anything twice.
+REM
+REM rollup keeps its offset, at +3, so it counts a delivery that has already
+REM happened rather than one about to.
 
 setlocal
 for %%I in ("%~dp0..\..") do set PROJECT=%%~fI
@@ -19,7 +25,7 @@ set RUN="%PROJECT%\scripts\win\run-job.cmd"
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:00 ^
   /TN "home ingest" /TR "%RUN% ingest"
 
-schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:02 ^
+schtasks /Create /F /RL LIMITED /SC MINUTE /MO 1 /ST 00:00 ^
   /TN "home drain" /TR "%RUN% drain"
 
 schtasks /Create /F /RL LIMITED /SC MINUTE /MO 5 /ST 00:03 ^

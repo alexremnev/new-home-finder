@@ -1,11 +1,18 @@
 [Unit]
-Description=Run drain every two minutes
+Description=Run drain every minute
 
 [Timer]
 Unit=london-home-finder@drain.service
-OnBootSec=2min
-OnUnitInactiveSec=2min
-AccuracySec=15s
+# Every minute, not every two: drain only sends what is already queued, so the
+# wait between a row landing in the queue and going out is pure latency with
+# nothing bought by it. A run with an empty queue costs one interpreter start
+# and one `claim_queued` that returns nothing, so firing often is cheap, and an
+# overlap is safe — `_run_one` holds the `job:drain:*` advisory lock, so a run
+# that starts while the previous one is still sending exits as `skipped_locked`
+# rather than sending anything twice.
+OnBootSec=1min
+OnUnitInactiveSec=1min
+AccuracySec=5s
 Persistent=true
 
 [Install]

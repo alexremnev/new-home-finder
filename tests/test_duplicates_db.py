@@ -270,7 +270,7 @@ def test_crossing_a_threshold_is_announced_once(conn: Any) -> None:
     assert [(int(r["user_id"]), r["kind"]) for r in first] == [(user, "daily")]
     assert bool(first[0]["paid"]) is True
 
-    # drain runs every two minutes; without the record this would be said
+    # drain runs every minute; without the record this would be said
     # thirty times an hour.
     assert store.costly_whatsapp(conn) == []
 

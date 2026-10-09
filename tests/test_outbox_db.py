@@ -546,7 +546,7 @@ def test_the_notice_for_a_spent_allowance_is_claimed_once(conn: Any) -> None:
     assert [row["stage"] for row in first] == ["spent"]
     assert int(first[0]["alert_allowance"]) == 900
     # Said once per period: the unique key is (user, stage, plan_until), so a
-    # drain every two minutes does not say it thirty times an hour.
+    # drain every minute does not say it sixty times an hour.
     assert store.claim_plan_notices(conn) == []
 
 
@@ -993,7 +993,7 @@ def test_an_hour_out_is_warned_once(
     assert "http" not in (alert.text or "")
 
     # Said once per period: the unique key is (user, stage, plan_until), so a
-    # drain every two minutes does not say it thirty times an hour.
+    # drain every minute does not say it sixty times an hour.
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
 

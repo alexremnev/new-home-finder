@@ -361,3 +361,99 @@ def test_the_refusal_is_described_once_however_many_districts_hit_it(
 
     assert stage.status == "ok"
     assert sum("answered 403" in one for one in stage.said) == 1
+
+
+# ── a region reader's own watch ──────────────────────────────────────────
+#
+# `source_sweeps` holds district names upper-cased: both `settle_district` and
+# `mark_swept` upper-case what they write, and `subscribed_districts` selects
+# `upper(area)`, so the district path agrees with the table by construction.
+#
+# A region name did not. `zoopla.REGION` and `spareroom.REGION` are both the
+# lowercase url slug "london", so the lookup missed the row that said LONDON
+# and the engine told the reader on every run that it had never watched this
+# name — which makes `_announceable` refuse everything and `harvest` read one
+# page and stop. zoopla_london stored listings and announced none of them from
+# the day it was deployed. Hence these two.
+
+
+class Region:
+    """A region reader, remembering what the engine told it to read back to."""
+
+    key = "zoopla"
+    dated = True
+    regions = ("london",)
+
+    def __init__(self) -> None:
+        self.since: list[datetime | None] = []
+        self.asked: list[str] = []
+
+    def harvest(
+        self,
+        district: str,
+        get: object,
+        stage: object,
+        since: datetime | None,
+        memory: object = None,
+    ) -> Harvest:
+        self.asked.append(district)
+        self.since.append(since)
+        return Harvest(caught=[])
+
+
+def region_swept(monkeypatch: Any, watching: dict[str, Watch]) -> Region:
+    monkeypatch.setattr(store, "subscribed_districts", lambda conn: {"SE16"})
+    monkeypatch.setattr(store, "district_watch", lambda conn, key: dict(watching))
+    monkeypatch.setattr(
+        store, "sighted_by", lambda conn, **_: Sighted(ids={}, known=frozenset())
+    )
+    for quiet in (
+        "record_sightings",
+        "settle_district",
+        "mark_swept",
+        "void_watch",
+        "seen_ids",
+        "remember_seen",
+    ):
+        monkeypatch.setattr(store, quiet, lambda *_, **__: None)
+    portal = Region()
+    sweep.collect(
+        None,  # type: ignore[arg-type]
+        Job(),  # type: ignore[arg-type]
+        portal,  # type: ignore[arg-type]
+        pause=0,
+        get=Fetcher(),
+    )
+    return portal
+
+
+def test_a_settled_region_is_read_back_to_the_last_sweep(monkeypatch: Any) -> None:
+    # The watch exists and is recent, so the reader must be told when we last
+    # swept. None here is the engine saying "never watched", which is the bug:
+    # the whole of the announcing rule hangs off it.
+    #
+    # Timed against the real clock rather than this module's NOW, because
+    # `stale_watches` reads the real one: a watch last swept in September is a
+    # day-old gap today and would be voided before the lookup is reached, so
+    # the fixed NOW would pass this test for the wrong reason.
+    swept_at = datetime.now(UTC) - timedelta(minutes=5)
+    portal = region_swept(
+        monkeypatch,
+        {
+            "LONDON": Watch(
+                settled_at=swept_at - timedelta(days=20), swept_at=swept_at
+            )
+        },
+    )
+
+    assert portal.since == [swept_at]
+
+
+def test_the_region_is_swept_under_the_name_the_table_holds(
+    monkeypatch: Any,
+) -> None:
+    # Upper-cased by `collect`, so the watch, the gap rule and the mark all
+    # agree. Both readers lower-case it again for the url.
+    portal = region_swept(monkeypatch, {})
+
+    assert portal.asked == ["LONDON"]

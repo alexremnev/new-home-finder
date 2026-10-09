@@ -597,8 +597,34 @@ def _collect(
         # What gets read, which is no longer the same thing as what is wanted.
         # A region reader sweeps one name and sorts the results out afterwards;
         # a district reader sweeps exactly the districts somebody asked for.
+        #
+        # ── why the region name is upper-cased here ──────────────────────
+        #
+        # Because everything it is compared against is. `store.district_watch`
+        # returns the names `source_sweeps` holds, and both writers of that
+        # table — `settle_district` and `mark_swept` — upper-case what they
+        # store; `subscribed_districts` selects `upper(area)`, so the district
+        # path has always agreed with it by accident of SQL.
+        #
+        # A region does not: `zoopla.REGION` and `spareroom.REGION` are both
+        # the lowercase url slug `"london"`. So `watching.get("london")` missed
+        # the row that said `LONDON`, on every run, for ever — and a region
+        # reader was therefore told on every run that it had never watched this
+        # name. `news_since` stayed None, `_announceable` refuses everything
+        # when it is, and `harvest` reads one page and stops. Measured by
+        # driving `collect` with a settled watch: `since` arrived as None.
+        #
+        # So zoopla_london has been reading one page a run and announcing
+        # nothing at all since it was deployed. Its listings were still stored,
+        # which is why it looked busy: `stored` moves and `announced` does not,
+        # which is exactly the pair the verdict below says to compare.
+        #
+        # Upper-casing here rather than in each reader, because the comparison
+        # is the engine's and so is the convention. Both readers lower-case the
+        # name again for the url — `zoopla.search_url` and
+        # `spareroom.search_url` — so nothing downstream cares.
         regions = tuple(getattr(portal, "regions", ()) or ())
-        to_read = sorted(regions) if regions else wanted
+        to_read = sorted(one.upper() for one in regions) if regions else wanted
         wanted_set = set(wanted)
         if regions:
             stage.set("regions", list(regions))

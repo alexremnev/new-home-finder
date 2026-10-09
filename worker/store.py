@@ -558,8 +558,8 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
 
     One row per alert still owed, with `kind` saying which threshold and
     `paid` saying whether delivery was stopped or merely noted. The insert into
-    `whatsapp_cost_alerts` is what makes it "still owed": drain runs every two
-    minutes, and without it crossing a line would be announced thirty times an
+    `whatsapp_cost_alerts` is what makes it "still owed": drain runs every
+    minute, and without it crossing a line would be announced sixty times an
     hour.
     """
 
@@ -808,7 +808,7 @@ def release_plan_notice(
     """Give a claimed notice back after a send that could still succeed.
 
     `claim_plan_notices` claims by inserting, so the row is what stops a drain
-    every two minutes saying the same thing thirty times an hour. The cost is
+    every minute saying the same thing sixty times an hour. The cost is
     that a send which failed is a notice nobody ever hears: the claim stands and
     the stage never comes round again.
 
@@ -826,7 +826,7 @@ def release_plan_notice(
     template that can reach them.
 
     Only for a failure worth repeating. A refusal Meta will give again is left
-    claimed, because retrying it every two minutes for ever is a worse answer
+    claimed, because retrying it every minute for ever is a worse answer
     than losing one message.
     """
 

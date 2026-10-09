@@ -693,7 +693,7 @@ export const SCHEDULED_JOBS: {
   silentAfterMins?: number;
 }[] = [
   { job: "ingest", everyMins: 2 },
-  { job: "drain", everyMins: 2 },
+  { job: "drain", everyMins: 1 },
   { job: "rollup", everyMins: 2 },
   { job: "zoopla_london", everyMins: 5 },
   // The same timer as zoopla_london, deliberately: this reader's own paging

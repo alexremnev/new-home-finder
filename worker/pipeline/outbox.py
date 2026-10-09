@@ -547,9 +547,9 @@ def _apply(conn: Conn, stage: Any, notification_id: int, user_id: int, decision:
 #
 # Five minutes, not one cycle, is the floor. The question can only be sent
 # while the window is still open, so this is the band a drain run has to land
-# in; at two minutes a single late or skipped run stepped over it and left
+# in; at one cycle a single late or skipped run stepped over it and left
 # somebody never asked and unreachable until they wrote in by themselves. Five
-# gives the two-minute cycle two chances. `ask_failed` is alerted on for the
+# gives the one-minute cycle five chances. `ask_failed` is alerted on for the
 # same reason.
 CHECKIN_MINUTES = 5
 
