@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 
 import { enforceLimits, InvalidForm, parseForm } from "@/lib/criteria";
 import { transaction } from "@/lib/db";
+import { saveEditedFilter } from "@/lib/editing";
+import { criteriaSet } from "@/lib/messages";
 import {
   botLink,
   enabledDistricts,
@@ -9,8 +11,10 @@ import {
   paymentRef,
   signupPlan,
   START_TTL_MINUTES,
+  whatsappChat,
   whatsappLink,
 } from "@/lib/plans";
+import { sendWhatsApp } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +61,42 @@ export async function POST(request: Request): Promise<NextResponse> {
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     throw error;
+  }
+
+  // `?e=` from the link a bot handed out: somebody changing a filter they
+  // already have, on the messenger they are already on. Their search is saved
+  // onto their own account and answered in the chat, rather than met with a
+  // link asking them to connect WhatsApp and start a trial they had a
+  // fortnight ago — see `saveEditedFilter` for why Telegram does not need this.
+  //
+  // A token that is no longer live falls through to the sign-up below, which is
+  // the same page an expired `?e=` gets: a form that works, rather than an
+  // error about a link they cannot do anything about.
+  const editing = typeof form.edit === "string" && form.edit ? form.edit : null;
+  if (editing && channel === "whatsapp") {
+    const edited = await saveEditedFilter(editing, criteria, "whatsapp").catch(() => null);
+    if (edited) {
+      // The window is open by construction: they messaged the bot to get the
+      // link this form was filled in from. Worth having and not worth failing
+      // for — the receipt is the point of the message, and /current says the
+      // same thing in the chat they are about to open.
+      const said = await sendWhatsApp(
+        edited.address,
+        criteriaSet(criteria, edited.replaced),
+      ).catch(() => false);
+      if (!said) {
+        console.error("subscribe: filter saved but the WhatsApp receipt was not delivered");
+      }
+
+      return NextResponse.json({
+        ok: true,
+        updated: true,
+        replaced: edited.replaced,
+        channel,
+        url: whatsappChat(),
+      });
+    }
+    console.log("subscribe: edit token is not live — treating this as a sign-up");
   }
 
   const token = newToken();

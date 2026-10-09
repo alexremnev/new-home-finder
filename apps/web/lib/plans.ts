@@ -314,6 +314,19 @@ export function whatsappLink(token: string): string | null {
   return `https://wa.me/${number}?text=${encodeURIComponent(`Link my alerts: ${token}`)}`;
 }
 
+/**
+ * The conversation itself, with nothing typed into it.
+ *
+ * Where somebody who has just changed a filter is sent: they are already
+ * connected, so there is no token to carry and nothing for them to send. A
+ * `?text=` here would put "Link my alerts: …" in the box of a person who
+ * linked a fortnight ago.
+ */
+export function whatsappChat(): string | null {
+  const number = (process.env.WHATSAPP_NUMBER ?? "").replace(/\D/g, "");
+  return number ? `https://wa.me/${number}` : null;
+}
+
 export function paymentRef(): string {
   const alphabet = "23456789BCDFGHJKMNPQRSTVWXZ";
   const bytes = randomBytes(6);
@@ -334,6 +347,14 @@ export function siteUrl(): string {
  * link a bot hands out goes through here, so there is no second route to the
  * form that forgets the token and silently offers somebody a blank page.
  *
+ * `c=` is which messenger the link was handed out in. The token alone cannot
+ * answer that: an account that has connected both has one primary channel, and
+ * the page was reading it to decide which app to send people back to — so
+ * somebody writing from WhatsApp was offered Telegram, named on the only
+ * button on the page. The bot knows where it is being spoken to, so it says.
+ * It is a hint and not a credential: `returningFor` only honours it when the
+ * account really is verified on that messenger.
+ *
  * The plain form on anything unknown, and on any failure: a link without a
  * token still works, where no link at all is a dead end.
  */
@@ -343,12 +364,29 @@ export async function filterUrl(
 ): Promise<string> {
   const plain = `${siteUrl()}/`;
   const account = await accountForChat(address, channel).catch(() => null);
-  if (!account) return plain;
+  // Said out loud, both times. A link without a token is the sign-up page, so
+  // the symptom is a subscriber being shown a blank form and a free trial —
+  // which reads as the page being wrong rather than as this falling back, and
+  // there was nothing in the log to tell the two apart.
+  if (!account) {
+    console.error("filterUrl: no account for this address — the plain form it is", {
+      channel,
+      address: address.slice(-4),
+    });
+    return plain;
+  }
 
   const token = await issueToken(account.user_id, "edit", EDIT_TTL_MINUTES).catch(
     () => null,
   );
-  return token ? `${siteUrl()}/?e=${encodeURIComponent(token)}` : plain;
+  if (!token) {
+    console.error("filterUrl: could not issue an edit token", {
+      channel,
+      user: account.user_id,
+    });
+    return plain;
+  }
+  return `${siteUrl()}/?e=${encodeURIComponent(token)}&c=${channel}`;
 }
 
 export function botLink(token: string): string {
@@ -393,6 +431,12 @@ export async function accountForToken(
 export type Returning = {
   channel: Channel;
   /**
+   * The edit token this was read from, handed back so saving can be done
+   * against the account it belongs to. Already in the page's url, so it is
+   * nothing the browser did not have.
+   */
+  token: string;
+  /**
    * The filter they already have, so the form opens on it rather than on the
    * defaults. Empty for an account with no active subscription — somebody who
    * used /stop and came back — which is the blank form, correctly.
@@ -410,16 +454,54 @@ export type Returning = {
 };
 
 /**
+ * Which messenger to treat this person as being in.
+ *
+ * The one the link was handed out in where they are verified on it, and their
+ * primary channel otherwise — which is all there was to go on before, and is
+ * still right for a link that has lost its `c=`.
+ */
+async function standingOn(
+  userId: number,
+  standing?: string | null,
+): Promise<Channel | null> {
+  const rows = await query<{ channel: Channel; is_primary: boolean }>(
+    `SELECT uc.channel, uc.is_primary
+       FROM user_channels uc
+       JOIN channels c ON c.key = uc.channel AND c.enabled
+      WHERE uc.user_id = $1 AND uc.verified_at IS NOT NULL
+      ORDER BY uc.is_primary DESC, uc.channel`,
+    [userId],
+  ).catch(() => []);
+
+  const here = rows.find((row) => row.channel === standing);
+  return here?.channel ?? rows[0]?.channel ?? null;
+}
+
+/**
  * Who is changing their filter, for a token issued by /update.
  *
  * Only what the page needs: the filter to open the form on, which messenger to
  * send them back to, whether they are still getting everything, and — if not —
  * a link that can actually take the payment. Anything more would be a sign-up
  * page wearing a different hat.
+ *
+ * `standing` is the messenger the link was handed out in, off the url's `c=`.
+ * Honoured only where the account is verified on it, which makes it useless to
+ * anybody who edits it and authoritative where it counts: somebody who has
+ * connected both messengers has one primary channel, and the primary is not
+ * necessarily the chat they are writing from.
  */
-export async function returningFor(token: string): Promise<Returning | null> {
+export async function returningFor(
+  token: string,
+  standing?: string | null,
+): Promise<Returning | null> {
   const account = await accountForToken(token, "edit").catch(() => null);
-  if (!account || !account.channel) return null;
+  if (!account) return null;
+
+  const channel = await standingOn(account.user_id, standing);
+  // No messenger at all is no "go back" to offer, and the sign-up page is then
+  // the honest one.
+  if (!channel) return null;
 
   // Both halves from the one place: whether the plan is live, and what share
   // follows from that. Worked out here, the two could disagree with what the
@@ -433,14 +515,15 @@ export async function returningFor(token: string): Promise<Returning | null> {
   const criteria = (account.criteria ?? {}) as Criteria;
 
   const full = planIsLive(account) && share >= 100;
-  if (full) return { channel: account.channel, full, upgradeUrl: null, criteria };
+  if (full) return { channel, token, full, upgradeUrl: null, criteria };
 
   // Its own token, because /upgrade needs one to know whose plan is being
   // bought — a bare /upgrade can only answer "that link has expired".
   const paying = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES)
     .catch(() => null);
   return {
-    channel: account.channel,
+    channel,
+    token,
     full,
     upgradeUrl: paying ? `${siteUrl()}/upgrade?t=${encodeURIComponent(paying)}` : null,
     criteria,

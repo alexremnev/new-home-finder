@@ -1,9 +1,9 @@
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { Suspense, type ReactNode } from "react";
 
 import { SUPPORT_EMAIL } from "@/lib/support";
 
-import { TelegramMark, WhatsAppMark } from "./logos";
+import { HeadCta } from "./head-cta";
 
 // Everything that is the public site rather than the product: the two pieces of
 // chrome every page needs, and nothing else. The width belongs to the page —
@@ -25,38 +25,9 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
             London Home Finder
           </Link>
 
-          {/* The header's own call to action, which is a link and not a second
-              form.
-              ── why it scrolls instead of starting ──────────────────────────
-              A trial cannot begin until an area has been chosen, so a header
-              button that submitted would have to either fail or invent a
-              filter. What it does instead is what every landing page with a
-              form below the fold does: take you to the form, with the
-              messenger already decided. `#start` is on the landing page, and
-              the href carries the path so it works from the other pages too.
-              One button per messenger rather than one generic one, because
-              which messenger you use is the actual decision — and the logo
-              says which without a word. */}
-          <nav className="site-head-cta" aria-label="Start a free trial">
-            <Link
-              href="/#start"
-              className="head-cta head-cta-telegram"
-              aria-label="Start a free trial on Telegram"
-            >
-              <TelegramMark />
-              <span>Start free trial</span>
-            </Link>
-            {whatsappReady && (
-              <Link
-                href="/#start"
-                className="head-cta head-cta-whatsapp"
-                aria-label="Start a free trial on WhatsApp"
-              >
-                <WhatsAppMark />
-                <span>Start free trial</span>
-              </Link>
-            )}
-          </nav>
+          <Suspense fallback={null}>
+            <HeadCta whatsappReady={whatsappReady} />
+          </Suspense>
         </div>
       </header>
 

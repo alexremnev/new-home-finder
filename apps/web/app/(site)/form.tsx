@@ -48,6 +48,12 @@ type Props = {
    */
   returning?: {
     channel: Channel;
+    /**
+     * The token the page was opened with, posted back when they save. It is
+     * what lets the save land on their own account instead of opening a new
+     * one — see `saveEditedFilter`.
+     */
+    token: string;
     full: boolean;
     upgradeUrl: string | null;
     /** The filter they already have. Every control below opens on it. */
@@ -158,7 +164,12 @@ export function SubscribeForm({
   const [availableOn, setAvailableOn] = useState(start.availableOn);
   const [dayWindow, setDayWindow] = useState(start.dayWindow);
   const [area, setArea] = useState<[number, number]>(start.size);
-  const [leaving, setLeaving] = useState<{ channel: Channel; url: string } | null>(null);
+  const [leaving, setLeaving] = useState<{
+    channel: Channel;
+    url: string;
+    /** A changed filter, already saved — rather than one waiting to be connected. */
+    updated: boolean;
+  } | null>(null);
 
   const named = neighbourhoodAreas(names, districts);
   const options: Area[] =
@@ -298,9 +309,16 @@ export function SubscribeForm({
       const response = await fetch("/api/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...payload, channel }),
+        // The edit token when there is one: saving then changes the filter
+        // this person already has, and the answer comes back in their chat,
+        // rather than opening a second account to be merged on arrival.
+        body: JSON.stringify({ ...payload, channel, edit: returning?.token }),
       });
-      const body = (await response.json()) as { url?: string; error?: string };
+      const body = (await response.json()) as {
+        url?: string;
+        error?: string;
+        updated?: boolean;
+      };
       if (!response.ok || !body.url) {
         setError(body.error ?? "Something went wrong. Please try again.");
         setBusy(null);
@@ -311,7 +329,7 @@ export function SubscribeForm({
       // blocked after an await is the usual way this breaks, and a same-tab
       // navigation is never blocked. The panel below is what shows if the
       // handover does not happen — a desktop browser with no app installed.
-      setLeaving({ channel, url: body.url });
+      setLeaving({ channel, url: body.url, updated: Boolean(body.updated) });
       window.location.href = body.url;
     } catch {
       setError("Could not reach the server. Please try again.");
@@ -319,7 +337,10 @@ export function SubscribeForm({
     }
   }
 
-  if (leaving) return <Handover channel={leaving.channel} url={leaving.url} />;
+  if (leaving)
+    return (
+      <Handover channel={leaving.channel} url={leaving.url} updated={leaving.updated} />
+    );
 
   const placeholder =
     mode === "name" ? "Canary Wharf, Stratford, Chelsea…" : "E14, E15, SW3…";
@@ -1044,16 +1065,40 @@ function RangeSlider({
   );
 }
 
-function Handover({ channel, url }: { channel: Channel; url: string }) {
+// What is on screen while the messenger opens, and what stays there if it does
+// not.
+//
+// `updated` is a changed filter rather than a new one: it is already saved and
+// already being matched on, and the chat has the receipt — so there is nothing
+// to press and nothing to connect, and saying "press Start" to somebody who
+// has had alerts for a fortnight reads as though their search did not take.
+function Handover({
+  channel,
+  url,
+  updated,
+}: {
+  channel: Channel;
+  url: string;
+  updated: boolean;
+}) {
   const app = channel === "whatsapp" ? "WhatsApp" : "Telegram";
 
   return (
     <div className="panel">
       <div className="done-tick">✓</div>
-      <h1>Your search is saved</h1>
+      <h1>{updated ? "Your search is updated" : "Your search is saved"}</h1>
       <p className="lede">
-        Opening {app} now. Press Start there and the alerts begin — only listings
-        posted from that moment on, never a backlog.
+        {updated ? (
+          <>
+            Opening {app} now — the new filter is already running, and the chat
+            has it in full. Only listings posted from now on.
+          </>
+        ) : (
+          <>
+            Opening {app} now. Press Start there and the alerts begin — only
+            listings posted from that moment on, never a backlog.
+          </>
+        )}
       </p>
 
       <a

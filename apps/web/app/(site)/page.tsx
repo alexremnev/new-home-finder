@@ -77,8 +77,14 @@ export default async function Page({
   // already have, so the page drops the sign-up offer — they are on a messenger
   // already, and prices answer a question they did not ask — and the form opens
   // on their current criteria rather than on the defaults.
+  //
+  // `?c=` beside it is the messenger the bot handed the link out in, so the one
+  // button on the page names the app they are actually writing from rather than
+  // whichever of the two the account happens to have as primary.
   const editing = tag("e");
-  const returning = editing ? await returningFor(editing).catch(() => null) : null;
+  const returning = editing
+    ? await returningFor(editing, tag("c")).catch(() => null)
+    : null;
 
   const site = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
     /\/+$/,
