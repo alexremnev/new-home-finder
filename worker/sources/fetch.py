@@ -48,14 +48,24 @@ holds the session.
 
 ── what that means together, and what is still a guess ─────────────────────
 
-`SCRAPE_PROXY` named port 10000, so until this change *every run of both
-Zoopla readers went out from 95.147.142.82 and nothing else*. The alternation
-above therefore cannot be an address being refused: there was only ever one.
-Zoopla's answer on a fixed address varied through the day instead, in clumps —
-seven runs served, then seven refused. A 403 rather than a 429 is what a bot
-score gives, so the likeliest reading is a score with hysteresis, fed by twelve
-runs an hour from one house, plus the district reader's bursts on :07/:27/:47
-through the very same session.
+`SCRAPE_PROXY` named port 10000, so until this change *every proxied request
+this server ever made went out from 95.147.142.82 and nothing else*. The
+alternation above therefore cannot be an address being refused: there was only
+ever one address. Zoopla's answer on it varied through the day instead, in
+clumps — seven runs served, then seven refused.
+
+What it is not, is us outstaying our welcome. `zoopla_london` is the only
+reader that proxies from here — the district sweep is run by hand from a
+laptop, which Zoopla serves directly and which therefore never touches this
+session — and it fetches one 60KB page every five minutes. Twelve pages an
+hour from a residential address is not a rate anybody throttles.
+
+So the score on that address is most likely not only ours. A sticky session
+pins *our* peer, not the peer's other traffic, and a residential device
+carrying somebody else's Zoopla scraping would show up here exactly like this:
+clumps, on one address, with no relation to anything we did. That is inference
+and not measurement — but every reading of it says the same thing about the
+code, because all of them are about having only ever held one ticket.
 
 What is NOT established: how long one sticky session lasts. The measurement
 above spans seconds, so a session that rolls every half hour would look
