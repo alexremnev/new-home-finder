@@ -16,6 +16,76 @@ recorded here because every number below is load-bearing:
   * `robots.txt` permits `/property-to-rent/…` and `/properties/…`, and
     disallows `/api/*`. Nothing here touches the API.
 
+── the exit address, and why one refusal is not an answer ──────────────────
+
+Through the proxy, the thing worth varying is not the fingerprint — it is the
+address. Zoopla serves a home connection every page under every fingerprint
+and refuses this server under all of them, so a 403 from a residential exit is
+a statement about that exit and about nothing else.
+
+Measured from `job_events` on 9 October 2026, over `zoopla_london` runs on a
+five-minute timer between 11:33 and 13:48:
+
+    11:33 ✗  11:38 ✗  11:43 ✓  11:48 ✗  11:53 ✓  11:58 ✗
+    12:03 ✗  12:08 ✗  12:13 ✓ … 12:43 ✓   (seven consecutive, served)
+    12:48 ✗ … 13:18 ✗                     (seven consecutive, refused)
+    13:23 ✓  13:28 ✗  13:33 ✓  13:38 ✗  13:43 ✓  13:48 ✗
+
+A run refused at 13:28 was followed five minutes later by one served, so a
+working request existed at the time and the refused run had no way to reach it.
+
+Then the proxy itself was measured, the same day, against `api.ipify.org`:
+
+    port 10000  →  95.147.142.82      one Fetcher, three requests:
+    port 10001  →  78.150.17.32         95.147.142.82
+    port 10002  →  86.38.26.95          95.147.142.82
+    port 10000  →  95.147.142.82        95.147.142.82
+
+Which says two things flatly. A port is a stable address — the fourth call was
+a separate process and got the first one back. And one Fetcher holds one
+address for its whole life, because a handle holds its tunnel and the tunnel
+holds the session.
+
+── what that means together, and what is still a guess ─────────────────────
+
+`SCRAPE_PROXY` named port 10000, so until this change *every run of both
+Zoopla readers went out from 95.147.142.82 and nothing else*. The alternation
+above therefore cannot be an address being refused: there was only ever one.
+Zoopla's answer on a fixed address varied through the day instead, in clumps —
+seven runs served, then seven refused. A 403 rather than a 429 is what a bot
+score gives, so the likeliest reading is a score with hysteresis, fed by twelve
+runs an hour from one house, plus the district reader's bursts on :07/:27/:47
+through the very same session.
+
+What is NOT established: how long one sticky session lasts. The measurement
+above spans seconds, so a session that rolls every half hour would look
+identical to one that never rolls, and that is the difference between "the
+address varied through the day" and "it did not". Re-running the same check an
+hour later settles it, and nothing below depends on the answer.
+
+── what follows for the code, under any of those readings ──────────────────
+
+Spread the traffic and be able to ask again:
+
+  * The exit is no longer the configured port. A run starts at an offset into
+    the sticky range, so consecutive runs of one reader and concurrent runs of
+    two do not share an address — which takes the per-address request rate
+    from twelve an hour to roughly nothing, and that alone is most of the fix
+    if the reading above is right.
+  * A refusal through the proxy is retried on a different exit, up to `EXITS`
+    of them, and the fingerprint is left alone. Inverting the old ladder —
+    four fingerprints against one address — costs nothing extra: it spent
+    three paid 403s per failing run learning what the first one had said.
+
+How a different exit is asked for depends on the port, and both are handled by
+dropping every handle so the next request opens a new tunnel:
+
+  * a sticky port (10000-10500) holds one session per port, so the port is
+    moved as well — reconnecting on the same one returns the same session,
+    which is exactly what the right-hand column above shows.
+  * the rotating port (823) assigns per connection, so the fresh tunnel is by
+    itself the new address. Connection reuse is what used to defeat it.
+
 ── the byte count ────────────────────────────────────────────────────────
 
 Residential proxies bill by traffic, so "how much did we download" has to be
@@ -96,11 +166,68 @@ CALLBACK_TARGETS = ("WRITEDATA", "HEADERDATA")
 # somewhere else would spend traffic to receive it twice.
 BLOCKED = (401, 403, 405, 429)
 
+# DataImpulse's sticky range, from their dashboard's "Get proxy" panel. One
+# port is one session is one exit address — measured on 9 October 2026, and
+# measured to be stable: two calls to port 10000 from different processes got
+# 95.147.142.82 both times while 10001 and 10002 got different addresses. So a
+# different port in this range is the way to ask for another address without
+# giving up stickiness altogether.
+#
+# Anything outside the range is left alone: 823 is their rotating port and
+# assigns an address per connection, which a fresh tunnel already gets.
+STICKY_PORTS = range(10000, 10501)
+
+# Exit addresses to try for one url before calling it refused.
+#
+# Three is a judgement and not a calculation, because the thing it is hedging
+# against is not measured: the refusals in the module note all came from one
+# address, so there is no per-exit refusal rate to put a number on, and
+# whatever it is will be lower once a reader is no longer making twelve
+# requests an hour from one house.
+#
+# What is known is the shape of the cost. Each extra exit is one CONNECT, one
+# handshake and one paid 403, on a request already lost — and the old ladder
+# spent four of those on fingerprints, so three is still cheaper than what it
+# replaces. Should the counter in the stage show rotations routinely reaching
+# three and still failing, the answer is not a fourth: it is that the exit is
+# not the variable, and `SCRAPE_IMPERSONATE` is the next thing to move.
+EXITS = 3
+
 
 def host_of(url: str) -> str:
     """The hostname out of a url, lowercased and without its port."""
 
     return url.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0].lower()
+
+
+def _port_of(proxy: str) -> int | None:
+    """The port a proxy url states, or None when it states none."""
+
+    tail = proxy.rpartition(":")[2]
+    return int(tail) if tail.isdigit() else None
+
+
+def _with_port(proxy: str, port: int) -> str:
+    """The same proxy url on a different port. Only valid when it had one."""
+
+    return f"{proxy.rpartition(':')[0]}:{port}"
+
+
+def exit_ports(proxy: str | None) -> tuple[int, ...]:
+    """The ports this proxy may rotate through.
+
+    A sticky port gets the whole sticky range: every port in it is a separate
+    session and so a separate address, so the one that was configured is only
+    evidence of which kind of setup this is. Anything else — the rotating port,
+    a proxy with no port at all, no proxy — gets at most the port it already
+    has, because for those the address does not follow the port and moving it
+    would only point at one nobody is listening on.
+    """
+
+    port = _port_of(proxy) if proxy else None
+    if port is None:
+        return ()
+    return tuple(STICKY_PORTS) if port in STICKY_PORTS else (port,)
 
 
 def _number(raw: object) -> int:
@@ -148,6 +275,12 @@ class Fetcher:
     direct_hosts: tuple[str, ...] = ()
     timeout: float = TIMEOUT
     targets: tuple[str, ...] = IMPERSONATE
+    #: Exit addresses to try for one url before calling it refused. One turns
+    #: the rotation off without turning the proxy off.
+    exits: int = EXITS
+    #: Ports to rotate through, one exit address each. Derived from `proxy` in
+    #: `__post_init__` when it is left empty, which is every caller but a test.
+    ports: tuple[int, ...] = ()
 
     #: Bytes across the wire, all requests. Compressed, as billed.
     wire: int = 0
@@ -157,8 +290,15 @@ class Fetcher:
     proxy_wire: int = 0
     requests: int = 0
     proxied: int = 0
+    #: Exit addresses given up on this run. Goes into the stage counters: a
+    #: reader that rotates every run is a pool going bad, which is a different
+    #: piece of news from a run that failed.
+    rotations: int = 0
     #: The target that last worked, tried first next time.
     _best: str = field(default="", init=False)
+    #: Which of `ports` is in use. Advanced by `_rotate` and left there: an
+    #: exit that was served is the one the rest of the run should keep using.
+    _exit: int = field(default=0, init=False)
     #: Hosts that refused this address, learned during this run. See `get`.
     #: A set rather than a setting: which portals block a datacentre changes
     #: without notice, and a config file that has to be edited when it does is
@@ -177,6 +317,22 @@ class Fetcher:
     #: a reset would undo it. In practice a run uses one: `_best` is sticky.
     _handles: dict[str, Curl] = field(default_factory=dict, init=False)
 
+    def __post_init__(self) -> None:
+        if not self.ports:
+            self.ports = exit_ports(self.proxy)
+        # Where in the range this run starts, and deliberately not the port
+        # that was configured.
+        #
+        # Three readers scrape through this proxy and two of them are Zoopla.
+        # Started from one configured port they would share one sticky session
+        # and therefore one address — so a single burned exit takes all three
+        # out at once, and the whole day's traffic arrives at the portal from
+        # one house. Offsetting by pid makes them independent for free: it
+        # differs between concurrent processes and between runs, and needs no
+        # RNG and no state.
+        if self.ports:
+            self._exit = os.getpid() % len(self.ports)
+
     @classmethod
     def from_env(cls) -> Fetcher:
         """Configured from the environment. No proxy set means no proxy used."""
@@ -192,10 +348,12 @@ class Fetcher:
             for one in (os.environ.get("SCRAPE_DIRECT_HOSTS") or "").split(",")
             if one.strip()
         )
+        exits = (os.environ.get("SCRAPE_EXITS") or "").strip()
         return cls(
             proxy=raw or None,
             targets=targets or IMPERSONATE,
             direct_hosts=direct,
+            exits=int(exits) if exits.isdigit() else EXITS,
         )
 
     def never_proxy(self, url: str) -> bool:
@@ -210,6 +368,40 @@ class Fetcher:
         return ([self._best] if self._best else []) + [
             one for one in self.targets if one != self._best
         ]
+
+    def _proxy_now(self) -> str:
+        """The proxy url to use, on the exit address currently in play."""
+
+        if not self.proxy or not self.ports:
+            return self.proxy or ""
+        return _with_port(self.proxy, self.ports[self._exit % len(self.ports)])
+
+    def _rotate(self) -> None:
+        """Give up on this exit address and move to another one.
+
+        Every handle is dropped, which is what actually gets a new address: a
+        handle holds its tunnel, the tunnel holds the session, and the session
+        holds the exit. Changing the port alone would be enough on a sticky
+        setup — libcurl keys its connection cache on the proxy — but dropping
+        the handles is the one move that works for the rotating port too, and
+        it is already this module's idiom for a connection it no longer trusts.
+
+        The cost is one CONNECT and one TLS handshake, a few KB, paid on a
+        request that was going to be refused otherwise. There is no cap here:
+        `sweep.REFUSALS_ALLOWED` stops a run after three districts in a row
+        have been refused, which bounds this at nine rotations however badly
+        the pool is going.
+
+        Handles are keyed by fingerprint and not by host, so this also drops
+        any direct connection the run was holding to somewhere else. That is
+        accepted rather than overlooked: the only job that reads two portals in
+        one process is `portals`, which nothing schedules, and the connection
+        it would have to make again is a free one.
+        """
+
+        self.rotations += 1
+        self._exit += 1
+        self.close()
 
     def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
         """Fetch one url. Direct if that works, through the proxy if it must.
@@ -236,6 +428,23 @@ class Fetcher:
         only the first district of a run pays the wasted probe. It is *not*
         remembered longer than that: a portal that stops blocking us goes back
         to being free by itself on the next run, with nothing to reconfigure.
+
+        ── what each route varies, and why they differ ─────────────────────
+
+        Direct, the fingerprint: rotating it is free, and a 403 from this
+        address could be either a fingerprint rule or an address rule, so the
+        cheap suspect is eliminated first.
+
+        Through the proxy, the exit address: by then the fingerprint has
+        already been cleared on the direct route, and the measured evidence is
+        that a refused exit stays refused while a different one serves the
+        identical request minutes later. See the module note for the figures.
+
+        One consequence worth stating, because it is a real trade and not an
+        oversight: a fingerprint rule that Zoopla adds *tomorrow* would now
+        present as "every exit refused" rather than as anything naming a
+        fingerprint. `SCRAPE_IMPERSONATE` is the way to tell the two apart, and
+        it is already documented as the thing to try before the proxy.
         """
 
         host = host_of(url)
@@ -249,16 +458,34 @@ class Fetcher:
             routes = [False, True]
 
         last = 0
+        tried = 0
+        paid = False
         for through_proxy in routes:
-            for target in self._order():
+            paid = through_proxy
+            # One fingerprint against several addresses on the paid route, and
+            # several fingerprints against one address on the free one.
+            attempts = (
+                [self._best or self.targets[0]] * max(1, self.exits)
+                if through_proxy
+                else self._order()
+            )
+            for nth, target in enumerate(attempts):
+                # Between attempts rather than after the last one, so a run
+                # that is about to give up does not pay for a tunnel it will
+                # never use. Only on the paid route: on the direct one it is
+                # the fingerprint that `attempts` is varying, and the address
+                # is the one thing there that cannot be changed.
+                if nth and through_proxy:
+                    self._rotate()
                 reply = self._once(url, target, accept, through_proxy)
+                tried = nth + 1
                 if 200 <= reply.status < 300:
                     self._best = target
                     return reply
                 last = reply.status
-                # Only a refusal is worth another fingerprint. A 404 is an
-                # answer and a 500 is their problem — four handshakes against
-                # either is four times the traffic for the same result.
+                # Only a refusal is worth another try. A 404 is an answer and a
+                # 500 is their problem — four handshakes against either is four
+                # times the traffic for the same result.
                 if reply.status not in ROTATE:
                     break
             if not through_proxy and last in BLOCKED:
@@ -271,9 +498,23 @@ class Fetcher:
                     continue
             break
 
-        where = "the proxy" if routes[-1] else "this address"
+        # Named for what was actually varied, because this sentence is what
+        # ends up in `job_events` and is all a later investigation has to go
+        # on. It used to say "every fingerprint tried" on both routes, which
+        # on the paid one was not true even then.
+        #
+        # Keyed on the route that was *reached*, not on the last one available.
+        # A 500 on the direct probe stops there — it is their fault and not
+        # worth paying to hear twice — and the old wording read the end of
+        # `routes` and so blamed a proxy the request never went near.
+        if paid:
+            where = "the proxy"
+            over = "exit address" if tried == 1 else "exit addresses"
+        else:
+            where = "this address"
+            over = "fingerprint" if tried == 1 else "fingerprints"
         raise Refused(
-            f"{url} answered {last} under every fingerprint tried, from {where}"
+            f"{url} answered {last} under {tried} {over} tried, from {where}"
         )
 
     def head(self, url: str) -> tuple[int, str | None]:
@@ -330,7 +571,9 @@ class Fetcher:
         # following it would fetch the very page this call exists to avoid.
         curl.setopt(CurlOpt.FOLLOWLOCATION, 0)
         curl.setopt(CurlOpt.TIMEOUT_MS, int(self.timeout * 1000))
-        curl.setopt(CurlOpt.PROXY, (self.proxy or "").encode() if through_proxy else b"")
+        curl.setopt(
+            CurlOpt.PROXY, self._proxy_now().encode() if through_proxy else b""
+        )
 
         try:
             curl.perform()
@@ -417,7 +660,9 @@ class Fetcher:
         # it: a `head()` that raised part-way leaves the handle bodiless, and
         # every page after it would come back empty with no error at all.
         curl.setopt(CurlOpt.NOBODY, 0)
-        curl.setopt(CurlOpt.PROXY, (self.proxy or "").encode() if through_proxy else b"")
+        curl.setopt(
+            CurlOpt.PROXY, self._proxy_now().encode() if through_proxy else b""
+        )
 
         try:
             curl.perform()
@@ -457,6 +702,7 @@ class Fetcher:
 
 
 __all__ = [
-    "BLOCKED", "CALLBACK_TARGETS", "IMPERSONATE", "ROTATE", "TIMEOUT",
-    "Fetcher", "Refused", "Reply", "host_of",
+    "BLOCKED", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "ROTATE",
+    "STICKY_PORTS", "TIMEOUT",
+    "Fetcher", "Refused", "Reply", "exit_ports", "host_of",
 ]

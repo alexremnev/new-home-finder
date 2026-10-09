@@ -904,6 +904,15 @@ def _collect(
         # `bytes` because that is the counter the admin System tab charts.
         stage.set("bytes", fetcher.wire)
         stage.set("proxy_requests", fetcher.proxied)
+        # Exit addresses this run gave up on. Not a fault and deliberately not
+        # a warning — a rotation that worked is the mechanism doing its job,
+        # and the run it saved reports `ok`. It is here because the rate is the
+        # thing to watch: a reader that rotates once a week is a pool with the
+        # odd bad exit in it, and one that rotates on every run is a pool going
+        # bad, which is a conversation with DataImpulse rather than a code
+        # change. Without this counter the two look identical from outside.
+        if fetcher.rotations:
+            stage.set("exit_rotations", fetcher.rotations)
         if fetcher.blocked:
             # Worth saying out loud even when the proxy then carried the run:
             # this is the portal telling us it does not want this address, and
