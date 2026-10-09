@@ -180,6 +180,9 @@ export function SubscribeForm({
   // Only when rooms are the *only* thing wanted. Ticking Room beside Flat still
   // leaves bedrooms meaningful, for the flats.
   const roomsOnly = wantedTypes.length > 0 && wantedTypes.every((one) => one === "room");
+  // Rooms alongside something countable: the sliders stay, but they only apply
+  // to the flats and houses — so say so rather than let them look universal.
+  const roomsToo = !roomsOnly && wantedTypes.includes("room");
 
   function add(area: Area) {
     if (chosen.some((one) => one.code === area.code)) {
@@ -285,9 +288,9 @@ export function SubscribeForm({
     if (!roomsOnly) {
       if (bedrooms[0] > BEDS_MIN) payload.bedrooms_min = String(bedrooms[0]);
       if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
+      if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
+      if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
     }
-    if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
-    if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
     // Metres on the slider, feet in the database — converted here, once. The
     // top handle at its ceiling means "and above", so no maximum is sent.
     if (area[0] > AREA_MIN) payload.area_min = String(asSqft(area[0]));
@@ -513,6 +516,33 @@ export function SubscribeForm({
         )}
       </div>
 
+      {/* Straight after the areas, and before the rent: it decides whether the
+          bedroom and bathroom sliders below are shown at all, so asking it
+          later would move the fields under the hand already reaching for them. */}
+      <fieldset aria-labelledby="type-label">
+        <span id="type-label" className="field-label">Property type</span>
+        <div className="choices">
+          {types.map((option) => (
+            <label key={option}>
+              <input
+                type="checkbox"
+                name="property_types"
+                value={option}
+                checked={wantedTypes.includes(option)}
+                onChange={(event) =>
+                  setWantedTypes((was) =>
+                    event.target.checked
+                      ? [...was, option]
+                      : was.filter((one) => one !== option),
+                  )
+                }
+              />{" "}
+              {TYPE_LABELS[option] ?? option}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
       <div>
         <span className="field-label">Rent per month</span>
         <RangeSlider
@@ -526,40 +556,46 @@ export function SubscribeForm({
         />
       </div>
 
-      <div>
-        <span className="field-label">Bedrooms</span>
-        <RangeSlider
-          min={BEDS_MIN}
-          max={ROOMS_MAX}
-          step={1}
-          value={bedrooms}
-          onChange={setBedrooms}
-          ticks
-          format={beds}
-          openTop="+"
-          disabled={roomsOnly}
-        />
-        {roomsOnly && (
-          <small className="note">
-            A room is one room in somebody else's flat, so a bedroom count says
-            nothing about it. Tick Flat or House as well to use this again.
-          </small>
-        )}
-      </div>
+      {/* Gone, not greyed out, when only rooms are wanted: a room is one room
+          in somebody else's flat, so neither count says anything about it and
+          a disabled slider only invites a second look. */}
+      {!roomsOnly && (
+        <>
+          <div>
+            <span className="field-label">Bedrooms</span>
+            <RangeSlider
+              min={BEDS_MIN}
+              max={ROOMS_MAX}
+              step={1}
+              value={bedrooms}
+              onChange={setBedrooms}
+              ticks
+              format={beds}
+              openTop="+"
+            />
+          </div>
 
-      <div>
-        <span className="field-label">Bathrooms</span>
-        <RangeSlider
-          min={BATHS_MIN}
-          max={ROOMS_MAX}
-          step={1}
-          value={bathrooms}
-          onChange={setBathrooms}
-          ticks
-          format={rooms}
-          openTop="+"
-        />
-      </div>
+          <div>
+            <span className="field-label">Bathrooms</span>
+            <RangeSlider
+              min={BATHS_MIN}
+              max={ROOMS_MAX}
+              step={1}
+              value={bathrooms}
+              onChange={setBathrooms}
+              ticks
+              format={rooms}
+              openTop="+"
+            />
+            {roomsToo && (
+              <small className="note">
+                Bedroom and bathroom counts only narrow the flats and houses.
+                Rooms come through regardless of where these sit.
+              </small>
+            )}
+          </div>
+        </>
+      )}
 
       <div>
         <span className="field-label">Desired property size</span>
@@ -626,35 +662,6 @@ export function SubscribeForm({
               : `Listings available within ${dayWindow} day${dayWindow === 1 ? "" : "s"} either side of it.`}
         </small>
       </div>
-
-      <fieldset aria-labelledby="type-label">
-        <span id="type-label" className="field-label">Property type</span>
-        <div className="choices">
-          {types.map((option) => (
-            <label key={option}>
-              <input
-                type="checkbox"
-                name="property_types"
-                value={option}
-                checked={wantedTypes.includes(option)}
-                onChange={(event) =>
-                  setWantedTypes((was) =>
-                    event.target.checked
-                      ? [...was, option]
-                      : was.filter((one) => one !== option),
-                  )
-                }
-              />{" "}
-              {TYPE_LABELS[option] ?? option}
-            </label>
-          ))}
-        </div>
-        <small className="note">
-          Ticking Flat and House is how you stop hearing about rooms. A studio is
-          a flat — ask for one with the bedroom slider at Studio.
-          A listing that does not say what it is still comes through.
-        </small>
-      </fieldset>
 
       <fieldset aria-labelledby="furnishing-label">
         <span id="furnishing-label" className="field-label">Furnishing</span>
