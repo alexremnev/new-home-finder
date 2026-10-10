@@ -87,6 +87,14 @@ export function criteriaCard(criteria: Criteria): string {
 
   if (criteria.pets_allowed) lines.push("🐾 Pets must be allowed");
 
+  // Said only when it is on, because off is the default and a line for every
+  // default turns the receipt into a settings dump. When it is on, though, it
+  // has to be here: two messages about one flat look like a bug unless the card
+  // says it was asked for.
+  if (criteria.send_duplicates) {
+    lines.push("👯 Duplicates: sent — one message per portal listing the flat");
+  }
+
   return lines.join("\n");
 }
 

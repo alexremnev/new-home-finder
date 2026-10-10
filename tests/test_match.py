@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from worker.pipeline.match import is_eligible, matches
+from worker.pipeline.match import DUPLICATE, is_eligible, matches
 
 def listing(**overrides: Any) -> dict[str, Any]:
     values: dict[str, Any] = {
@@ -185,6 +185,36 @@ def test_each_criterion_can_reject_and_says_why(
     verdict = matches(REALISTIC, listing(**{field: value}))
     assert not verdict
     assert expected_in_reason in verdict.reason, verdict.reason
+
+# ── the same flat on two portals ─────────────────────────────────────────
+
+def test_a_copy_of_a_flat_already_sent_is_muted_by_default() -> None:
+
+    verdict = matches({}, listing(duplicate_of=41))
+    assert not verdict
+    assert verdict is DUPLICATE
+
+def test_a_filter_can_ask_for_both_portals_copies() -> None:
+
+    assert matches({"send_duplicates": True}, listing(duplicate_of=41))
+
+def test_the_original_is_sent_either_way() -> None:
+
+    assert matches({}, listing(duplicate_of=None))
+    assert matches({"send_duplicates": True}, listing(duplicate_of=None))
+
+def test_a_row_without_the_column_is_not_treated_as_a_copy() -> None:
+    # Anything that reads a listing without `duplicate_of` — an older caller, a
+    # hand-built dict in a test — must keep sending rather than go silent.
+    assert matches({}, listing())
+
+def test_asking_for_copies_does_not_widen_the_rest_of_the_filter() -> None:
+    # The flag answers one question. A copy that is also too expensive is still
+    # refused, and for the price rather than for being a copy.
+    criteria = {"send_duplicates": True, "price_pcm": {"max": 1500}}
+    verdict = matches(criteria, listing(duplicate_of=41, price_pcm=1950))
+    assert not verdict
+    assert "price_pcm" in verdict.reason
 
 SUBSCRIBED_AT = datetime(2026, 8, 7, 10, 0)
 

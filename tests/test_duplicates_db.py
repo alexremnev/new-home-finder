@@ -11,6 +11,7 @@ psycopg = pytest.importorskip("psycopg")
 
 from worker import store
 from worker.contracts.listing import Listing
+from worker.pipeline.match import matches
 
 URL = os.environ.get("TEST_DATABASE_URL", "").strip()
 pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL is not set")
@@ -168,17 +169,35 @@ def test_a_bathroom_count_neither_portal_states_still_matches(conn: Any) -> None
     assert store.mark_duplicate(conn, second) == first
 
 
-def test_a_copy_is_never_offered_for_matching(conn: Any) -> None:
-    # The filter that actually stops the second alert going out. It lives in
-    # the query rather than in the matcher so that every path into the outbox
-    # inherits it.
+def test_a_copy_is_offered_for_matching_and_marked_as_one(conn: Any) -> None:
+    # Both rows come back, and the copy carries the pointer that says which it
+    # is. The query stopped deciding when the suppression became a
+    # subscriber's choice: `_check_duplicate` reads this column, so a filter
+    # with `send_duplicates` can have what the WHERE clause used to withhold
+    # from everybody.
     first = add(conn, source="rightmove", external_id="1")
     store.mark_duplicate(conn, first)
     second = add(conn, source="zoopla", external_id="2")
     store.mark_duplicate(conn, second)
 
     offered = store.listings_for_matching(conn, [first, second])
-    assert [int(row["id"]) for row in offered] == [first]
+    assert [int(row["id"]) for row in offered] == [first, second]
+    assert [row["duplicate_of"] for row in offered] == [None, first]
+
+
+def test_the_matcher_mutes_a_copy_unless_the_filter_asked_for_it(conn: Any) -> None:
+    # The two halves of the rule, over rows a database actually produced: the
+    # default withholds the copy, and `send_duplicates` is what releases it.
+    first = add(conn, source="rightmove", external_id="1")
+    store.mark_duplicate(conn, first)
+    second = add(conn, source="zoopla", external_id="2")
+    store.mark_duplicate(conn, second)
+
+    offered = store.listings_for_matching(conn, [first, second])
+    copy = next(row for row in offered if int(row["id"]) == second)
+
+    assert not matches({}, copy)
+    assert matches({"send_duplicates": True}, copy)
 
 
 # ── what a WhatsApp subscriber may cost ──────────────────────────────────

@@ -16,6 +16,20 @@ export type Criteria = {
   furnished?: string[];
   pets_allowed?: boolean;
   available_from?: { after?: string; before?: string };
+
+  /**
+   * Send the second portal's copy of a flat as well as the first.
+   *
+   * Absent is the default and the old behaviour: one agent's flat syndicated to
+   * Rightmove and Zoopla arrives once, and the copy is stored but never sent
+   * (see migration 0040). Setting this true turns that off for this filter
+   * alone — every copy is delivered, which is what somebody who wants both
+   * portals' links in front of them is asking for.
+   *
+   * Written only when it is true, so a filter saved before the toggle existed
+   * means exactly what it meant then.
+   */
+  send_duplicates?: boolean;
 };
 
 export const FURNISHED = ["furnished", "unfurnished", "part"] as const;
@@ -92,6 +106,14 @@ export function parseForm(form: Record<string, unknown>, enabledDistricts: strin
 
   if (form.pets_allowed === true || form.pets_allowed === "on") criteria.pets_allowed = true;
 
+  // The form's toggle is the other way round — it is on when duplicates are
+  // *not* wanted — so the field only appears when somebody turned it off. An
+  // absent field is the suppressing default, which is what every filter saved
+  // before this existed should keep meaning.
+  if (form.send_duplicates === true || form.send_duplicates === "on") {
+    criteria.send_duplicates = true;
+  }
+
   return criteria;
 }
 
@@ -153,6 +175,7 @@ export function describeCriteria(criteria: Criteria): string {
     lines.push(`Available: ${[after && `from ${after}`, before && `to ${before}`].filter(Boolean).join(" ")}`);
   }
   if (criteria.pets_allowed) lines.push("Must state: pets allowed");
+  if (criteria.send_duplicates) lines.push("Duplicates: sent");
   return lines.join("\n");
 }
 

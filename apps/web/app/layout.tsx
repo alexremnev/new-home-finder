@@ -20,8 +20,9 @@ const SITE = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
 
 const PITCH =
   "A bot that sends real-time alerts for new London rentals. Set a filter by " +
-  "area, rent and rooms; every match from Rightmove, Zoopla and OpenRent " +
-  "arrives in Telegram or WhatsApp within minutes of going live. Free to try.";
+  "area, rent and rooms; every match from Rightmove, Zoopla, OpenRent and " +
+  "SpareRoom arrives in Telegram or WhatsApp within minutes of going live. " +
+  "Free to try.";
 
 // metadataBase makes every relative url below absolute, which is what a crawler
 // and a chat app's preview both need.
@@ -48,6 +49,7 @@ export const metadata: Metadata = {
     "Rightmove alerts",
     "Zoopla alerts",
     "OpenRent alerts",
+    "SpareRoom alerts",
     "London letting alerts",
     "rent alerts by postcode",
     "be first to new listings",

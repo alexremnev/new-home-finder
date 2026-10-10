@@ -51,7 +51,10 @@ export default function Image() {
         </div>
 
         <div style={{ fontSize: 30, marginTop: 28, opacity: 0.9 }}>
-          Rightmove · Zoopla · OpenRent — one alert, in Telegram or WhatsApp
+          Rightmove · Zoopla · OpenRent · SpareRoom
+        </div>
+        <div style={{ fontSize: 30, marginTop: 10, opacity: 0.9 }}>
+          One alert, in Telegram or WhatsApp
         </div>
       </div>
     ),

@@ -76,11 +76,13 @@ def listings_for_matching(conn: Conn, listing_ids: list[int]) -> list[Row]:
     columns = ", ".join(_LISTING_VIEW_COLUMNS)
     return list(
         conn.execute(
-            f"SELECT id, first_seen_at, {columns} FROM listings "
-            # The second portal's copy of a flat somebody has already been sent.
-            # Filtered here rather than in the matcher so that every path into
-            # the outbox — an alert, a digest, a starter batch — inherits it.
-            "WHERE id = ANY(%s) AND duplicate_of IS NULL "
+            # `duplicate_of` comes along as a value rather than as a WHERE
+            # clause: it used to be filtered here, which made suppressing the
+            # second portal's copy of a flat unconditional for everybody. It is
+            # a subscriber's choice now (`send_duplicates`), so the matcher
+            # decides per filter — see `_check_duplicate`.
+            f"SELECT id, first_seen_at, duplicate_of, {columns} FROM listings "
+            "WHERE id = ANY(%s) "
             "ORDER BY first_seen_at, id",
             (listing_ids,),
         ).fetchall()
@@ -1333,7 +1335,7 @@ def recent_listings(conn: Conn, *, days: int, limit: int) -> list[Row]:
     return list(
         conn.execute(
             f"""
-            SELECT id, first_seen_at, {columns} FROM listings l
+            SELECT id, first_seen_at, duplicate_of, {columns} FROM listings l
              WHERE status = 'active'
                AND first_seen_at > now() - make_interval(days => %s)
                AND EXISTS (

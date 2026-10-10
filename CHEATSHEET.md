@@ -424,7 +424,8 @@ UPDATE source_locations SET enabled = true
 --        ↓
 --   listing_sightings        кто её увидел и когда — фид или скрапер
 --        ↓
---   listings.duplicate_of    та же квартира с другого портала гасится
+--   listings.duplicate_of    та же квартира с другого портала помечается
+--        ↓                   → и гасится, если подписчик не просил копии
 --        ↓
 --   notifications            что реально ушло людям (UNIQUE user_id + listing_id)
 
@@ -698,8 +699,12 @@ SELECT portal,
 -- ON CONFLICT DO NOTHING — это и есть гарантия, что одна квартира не уйдёт
 -- человеку дважды, даже если её нашли и фид, и скрапер.
 --
--- Копии между порталами сюда не попадают вовсе: listings_for_matching
--- отсекает duplicate_of IS NOT NULL ещё до постановки в очередь.
+-- Копии между порталами по умолчанию сюда не попадают: матчер гасит
+-- duplicate_of IS NOT NULL (match._check_duplicate), и в счётчиках стадии
+-- match это withheld_as_duplicate. Но это выбор подписчика — тумблер «не
+-- присылать дубликаты» на форме, включённый по умолчанию; у кого в criteria
+-- стоит send_duplicates: true, тому копия уходит, так что строка с
+-- duplicate_of здесь больше не невозможна.
 SELECT l.source_key,
        n.channel,
        n.status,

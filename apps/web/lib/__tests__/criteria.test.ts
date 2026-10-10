@@ -67,6 +67,26 @@ describe("checkboxes", () => {
   });
 });
 
+describe("duplicates", () => {
+  // The toggle on the form is on by default and means "don't send them", so
+  // the field only ever arrives when somebody turned it off. Absent therefore
+  // has to keep meaning suppressed — every filter saved before the toggle
+  // existed is an absent field.
+  it("is absent unless the toggle was turned off", () => {
+    expect(parseForm({}, ENABLED).send_duplicates).toBeUndefined();
+  });
+
+  it("is set when the form says so", () => {
+    expect(parseForm({ send_duplicates: "on" }, ENABLED).send_duplicates).toBe(true);
+    expect(parseForm({ send_duplicates: true }, ENABLED).send_duplicates).toBe(true);
+  });
+
+  it("ignores anything else, rather than reading it as true", () => {
+    expect(parseForm({ send_duplicates: "off" }, ENABLED).send_duplicates).toBeUndefined();
+    expect(parseForm({ send_duplicates: "false" }, ENABLED).send_duplicates).toBeUndefined();
+  });
+});
+
 describe("districts", () => {
   it("normalises case", () => {
     expect(parseForm({ districts: "se16" }, ENABLED).areas)

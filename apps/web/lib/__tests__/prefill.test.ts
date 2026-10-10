@@ -177,6 +177,14 @@ describe("the tick boxes", () => {
   it("leaves pets alone unless it was actually set", () => {
     expect(prefill({}, COVERED).pets).toBe(false);
   });
+
+  // The one control that reads its field backwards: the toggle is on when
+  // duplicates are *not* to be sent, so a filter with nothing saved opens with
+  // it on and only `send_duplicates` turns it off.
+  it("opens the duplicates toggle on unless copies were asked for", () => {
+    expect(prefill({}, COVERED).oneAlertPerFlat).toBe(true);
+    expect(prefill({ send_duplicates: true }, COVERED).oneAlertPerFlat).toBe(false);
+  });
 });
 
 // The two halves of the same journey: what the form submits, parsed into
@@ -211,6 +219,7 @@ describe("a filter saved from the form and reopened", () => {
       types: ["flat", "house"],
       furnished: ["furnished", "part"],
       pets: true,
+      oneAlertPerFlat: true,
       availableOn: "2026-03-06",
       dayWindow: 5,
     });

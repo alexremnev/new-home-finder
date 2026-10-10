@@ -38,6 +38,15 @@ describe("the criteria card", () => {
     expect(card).toBe("📍 Areas: everywhere covered");
   });
 
+  // Two messages about one flat look like a fault unless the receipt says it
+  // was asked for. The quiet default is not worth a line.
+  it("names the duplicates choice only when copies are being sent", () => {
+    expect(criteriaCard({ areas: { postcode_districts: ["SE16"] } })).not.toContain(
+      "Duplicates",
+    );
+    expect(criteriaCard({ send_duplicates: true })).toContain("👯 Duplicates: sent");
+  });
+
   it("calls a flat with no bedrooms a studio", () => {
     expect(criteriaCard({ bedrooms: { min: 0, max: 0 } })).toContain("🛏 Bedrooms: studio");
     expect(criteriaCard({ bedrooms: { min: 0, max: 2 } })).toContain("🛏 Bedrooms: studio–2");

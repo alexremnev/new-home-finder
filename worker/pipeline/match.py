@@ -22,9 +22,15 @@ class Verdict:
 
 MATCH = Verdict(True, "")
 
+# Returned by identity, not rebuilt: `queue_matches` tells this verdict apart
+# from the others to count it under its own name, and a muted duplicate is a
+# different thing from a listing that failed a filter.
+DUPLICATE = Verdict(False, "the same flat on another portal, already sent")
+
 def matches(criteria: Criteria, listing: ListingValues) -> Verdict:
 
     for check in (
+        _check_duplicate,
         _check_price,
         _check_bedrooms,
         _check_bathrooms,
@@ -41,6 +47,28 @@ def matches(criteria: Criteria, listing: ListingValues) -> Verdict:
         if not verdict.matched:
             return verdict
     return MATCH
+
+def _check_duplicate(criteria: Criteria, listing: ListingValues) -> Verdict:
+    """The second portal's copy of a flat, unless this filter asked for both.
+
+    One agent syndicates a flat to Rightmove and Zoopla, so it arrives twice,
+    minutes apart; `listings.duplicate_of` names the copy that counts and the
+    later row points at it (0040). Suppressing it is the default and was for a
+    long time unconditional — a WHERE clause in `listings_for_matching`.
+
+    It is a filter and not a fact about the listing, though: the second copy is
+    a second agent's link to the same flat, and somebody comparing the two
+    wants both. So the rule moved here, where a subscription can turn it off
+    with `send_duplicates`, and lives in `matches` rather than at either call
+    site so the alerts and the starter batch cannot disagree about it.
+
+    A row fetched without the column reads as not a duplicate, which is the
+    safe direction: it sends, rather than silently dropping everything.
+    """
+
+    if criteria.get("send_duplicates"):
+        return MATCH
+    return DUPLICATE if listing.get("duplicate_of") is not None else MATCH
 
 def _check_price(criteria: Criteria, listing: ListingValues) -> Verdict:
     return _range("price_pcm", criteria.get("price_pcm"), listing.get("price_pcm"))

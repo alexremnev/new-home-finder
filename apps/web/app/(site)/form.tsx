@@ -164,6 +164,10 @@ export function SubscribeForm({
   const [availableOn, setAvailableOn] = useState(start.availableOn);
   const [dayWindow, setDayWindow] = useState(start.dayWindow);
   const [area, setArea] = useState<[number, number]>(start.size);
+  // Controlled, and the only control on the form whose default is "on": an
+  // uncontrolled checkbox would send nothing when it is left alone, and nothing
+  // is the shape the submit below uses for "duplicates wanted".
+  const [oneAlertPerFlat, setOneAlertPerFlat] = useState(start.oneAlertPerFlat);
   const [leaving, setLeaving] = useState<{
     channel: Channel;
     url: string;
@@ -297,6 +301,10 @@ export function SubscribeForm({
     // top handle at its ceiling means "and above", so no maximum is sent.
     if (area[0] > AREA_MIN) payload.area_min = String(asSqft(area[0]));
     if (area[1] < AREA_MAX) payload.area_max = String(asSqft(area[1]));
+
+    // Only when the toggle is off, because the stored field means "send the
+    // copies" and its absence is the suppressing default — see `Criteria`.
+    if (!oneAlertPerFlat) payload.send_duplicates = "on";
 
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
@@ -701,6 +709,34 @@ export function SubscribeForm({
         <p className="hint">
           Only leaves out listings that say pets are not allowed. Silence still comes
           through.
+        </p>
+      </label>
+
+      {/* Last in the card, and not a filter: it narrows nothing, it says what
+          happens when two portals carry the same flat. One agent syndicates a
+          flat to Rightmove and Zoopla and it arrives twice, minutes apart,
+          which is the complaint this answers — but the second copy is a second
+          link, and somebody comparing agents wants both. */}
+      <label>
+        <span>Duplicates</span>
+        <span className="toggle">
+          <input
+            type="checkbox"
+            role="switch"
+            // Deliberately unnamed: the value is posted by `submit` from this
+            // state, inverted. A name here would put the unflipped answer in
+            // the form data as well.
+            checked={oneAlertPerFlat}
+            onChange={(event) => setOneAlertPerFlat(event.target.checked)}
+          />
+          <span className="toggle-label">Don&rsquo;t send duplicates</span>
+        </span>
+        <p className="hint">
+          {oneAlertPerFlat
+            ? "The same flat on two portals is sent once — the listing that " +
+              "appeared first."
+            : "Every copy is sent, so a flat carried by two portals arrives " +
+              "twice, once per link."}
         </p>
       </label>
 

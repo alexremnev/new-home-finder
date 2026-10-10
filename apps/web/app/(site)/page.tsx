@@ -115,8 +115,8 @@ export default async function Page({
         operatingSystem: "Telegram, WhatsApp",
         url: `${site}/`,
         description:
-          "Watches Rightmove, Zoopla and OpenRent for London rentals matching your " +
-          "filter and sends each one within minutes.",
+          "Watches Rightmove, Zoopla, OpenRent and SpareRoom for London rentals " +
+          "matching your filter and sends each one within minutes.",
         areaServed: { "@type": "City", name: "London", addressCountry: "GB" },
         offers: {
           "@type": "Offer",
@@ -144,7 +144,10 @@ export default async function Page({
             name: "Which sites does it cover?",
             acceptedAnswer: {
               "@type": "Answer",
-              text: "Rightmove, Zoopla and OpenRent, in one stream of alerts.",
+              text:
+                "Rightmove, Zoopla, OpenRent and SpareRoom, in one stream of " +
+                "alerts. SpareRoom is where the rooms in shared flats are, " +
+                "which the other three barely carry.",
             },
           },
           {
@@ -184,9 +187,9 @@ export default async function Page({
           <>
             <h1>Beat the London Rental Race. Get Instant Alerts.</h1>
             <p className="lede">
-              Never miss a listing on Rightmove, Zoopla, or OpenRent. Set your
-              criteria and receive instant notifications directly in your
-              preferred messenger.
+              Never miss a listing on Rightmove, Zoopla, OpenRent or
+              SpareRoom. Set your criteria and receive instant notifications
+              directly in your preferred messenger.
             </p>
           </>
         )}

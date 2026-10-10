@@ -77,6 +77,12 @@ export type Fields = {
   types: string[];
   furnished: string[];
   pets: boolean;
+  /**
+   * The duplicates toggle, which reads the stored field backwards: it is on
+   * when the same flat on a second portal should NOT be sent. On is the
+   * default, so a filter with nothing stored opens with it on.
+   */
+  oneAlertPerFlat: boolean;
   /** The middle of the available-date window, or "" for any date. */
   availableOn: string;
   dayWindow: number;
@@ -94,6 +100,7 @@ export function blank(): Fields {
     types: [],
     furnished: [],
     pets: false,
+    oneAlertPerFlat: true,
     availableOn: "",
     dayWindow: DAY_WINDOW,
   };
@@ -126,6 +133,7 @@ export function prefill(
     types: allowedOnly(criteria.property_types, PROPERTY_TYPES),
     furnished: allowedOnly(criteria.furnished, FURNISHED),
     pets: criteria.pets_allowed === true,
+    oneAlertPerFlat: criteria.send_duplicates !== true,
     availableOn,
     dayWindow,
   };

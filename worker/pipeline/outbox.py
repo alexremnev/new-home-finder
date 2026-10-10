@@ -26,7 +26,7 @@ from worker.notify.plans import (
     notice_for,
 )
 from worker.obs import Run
-from worker.pipeline.match import is_eligible, matches
+from worker.pipeline.match import DUPLICATE, is_eligible, matches
 
 Row = dict[str, Any]
 Conn = psycopg.Connection[Row]
@@ -100,7 +100,20 @@ def queue_matches(conn: Conn, run: Run, *, source_key: str, listing_ids: list[in
             for listing in listings:
                 verdict = matches(criteria, listing)
                 if not verdict:
-                    stage.count("not_matched")
+                    # Counted under its own name: a flat muted because the other
+                    # portal's copy of it was already sent is the dedupe rule
+                    # working, not a filter that missed. It used to be invisible
+                    # here — those rows never reached the matcher at all, they
+                    # were dropped by `listings_for_matching` — and now that a
+                    # subscription can ask for them, how often it fires is worth
+                    # being able to read.
+                    # Not "duplicate": the scrape stage already has a counter
+                    # of that name for the rows it marks, and the two answer
+                    # different questions — how many copies arrived, against
+                    # how many were withheld from this subscriber.
+                    stage.count(
+                        "withheld_as_duplicate" if verdict is DUPLICATE else "not_matched"
+                    )
                     continue
 
                 eligible = is_eligible(listing, backfill_from=subscription["backfill_from"])

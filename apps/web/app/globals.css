@@ -219,6 +219,62 @@ fieldset label {
   margin: 0;
 }
 
+/* A switch, from the checkbox itself: the track is the box with its own
+   appearance off, the thumb is its ::after. No second element and no hidden
+   input, so the keyboard, the label click and :focus-visible all still work the
+   way the browser already makes them work for a checkbox. */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.toggle input[type="checkbox"] {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 2.75rem;
+  height: 1.5rem;
+  /* Wider and taller than the plain checkbox this overrides, and no right
+     margin: the gap above spaces it from its text. */
+  margin: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.toggle input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 999px;
+  background: var(--line-strong);
+  /* Transformed rather than repositioned, so the travel is on the compositor
+     and cannot shift the track it sits in. */
+  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1), background 160ms ease;
+}
+
+.toggle input[type="checkbox"]:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.toggle input[type="checkbox"]:checked::after {
+  transform: translateX(1.25rem);
+  background: var(--card);
+}
+
+.toggle-label {
+  font-size: 0.9375rem;
+  font-weight: 400;
+}
+
 .slider { margin-top: 0.35rem; }
 
 .slider-value {
