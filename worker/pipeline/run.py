@@ -125,16 +125,25 @@ def run_job(
 
     if job == "ingest":
 
-        from worker.ingest.parse import fill_images, run_parse
+        from worker.ingest.parse import fill_images, fill_types, run_parse
         from worker.ingest.reader import collect
 
         source = source_key or DEFAULT_SOURCE
         asyncio.run(collect(conn, run, source_key=source, dry_run=cfg.dry_run))
         listing_ids = run_parse(conn, run, source_key=source, dry_run=cfg.dry_run)
 
-        # Before queueing, so a listing about to be sent already has its picture.
+        # Before queueing, so a listing about to be sent already has its
+        # picture and — where the portal's page will say — its property type.
+        # The feed states no type, and an untyped listing answers every
+        # property-type filter, so filling it after the match would be too
+        # late twice over.
+        #
+        # One dict between the two steps: both read their fact out of the same
+        # listing page, so a listing that needs both is fetched once.
         if not cfg.dry_run:
-            fill_images(conn, run)
+            pages: dict[str, str] = {}
+            fill_images(conn, run, pages=pages)
+            fill_types(conn, run, pages=pages)
 
         if listing_ids:
             queue_matches(conn, run, source_key=source, listing_ids=listing_ids)

@@ -74,9 +74,35 @@ def as_listing(parsed: tg_feed.Parsed) -> Listing:
 # hour while there is a backlog, and roughly the arrival rate once there is not.
 IMAGE_BATCH = 12
 
-def fill_images(conn: Conn, run: Run, *, limit: int = IMAGE_BATCH) -> int:
+# The same bound for the same reason, and deliberately a second budget rather
+# than a share of the first: the two steps mostly want different listings. The
+# image step skips anything whose feed message carried a photograph, and those
+# are exactly the listings that still need a type.
+TYPE_BATCH = 12
 
-    from worker.ingest.photo import fetch_image
+# One run's worth of listing pages, keyed by url. Both fill steps read facts
+# out of the same document — og:image and the title — so a listing that needs
+# both is fetched once. A failure is remembered as an empty page so that it is
+# not retried within the run either.
+Pages = dict[str, str]
+
+
+def _page(url: str, pages: Pages | None) -> str | None:
+    from worker.ingest.photo import head_of
+
+    if pages is not None and url in pages:
+        return pages[url] or None
+    page = head_of(url)
+    if pages is not None:
+        pages[url] = page or ""
+    return page
+
+
+def fill_images(
+    conn: Conn, run: Run, *, limit: int = IMAGE_BATCH, pages: Pages | None = None
+) -> int:
+
+    from worker.ingest.photo import image_in
 
     with run.stage("images") as stage:
         pending = store.listings_missing_image(conn, limit=limit)
@@ -86,12 +112,46 @@ def fill_images(conn: Conn, run: Run, *, limit: int = IMAGE_BATCH) -> int:
 
         found = 0
         for listing in pending:
-            image = fetch_image(str(listing["url"]))
+            page = _page(str(listing["url"]), pages)
+            image = image_in(page) if page else None
             store.set_listing_image(conn, int(listing["id"]), image)
             if image:
                 found += 1
             else:
                 stage.count("no_image")
+        stage.set("found", found)
+        return found
+
+
+def fill_types(
+    conn: Conn, run: Run, *, limit: int = TYPE_BATCH, pages: Pages | None = None
+) -> int:
+    """Read the property type off the listing page, for listings that have none.
+
+    Only the feed produces those — it states no type at all — and an untyped
+    listing both reads worse in an alert and answers every property-type
+    filter. The page says what it is in its own title; see
+    `worker.ingest.kind`, which also records why Zoopla cannot be read this
+    way.
+    """
+
+    from worker.ingest.kind import type_in
+
+    with run.stage("types") as stage:
+        pending = store.listings_missing_type(conn, limit=limit)
+        stage.set("pending", len(pending))
+        if not pending:
+            return 0
+
+        found = 0
+        for listing in pending:
+            page = _page(str(listing["url"]), pages)
+            kind = type_in(page) if page else None
+            store.set_listing_type(conn, int(listing["id"]), kind)
+            if kind:
+                found += 1
+            else:
+                stage.count("no_type")
         stage.set("found", found)
         return found
 
@@ -162,4 +222,7 @@ def run_parse(
         stage.set("listings", len(written))
         return written
 
-__all__ = ["BATCH", "FEED_READER", "as_listing", "run_parse"]
+__all__ = [
+    "BATCH", "FEED_READER", "IMAGE_BATCH", "TYPE_BATCH", "as_listing",
+    "fill_images", "fill_types", "run_parse",
+]

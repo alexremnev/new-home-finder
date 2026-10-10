@@ -36,11 +36,34 @@ SELECT reader, source_key, last_external_id, updated_at FROM ingest_cursors;
 
 -- перепрогнать разбор после правки парсера: сообщения никуда не делись
 UPDATE source_messages SET status = 'new', parse_error = NULL WHERE status = 'unparseable';
+
+-- объявления без типа: что ещё ждёт шага types, а что уже смотрели и не нашли
+SELECT source_key,
+       count(*) FILTER (WHERE type_checked_at IS NULL) AS ждут,
+       count(*) FILTER (WHERE type_checked_at IS NOT NULL) AS страница_молчит
+  FROM listings
+ WHERE property_type IS NULL AND status = 'active'
+   AND first_seen_at > now() - interval '7 days'
+ GROUP BY 1 ORDER BY 2 DESC;
+
+-- посмотреть заново после правки worker/ingest/kind.py
+UPDATE listings SET type_checked_at = NULL
+ WHERE property_type IS NULL AND first_seen_at > now() - interval '7 days';
 ```
 
-Скрапинга больше нет. Объявления приходят из фида и пишутся под порталом, который
-их хостит (`rightmove`, `zoopla`), поэтому `UNIQUE (source_key, external_id)`
-по-прежнему отсекает одно и то же объявление, пришедшее дважды.
+Тип объявления фид не присылает вообще: в сообщении нет поля Type, так что из него
+выводятся только studio и room. Поэтому в `ingest` есть шаг `types` — он читает тип
+из заголовка страницы объявления, в том же документе, который уже качается ради
+картинки (`worker/ingest/kind.py`). Zoopla так не читается (403 и Cloudflare), её
+объявления получают тип позже, когда в ту же строку пишет скрапер: `insert_listing`
+заполняет пустой `property_type` через `COALESCE` (у скрапера curl_cffi, у шага
+`types` — обычный клиент).
+
+Объявления приходят двумя дорогами — из фида и от скраперов (`rightmove`,
+`zoopla_london`, `spareroom`, `openrent`) — и пишутся под порталом, который их
+хостит, так что `UNIQUE (source_key, external_id)` отсекает одно и то же
+объявление, пришедшее дважды. Это же значит, что строка одна на двоих: кто увидел
+квартиру первым, тот и заполнил поля, а второй дописывает только пустые.
 
 ## Тесты
 

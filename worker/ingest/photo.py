@@ -59,7 +59,14 @@ def image_in(html: str) -> str | None:
     # than no picture at all, since the alert is still about a real flat.
     return found[0] if found else None
 
-def fetch_image(url: str, *, opener: object | None = None) -> str | None:
+def head_of(url: str, *, opener: object | None = None) -> str | None:
+    """The head of a listing page as text, or None if it could not be read.
+
+    Separate from `fetch_image` because two facts are read out of this one
+    document — the photograph and, when the feed stated no property type, the
+    type the page states in its title. One GET for both: see
+    `worker.ingest.kind` and the `pages` argument in `worker.ingest.parse`.
+    """
 
     request = urllib.request.Request(url, headers={"User-Agent": AGENT})
     try:
@@ -68,12 +75,17 @@ def fetch_image(url: str, *, opener: object | None = None) -> str | None:
             kind = (response.headers.get("Content-Type") or "").lower()
             if "html" not in kind:
                 return None
-            body = response.read(HEAD_BYTES)
+            body: bytes = response.read(HEAD_BYTES)
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         # A portal that refuses, redirects oddly or times out is not an error
         # worth failing a run over: the listing goes out without a picture.
         return None
 
-    return image_in(body.decode("utf-8", "replace"))
+    return body.decode("utf-8", "replace")
 
-__all__ = ["fetch_image", "image_in"]
+def fetch_image(url: str, *, opener: object | None = None) -> str | None:
+
+    head = head_of(url, opener=opener)
+    return image_in(head) if head else None
+
+__all__ = ["fetch_image", "head_of", "image_in"]

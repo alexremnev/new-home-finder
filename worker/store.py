@@ -1167,6 +1167,51 @@ def set_listing_image(conn: Conn, listing_id: int, image_url: str | None) -> Non
         (image_url, listing_id),
     )
 
+def listings_missing_type(conn: Conn, *, limit: int = 12) -> list[Row]:
+    """Listings still worth asking a portal what they are.
+
+    The feed states no property type, and an untyped listing both reads worse
+    in an alert and answers every property-type filter. Same window and same
+    ordering as the image queue, for the same reasons — a flat from August is
+    nobody's alert — and `type_checked_at` is what stops a page being fetched
+    twice.
+
+    Unlike the image queue this does not skip listings that came with a
+    picture: whether the feed message carried a photograph says nothing about
+    whether it stated a type, and it never does.
+    """
+
+    return list(
+        conn.execute(
+            """
+            SELECT l.id, l.url FROM listings l
+             WHERE l.property_type IS NULL
+               AND l.type_checked_at IS NULL
+               AND l.status = 'active'
+               AND l.first_seen_at > now() - interval '7 days'
+             ORDER BY l.first_seen_at DESC
+             LIMIT %s
+            """,
+            (limit,),
+        ).fetchall()
+    )
+
+def set_listing_type(conn: Conn, listing_id: int, property_type: str | None) -> None:
+
+    # checked_at either way, as with the picture: "looked and the page named
+    # nothing" has to be distinguishable from "not looked at", or every
+    # untyped listing is refetched on every run forever. Zoopla would be the
+    # whole of that cost, since it answers a plain client with a 403.
+    #
+    # COALESCE on the value itself because the scrapers write the same row:
+    # one may have filled the type between this listing being picked up and
+    # this statement running, and a page that named nothing must not blank it.
+    conn.execute(
+        "UPDATE listings SET property_type = COALESCE(property_type, %s), "
+        "type_checked_at = now() WHERE id = %s",
+        (property_type, listing_id),
+    )
+
 def mark_parsed(conn: Conn, message_id: int, listing_id: int) -> None:
     conn.execute(
         "UPDATE source_messages SET status = 'parsed', parsed_at = now(), "
