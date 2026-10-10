@@ -3,7 +3,7 @@ import { Suspense } from "react";
 import {
   AlertsWithoutFeed,
   Duplicates, Faults, FeedState, FeedVersusScrapers, Feeds, Health, Jobs, LastRuns,
-  ListingsCreated, LogLines, Portals,
+  ListingsCreated, LogLines, Portals, PortalSeen,
   MessagesRead, QueueTiles, RunsChart,
 } from "./bodies";
 import { Panel, PanelWait } from "./panel";
@@ -132,6 +132,44 @@ export default async function SystemPage({
         >
           <Suspense fallback={<PanelWait />}>
             <ListingsCreated span={span} />
+          </Suspense>
+        </Panel>
+      </div>
+
+      <div className="dash-row dash-row-wide">
+        <Panel
+          title="Rightmove read"
+          why="То же, что «Messages read», но для собственного скрапера Rightmove: сколько объявлений он увидел впервые в каждом окне времени. Считаются наблюдения (listing_sightings), а не созданные строки, поэтому сюда входит и то, что фид опубликовал раньше. Линия на нуле при зелёной задаче — в подписанных районах ничего нового не выставили, а не сломано. До миграции 0052 ничего не записывалось, так что период раньше неё покажет нуль по другой причине."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <PortalSeen source="rightmove" span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="Zoopla read"
+          why="То же для скрапера Zoopla. Резкий провал до нуля при живых остальных графиках здесь чаще всего значит 403: Zoopla отказывает адресу сервера, и сверить надо с «refused» в Portal scrapers."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <PortalSeen source="zoopla" span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="OpenRent read"
+          why="То же для OpenRent. Фид его не публиковал никогда, поэтому здесь нет доли, которую кто-то увидел раньше: всё, что на графике, нашёл этот скрапер и только он."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <PortalSeen source="openrent" span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="SpareRoom read"
+          why="То же для SpareRoom, и форма графика здесь другая по замыслу. Сайт запрещает сортировку по новизне, поэтому читается крутящееся окно — 6 страниц из 60 за прогон, полный круг за час; комната попадает на график тогда, когда до её страницы дошла очередь, а не когда её выставили. Пустой час здесь ничего не говорит, смотреть надо на сутки."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <PortalSeen source="spareroom" span={span} />
           </Suspense>
         </Panel>
       </div>

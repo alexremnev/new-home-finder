@@ -5,7 +5,7 @@ import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
   feedOnlyListings, feedReliance,
-  runLog, runPoints, sightingsSince, sourceFeeds, sourceSwitches,
+  runLog, runPoints, sightingPoints, sightingsSince, sourceFeeds, sourceSwitches,
   unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
@@ -832,6 +832,22 @@ export async function MessagesRead({ span }: { span: string }) {
 export async function ListingsCreated({ span }: { span: string }) {
   const win = windowFor(span);
   return <Series data={await intakePoints(win, bucketMinutes(win.hours))} />;
+}
+
+// The scraper's half of "Messages read": the same chart, same window, same
+// buckets, one per portal reader. `source` is a key from PORTALS above, never
+// anything a request supplied.
+export async function PortalSeen({
+  source,
+  span,
+}: {
+  source: string;
+  span: string;
+}) {
+  const win = windowFor(span);
+  return (
+    <Series data={await sightingPoints(source, win, bucketMinutes(win.hours))} />
+  );
 }
 
 export async function QueueTiles({ span }: { span: string }) {

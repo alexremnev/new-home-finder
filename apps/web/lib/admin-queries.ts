@@ -1268,14 +1268,48 @@ export async function unparseablePoints(win: Win, minutes: number): Promise<Slic
   );
 }
 
-// One shape for all four. The table, column and predicate are written here and
-// never come from a request, so there is nothing for a caller to inject.
+// The same chart as `messagePoints`, for a reader that fetches a portal's own
+// pages instead of reading the feed. One row per (listing, reader) in
+// `listing_sightings`, so a bucket counts the listings that reader first laid
+// eyes on inside it — the scraper's intake, which is what "messages read" is
+// for the feed.
+//
+// Not the `seen` counter on `job_stages`: that is per run and timestamped by
+// when the run started, so a whole sweep's listings land on one minute. On
+// SpareRoom, which reads a rolling six pages out of sixty, that would draw a
+// spike every fifty minutes instead of when the rooms appeared.
+//
+// Nothing was backfilled before 0052, so a window reaching further back shows
+// zero because nobody was recording, not because nobody read anything — the
+// same caveat `sightingsSince` states on the panels above.
+export async function sightingPoints(
+  reader: string,
+  win: Win,
+  minutes: number,
+): Promise<Slice[]> {
+  return bucketed(`listing_sightings`, `first_at`, `reader = $4`, win, minutes, [
+    reader,
+  ]);
+}
+
+// One shape for all of them. The table, column and predicate are written in
+// this file and never come from a request, so there is nothing for a caller to
+// inject; a value that does vary is bound through `extra`.
 async function bucketed(
-  table: "notifications" | "listings" | "source_messages" | "site_visits",
+  table:
+    | "notifications"
+    | "listings"
+    | "source_messages"
+    | "site_visits"
+    | "listing_sightings",
   column: "sent_at" | "first_seen_at" | "stored_at" | "first_at",
   predicate: string,
   win: Win,
   minutes: number,
+  // Anything the predicate needs beyond the window, bound as $4 onwards. A
+  // value a caller chose belongs here rather than in the predicate string,
+  // which is why the one predicate that varies — the reader — is a parameter.
+  extra: unknown[] = [],
 ): Promise<Slice[]> {
   return query<Slice>(
     `WITH span AS (
@@ -1294,7 +1328,12 @@ async function bucketed(
              AND t.${column} <  span.bucket + make_interval(mins => $2::int)
       GROUP BY span.bucket
       ORDER BY span.bucket`,
-    [Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
+    [
+      Math.round(win.mins),
+      Math.round(minutes),
+      Math.round(win.endMins),
+      ...extra,
+    ],
   ).catch(() => []);
 }
 

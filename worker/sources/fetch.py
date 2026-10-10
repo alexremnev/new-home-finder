@@ -153,37 +153,54 @@ TIMEOUT = 15.0
 
 # Seconds of random delay before each request, drawn fresh every time.
 #
-# Two separate reasons, and the second is why it is on every request rather
-# than only on the first:
+# Drawn per request rather than once per run, because one delay chosen at the
+# start moves a burst and leaves its shape alone — and the shape is the whole
+# point. The pages of one sweep otherwise arrive back-to-back as fast as a
+# reused handle can ask for them, twenty-six requests in one run as measured on
+# 10 October 2026.
 #
-#   * A timer fires on the dot. Three readers on a five-minute calendar and a
-#     sweep that pages through a portal arrive as a burst on the exact same
-#     second of every period, which is a shape no person browsing produces and
-#     the cheapest possible thing for a portal to key on.
-#   * The pages of one sweep arrive back-to-back as fast as a reused handle can
-#     ask for them — twenty-six requests in one run, measured on 10 October
-#     2026 — which is the same tell at a smaller scale.
+# ── why four tenths and not a second and a half ─────────────────────────────
 #
-# The cost is a mean of `JITTER / 2` per request, which is worth checking
-# against the per-run ceilings rather than against a typical run:
+# Because the size of the delay is not what does the work; the variance is.
+# Six sequential fetches of Zoopla's London search page from a home connection
+# on 10 October 2026, jitter off:
 #
-#   a two-page zoopla_london read     2 requests    ~1.5s
-#   the largest sweep measured       26 requests     ~20s
-#   sweep's own ceilings             ~90 requests    ~67s   DISTRICT_BUDGET
+#     435ms  186  182  159  193  358     median 190ms, stdev 115ms
+#
+# So requests already arrive between 159 and 435 milliseconds apart with
+# nothing added, which says two things at once. A jitter of a few tens of
+# milliseconds would vanish into that and buy nothing. And a jitter of seconds
+# is not buying four times as much either — past the point where our variance
+# matches the connection's, more only costs time.
+#
+# `uniform(0, 0.4)` has a standard deviation of 115ms, which is the measured
+# figure exactly, so it doubles the variance of the whole series. That is the
+# anchor: as much irregularity again as the network already provides. Raising
+# it to 0.75 would make ours dominate at about twice the connection's, which is
+# available and was not chosen — nothing measured says the portals key on
+# request timing at all. Zoopla's refusals are per exit address and clumped in
+# time, and a home connection making the identical requests at any spacing is
+# served every one.
+#
+# The cost, at a mean of `JITTER / 2` a request, against the per-run ceilings:
+#
+#   a two-page zoopla_london read     2 requests    ~0.4s
+#   the largest sweep measured       26 requests     ~5s
+#   sweep's own ceilings             ~90 requests    ~18s   DISTRICT_BUDGET
 #                                                           plus POSTCODE_BUDGET
-#   openrent's slug backlog         400 requests   ~300s   SLUG_BUDGET
+#   openrent's slug backlog         400 requests     ~80s   SLUG_BUDGET
 #
-# The first three run under systemd's `TimeoutStartSec=600` and sit well
-# inside it. The last does not — `openrent` runs from the Windows desk, where
-# the task has no execution limit — and 400 is a ceiling for a first run or a
-# backlog, not a steady state, where that reader asks a handful of redirects.
-# Worth knowing before raising this, because that is the run it would bite.
+# All four are comfortable — the last one is what made the old value awkward,
+# at five minutes of a backlog run spent asleep.
 #
 # It is not a rate limit and not a substitute for one: it is only the removal
-# of a pattern. `sweep.PAUSE_SECONDS` is the other delay in play, a flat second
-# between districts, and deliberately left alone — it is politeness toward the
-# portal rather than camouflage, and the two do not do the same job.
-JITTER = 1.5
+# of a pattern, and a small one. The run cadence is the part a portal could
+# actually read off a stopwatch, and that is handled where it belongs — the
+# three readers' timers are offset by a third of their interval each, and carry
+# RandomizedDelaySec on top. `sweep.PAUSE_SECONDS` is the third delay in play,
+# a flat second between districts, deliberately left flat: it is politeness
+# toward the portal rather than camouflage.
+JITTER = 0.4
 
 # Worth trying under a different browser fingerprint. These are the answers a
 # TLS-fingerprint rule gives.
