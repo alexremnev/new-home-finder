@@ -121,12 +121,18 @@ class FakeNotifier:
     def __init__(self, result: SendResult | None = None) -> None:
         self.result = result or SendResult(ok=True, provider_msg_id="42")
         self.sent: list[tuple[str, Any]] = []
+        # Kept apart from `sent` so the address assertions above stay as they
+        # are. What the recipient carries is its own fact: on WhatsApp
+        # `last_inbound` is what decides between a sentence with a button on it
+        # and nothing at all, and the plan notices were building it without.
+        self.to: list[Any] = []
 
     def supports(self, kind: str) -> bool:
         return True
 
     def send(self, to: Any, alert: Any) -> SendResult:
         self.sent.append((to.address, alert))
+        self.to.append(to)
         return self.result
 
 @pytest.fixture
@@ -604,6 +610,158 @@ def test_a_released_notice_becomes_the_expiry_once_the_plan_has_gone(conn: Any) 
 
     assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
 
+def wa_plan_ending(
+    conn: Any, *, plan: str = "paid", minutes_left: int = 30,
+    inbound_minutes: int = 60,
+) -> int:
+    """A WhatsApp account whose plan ends shortly, and whose window is open.
+
+    `inbound_minutes` is how long ago they last wrote in, so a value above
+    24 * 60 is the same account with a shut window. It is the only difference
+    that matters to a plan notice on WhatsApp: there are no templates, so an
+    open window is a sentence with a payment button on it and a shut one is
+    nothing.
+    """
+
+    user_id = make_user(conn, address="", plan=plan, plan_days=None,
+                        plan_hours=None)
+    conn.execute(
+        "UPDATE users SET plan_from = now() - interval '10 days', "
+        "plan_until = now() + make_interval(mins => %s) WHERE id = %s",
+        (minutes_left, user_id),
+    )
+    make_subscription(conn, user_id)
+    conn.execute(
+        """
+        INSERT INTO user_channels (user_id, channel, address, verified_at,
+                                   last_inbound_at)
+        VALUES (%s, 'whatsapp', %s, now(), now() - make_interval(mins => %s))
+        """,
+        (user_id, f"4477008{user_id:05d}", inbound_minutes),
+    )
+    return user_id
+
+def test_a_plan_notice_carries_when_they_last_wrote_in(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    # The bug this exists for: the recipient was built from the channel and the
+    # address alone, so `window_open(None)` was false for everybody and every
+    # plan notice on WhatsApp took the closed-window path. The hour warning has
+    # no template, so the one message carrying the payment button was refused
+    # even for somebody who had written in minutes earlier.
+    wa_plan_ending(conn, inbound_minutes=60)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.to) == 1
+    assert notifier.to[0].last_inbound is not None
+
+def test_a_paid_month_is_warned_before_it_ends_not_only_a_trial(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    # Same stage, same path, same button — the only thing the plan changes is
+    # the noun. Worth its own test because the trial's window is open by
+    # construction (it runs a day from the message that started it) and a
+    # month's is open only because the check-in has been holding it so: the
+    # paying subscriber is who the warning was being lost for.
+    wa_plan_ending(conn, plan="paid", minutes_left=30)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert alert.kind == "expiring"
+    assert "subscription ends in about an hour" in (alert.text or "")
+    assert [a.url is not None for a in alert.actions] == [True]
+    assert notifier.to[0].last_inbound is not None
+
+def test_accounts_that_lapsed_long_ago_do_not_crowd_out_todays_warning(
+    conn: Any
+) -> None:
+    # `due` was limited before anything asked who still needed telling, and it
+    # is ordered by the oldest expiry first — so every account that had ever
+    # lapsed sat at the front of the batch for ever, claimed, returning
+    # nothing. Past the limit the INSERT had nothing left to claim and somebody
+    # whose plan ends in half an hour was never produced at all.
+    for n in range(3):
+        old = make_user(conn, address="", plan="paid", plan_days=None,
+                        plan_hours=None)
+        conn.execute(
+            "UPDATE users SET plan_until = now() - make_interval(days => %s) "
+            "WHERE id = %s",
+            (n + 1, old),
+        )
+        make_subscription(conn, old)
+        conn.execute(
+            "INSERT INTO user_channels (user_id, channel, address, verified_at) "
+            "VALUES (%s, 'whatsapp', %s, now())",
+            (old, f"4477007{old:05d}"),
+        )
+        # Already told, or told as far as a shut window allows — which is the
+        # state they stay in.
+        conn.execute(
+            "INSERT INTO plan_notices (user_id, stage, plan_until, plan) "
+            "SELECT %s, 'expired', plan_until, plan FROM users WHERE id = %s",
+            (old, old),
+        )
+
+    today = wa_plan_ending(conn, minutes_left=30)
+
+    # A limit smaller than the crowd, so the test fails on the ordering rather
+    # than on the two hundred the worker uses.
+    claimed = store.claim_plan_notices(conn, limit=2)
+
+    assert [int(row["user_id"]) for row in claimed] == [today]
+    assert [row["stage"] for row in claimed] == ["hour"]
+
+def test_a_notice_that_failed_with_the_window_open_is_offered_again(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # An open window and a send that failed anyway is a failure of the moment —
+    # a timeout, a 5xx, a rate limit. The claim goes back so the next drain
+    # tries again, which is what it is for.
+    wa_plan_ending(conn, inbound_minutes=60)
+    fake = FakeNotifier(SendResult(ok=False, error="503", retryable=True))
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    outbox.notify_plan_changes(conn, run)
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
+def test_a_notice_that_failed_with_the_window_shut_keeps_its_claim(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A shut window is not a delay. With no templates there is no second path,
+    # and nothing reopens it for the person a plan notice is about: the
+    # check-in is not asked within the hour before a plan ends, nor of a lapsed
+    # account at all. Handed back, this would be the same impossible question
+    # every two minutes for ever — and the stage turns into `expired` by
+    # itself, which is a fresh claim and another look at the window.
+    wa_plan_ending(conn, inbound_minutes=30 * 60)
+    fake = FakeNotifier(
+        SendResult(ok=False, error="outside the 24h window", retryable=True)
+    )
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    outbox.notify_plan_changes(conn, run)
+    assert store.claim_plan_notices(conn) == []
+
+def test_telegram_still_gets_its_claim_back(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The window rule is WhatsApp's alone. On Telegram a retryable failure is
+    # always worth repeating, and there is no `last_inbound_at` to read.
+    user_id = make_user(conn, plan="trial", plan_hours=None)
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        (user_id,),
+    )
+    make_subscription(conn, user_id)
+    fake = FakeNotifier(SendResult(ok=False, error="503", retryable=True))
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    outbox.notify_plan_changes(conn, run)
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
 def test_a_nought_share_withholds_everything(conn: Any, run: Run) -> None:
     # A finished plan on WhatsApp falls back to nothing, and `or 100` read that
     # nought as "no share was set, so send the lot" — so the one group that was
@@ -853,6 +1011,52 @@ def test_a_spent_allowance_is_not_asked_either(conn: Any) -> None:
         # `plans` is not in WIPE, so an allowance of two left behind would be
         # the allowance every later test runs under.
         conn.execute("UPDATE plans SET alert_allowance = NULL WHERE key = 'paid'")
+
+def test_the_check_in_asks_how_the_search_is_going(
+    conn: Any, run: Run, notifier: FakeNotifier
+) -> None:
+    # The whole of the WhatsApp story rests on this message. With no templates
+    # nothing can be sent outside the 24-hour window, so the only thing keeping
+    # a subscriber reachable at all is a question asked before it shuts, whose
+    # answer — either button — is an inbound message that opens the next one.
+    user_id = wa_window_closing(conn)
+
+    outbox.ask_before_the_window_shuts(conn, run)
+
+    assert len(notifier.sent) == 1
+    address, alert = notifier.sent[0]
+    assert address == f"4477009{user_id:05d}"
+    assert "How is the search going?" in (alert.text or "")
+    # Two taps, and both of them replies rather than links: a url opens a page
+    # and leaves the window shutting, a reply is what reopens it.
+    assert [a.callback for a in alert.actions] == ["continue", "found"]
+    # Inside the window, so it goes as free text — which is the only way it
+    # can go, and the reason it is asked while there is still window left.
+    assert notifier.to[0].last_inbound is not None
+
+    # Asked once per window, and holding the queue while it waits: nothing
+    # should land on top of the question and push the buttons up the chat.
+    asked_at = conn.execute(
+        "SELECT window_asked_at FROM user_channels WHERE user_id = %s", (user_id,)
+    ).fetchone()
+    assert asked_at is not None and asked_at["window_asked_at"] is not None
+
+    outbox.ask_before_the_window_shuts(conn, run)
+    assert len(notifier.sent) == 1
+
+def test_a_check_in_that_could_not_be_sent_is_asked_again(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Marked before the send and undone after a failed one. Left standing it
+    # would hold the alerts for a question nobody saw, and with no templates
+    # the person could not be reached again until they wrote in themselves.
+    user_id = wa_window_closing(conn)
+    fake = FakeNotifier(SendResult(ok=False, error="503", retryable=True))
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    outbox.ask_before_the_window_shuts(conn, run)
+
+    assert asked(conn) == [user_id]
 
 def held_reasons(conn: Any) -> list[str | None]:
     return [

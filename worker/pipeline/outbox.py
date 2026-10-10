@@ -25,6 +25,7 @@ from worker.notify.plans import (
     digest_notice,
     notice_for,
 )
+from worker.notify.whatsapp import window_open
 from worker.obs import Run
 from worker.pipeline.match import DUPLICATE, is_eligible, matches
 
@@ -683,6 +684,30 @@ def ask_before_the_window_shuts(
                 "they write in, nothing can be sent to them."
             )
 
+def reachable_later(row: Row) -> bool:
+    """Whether handing a plan notice back is a retry with somewhere to land.
+
+    Telegram always: a failure there is a failure of the moment.
+
+    WhatsApp only while the 24-hour window is open, because that is the only
+    path there is. There are no approved templates, so a shut window is not a
+    delay, it is the absence of a route — and nothing will open it for the
+    person this notice is about: `closing_windows` stops asking "how is the
+    search going?" within the hour before a plan ends and does not ask a
+    lapsed account at all, which is precisely who these notices are for.
+
+    So a shut window keeps its claim. What was given up with it is the chance
+    that somebody writes in unprompted during that hour; what was bought is
+    that the hour warning now goes out on the first attempt whenever the
+    window is open, which — for a trial that runs a day from the message that
+    started it, and for a subscriber whose window the daily check-in has been
+    holding open — is nearly always.
+    """
+
+    if str(row["channel"]) != "whatsapp":
+        return True
+    return window_open(row.get("last_inbound_at"))
+
 def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
     with run.stage("expire") as stage:
@@ -767,7 +792,16 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             # text it is already drawn on.
             link = checkout_for(conn, int(row["user_id"]))
             result = notifier.send(
-                Recipient(channel=str(row["channel"]), address=str(row["address"])),
+                Recipient(
+                    channel=str(row["channel"]),
+                    address=str(row["address"]),
+                    # Without this every plan notice on WhatsApp took the
+                    # closed-window path, whatever the window was actually
+                    # doing — and the hour warning has no template, so the one
+                    # message carrying the payment button was refused for
+                    # everybody. See `claim_plan_notices`.
+                    last_inbound=row.get("last_inbound_at"),
+                ),
                 Alert(
                     # A spent allowance is an ended period, so it travels as
                     # one: same template on a channel that can only send
@@ -808,21 +842,26 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             if result.ok:
                 stage.count(f"sent_{notice_stage}")
             else:
-                # The claim is given back when the same send could work later —
-                # which on WhatsApp is the ordinary case for a paying
-                # subscriber, whose window is shut and whose hour warning has
-                # no template. See `store.release_plan_notice`. A refusal that
-                # will be repeated keeps its claim rather than being retried
-                # every two minutes for ever.
-                if result.retryable:
+                # The claim is given back only when the same send could work
+                # later, which on WhatsApp means the window is open and
+                # something else went wrong — a timeout, a 5xx, a rate limit.
+                # A shut window is not that: with no templates there is no
+                # second path, nothing reopens it for somebody whose plan has
+                # ended, and a notice handed back on every drain is the same
+                # refusal thirty times an hour for ever. It keeps its claim,
+                # and the hour stage turns into the expiry stage by itself —
+                # a fresh claim, tried again, against whatever the window is
+                # doing by then. See `store.release_plan_notice`.
+                if result.retryable and reachable_later(row):
                     store.release_plan_notice(
                         conn, int(row["user_id"]), notice_stage, row["plan_until"]
                     )
                     # Info, not warn, and for the same reason `_apply` draws
-                    # that line: a notice waiting for a window to reopen is
-                    # tried every two minutes, and thirty warnings an hour
-                    # about something nothing is wrong with is how a log stops
-                    # being read.
+                    # that line: this one is tried again on the next drain, so
+                    # thirty warnings an hour about something that may well
+                    # succeed in two minutes is how a log stops being read.
+                    # The unreachable case is below, counted once and warned
+                    # about once, because that one is worth reading.
                     stage.count("send_deferred")
                     stage.log(
                         "info",

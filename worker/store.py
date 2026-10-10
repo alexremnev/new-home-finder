@@ -753,7 +753,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
     return list(
         conn.execute(
             """
-            WITH due AS (
+            WITH candidate AS (
                 SELECT u.id AS user_id, u.plan, u.plan_until,
                        e.alert_allowance, e.alerts_used,
                        -- Out of days outranks out of alerts: when both are
@@ -784,7 +784,28 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                    -- hour, the ELSE above can only be the hour warning.
                    AND (u.plan_until <= now() + interval '1 hour'
                      OR e.out_of_alerts)
-                 ORDER BY u.plan_until
+            ),
+            due AS (
+                -- The limit has to count people who still need telling, which
+                -- is why this is a second step rather than one more line in
+                -- the WHERE above.
+                --
+                -- `plan_until` ascending puts the oldest expiry first, and an
+                -- account that has lapsed keeps matching the WHERE for ever —
+                -- so every account that ever expired sat at the front of the
+                -- batch, claimed, returning nothing. Past two hundred of them
+                -- the INSERT below had nothing left to claim and the notice
+                -- for somebody whose plan ends today was never produced at
+                -- all. The ON CONFLICT is still the race guard; this is what
+                -- keeps the batch about the people it is for.
+                SELECT c.* FROM candidate c
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM plan_notices pn
+                      WHERE pn.user_id = c.user_id
+                        AND pn.stage = c.stage
+                        AND pn.plan_until = c.plan_until
+                 )
+                 ORDER BY c.plan_until
                  LIMIT %s
             ),
             claimed AS (
@@ -794,6 +815,15 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                 RETURNING user_id, stage, plan_until, plan
             )
             SELECT c.user_id, c.stage, c.plan_until, c.plan, uc.channel, uc.address,
+                   -- When they last wrote in, because on WhatsApp that is what
+                   -- decides whether this notice can be a sentence with a
+                   -- button on it or cannot be sent at all. Every other send
+                   -- in the outbox carries it; this one did not, so
+                   -- `window_open(None)` was false for everybody and the whole
+                   -- job took the closed-window path — the hour warning,
+                   -- which has no template, was dropped even for the trial
+                   -- whose window was still open.
+                   uc.last_inbound_at,
                    d.alert_allowance, d.alerts_used,
                    -- What the alerts fall back to, so the notice can say so
                    -- rather than guessing. Read from the entitlement view and
@@ -824,26 +854,23 @@ def release_plan_notice(
     """Give a claimed notice back after a send that could still succeed.
 
     `claim_plan_notices` claims by inserting, so the row is what stops a drain
-    every minute saying the same thing sixty times an hour. The cost is
-    that a send which failed is a notice nobody ever hears: the claim stands and
-    the stage never comes round again.
+    every minute saying the same thing sixty times an hour. The cost is that a
+    send which failed is a notice nobody ever hears: the claim stands and the
+    stage never comes round again.
 
-    That is not a rare corner on WhatsApp, it is the ordinary case for a paying
-    subscriber. The hour warning travels as `expiring`, only the `expired`
-    notice has an approved template, and a month's subscriber has — by
-    definition — not written in for the best part of thirty days, so the window
-    is shut and the free-form path with it. The one warning before a £19.99
-    month ran out was being dropped in silence, for everybody except the trial
-    whose window happens to still be open.
+    Which is worth undoing for a failure of the moment — a timeout, a 5xx, a
+    rate limit — and not for a shut WhatsApp window. With no approved
+    templates a shut window has no second path, and nothing will open it for
+    the person a plan notice is about, so handing the row back would ask Meta
+    the same impossible question every two minutes until the account is
+    deleted. `reachable_later` in the outbox draws that line; this only does
+    what it is told.
 
-    Released, it is tried again on the next drain and lands if the person taps
-    anything in that hour. If they do not, `plan_until` passes and the stage
-    becomes `expired` by itself — a different stage, a fresh claim, and the one
-    template that can reach them.
-
-    Only for a failure worth repeating. A refusal Meta will give again is left
-    claimed, because retrying it every minute for ever is a worse answer
-    than losing one message.
+    A claim kept is not a message lost. The hour warning is the one that
+    carries the payment button, and with `last_inbound_at` now reaching the
+    notifier it goes out on the first attempt whenever the window is open.
+    When it is not, `plan_until` passes and the stage becomes `expired` by
+    itself — a different stage, a fresh claim, and another look at the window.
     """
 
     conn.execute(
