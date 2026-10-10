@@ -223,10 +223,12 @@ export function SubscribeForm({
   function choose(area: Area) {
     add(area);
     setCursor(0);
-    // Left open while there is room for another, because most people pick two
-    // or three and reopening the list for each is three clicks nobody needs.
-    // The chip appearing below is the acknowledgement.
-    setOpen(chosen.length + 1 < maxDistricts);
+    // Closed on every pick. It used to stay open while there was room for
+    // another, to save reopening it — but the open list covers the chips and
+    // the note underneath, so the one thing a pick should show you is the one
+    // thing you cannot see. The input keeps focus, so typing or ArrowDown
+    // brings the list straight back for the next area.
+    setOpen(false);
   }
 
   function commitTyped() {
@@ -419,6 +421,10 @@ export function SubscribeForm({
             autoComplete="off"
             placeholder={placeholder}
             onFocus={() => setOpen(true)}
+            // Focus alone is not enough now that a pick closes the list: the
+            // input still holds focus afterwards, so the click asking for the
+            // list again would fire no focus event and look like a dead box.
+            onClick={() => setOpen(true)}
             onChange={(event) => {
               setTyped(event.target.value);
               setAreaNote(null);
