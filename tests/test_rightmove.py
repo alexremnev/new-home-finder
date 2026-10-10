@@ -32,6 +32,7 @@ from worker.sources.rightmove import (
     postcode_on,
     results_in,
     search_url,
+    type_of,
 )
 from worker.sources.sweep import _announceable
 
@@ -485,3 +486,51 @@ def test_a_dated_portal_that_gave_no_date_announces_nothing(caught: dict) -> Non
     portal = Rightmove()
     undated = dataclasses.replace(caught["93625473"], first_listed=None)
     assert _announceable(portal, undated, datetime(2020, 1, 1, tzinfo=UTC)) is False
+
+
+def test_a_not_specified_sub_type_is_read_off_the_phrase_above_the_price() -> None:
+    # "Not Specified" is the one word in Rightmove's whole vocabulary that
+    # `kind_of` cannot place, and an untyped listing answers every
+    # property-type filter. The card states the type a second time in
+    # `propertyTypeFullDescription`, so that is read before giving up.
+    assert type_of({
+        "propertySubType": "Not Specified",
+        "propertyTypeFullDescription": "2 bedroom apartment",
+    }) == "flat"
+    assert type_of({
+        "propertySubType": "",
+        "propertyTypeFullDescription": "3 bedroom terraced house",
+    }) == "house"
+    assert type_of({"propertyTypeFullDescription": "Studio flat"}) == "flat"
+
+
+def test_the_sub_type_wins_over_the_phrase() -> None:
+    # Read in turn rather than as one joined string: the sub type is the
+    # portal's own classification, and `KINDS` is matched room-first, so a
+    # joined string would file "Detached" with "room to rent" in the other
+    # field as a room.
+    assert type_of({
+        "propertySubType": "Detached",
+        "propertyTypeFullDescription": "4 bedroom room to rent",
+    }) == "house"
+
+
+def test_a_houseboat_stays_untyped_however_often_it_says_house() -> None:
+    # NEITHER is checked inside kind_of, so the fallback cannot promote a boat
+    # to a house on the second look.
+    assert type_of({
+        "propertySubType": "House Boat",
+        "propertyTypeFullDescription": "2 bedroom house boat",
+    }) is None
+    # Genuinely unstated in both places, and left that way rather than guessed.
+    assert type_of({
+        "propertySubType": "Not Specified",
+        "propertyTypeFullDescription": "2 bedroom property",
+    }) is None
+    assert type_of({}) is None
+
+
+def test_every_fixture_listing_carries_a_type() -> None:
+    read = catches_in(PAGE, "E14")
+    assert read.caught
+    assert all(one.listing.property_type for one in read.caught)

@@ -32,7 +32,21 @@ def insert_listing(conn: Conn, listing: Listing) -> int:
         INSERT INTO listings ({columns}, schema_id, raw)
         VALUES ({placeholders}, %(schema_id)s, %(raw)s)
         ON CONFLICT (source_key, external_id) DO UPDATE
-           SET last_seen_at = now(), miss_count = 0
+           SET last_seen_at = now(),
+               miss_count = 0,
+               -- The feed and the scrapers write one row per flat for
+               -- Rightmove and Zoopla, so whichever saw it first owned every
+               -- field. The feed states no type at all — its Bedrooms field
+               -- says "2 Bedrooms" and stops — and the scraper reads
+               -- "Apartment" off the portal minutes later, but hit this
+               -- clause and threw it away. A feed-first row therefore stayed
+               -- untyped for ever: no type on the alert, and it answered
+               -- every property-type filter.
+               --
+               -- Blanks only. A reader that stated a type stated it from the
+               -- page it read, and the second reader is not better informed
+               -- about the same flat.
+               property_type = COALESCE(listings.property_type, EXCLUDED.property_type)
         RETURNING id
         """,
         {**values, "schema_id": None, "raw": Jsonb(listing.raw)},

@@ -294,6 +294,45 @@ def a_dwelling(sub_type: Any) -> bool:
     return not NOT_A_DWELLING.search(str(sub_type or ""))
 
 
+def said_type(row: dict[str, Any]) -> tuple[str, ...]:
+    """What this card says the property is, most authoritative first.
+
+    `propertySubType` leads, and behind it `propertyTypeFullDescription` —
+    the phrase Rightmove prints above the price, "2 bedroom flat", "Studio
+    flat", "3 bedroom terraced house". It names the type on every card in the
+    search payload, including the ones whose sub type is "Not Specified",
+    which is the only vocabulary Rightmove serves that `kind_of` cannot read.
+    An untyped listing answers every property-type filter — see
+    `match._check_property_type` — so somebody who asked for a flat was being
+    sent whatever the agent had failed to classify.
+
+    A tuple rather than one joined string, for the reason Zoopla's version of
+    this gives: `KINDS` is matched room-first so that "house share" is a room
+    and not a house, and against one joined string a card reading `Detached`
+    with "room" anywhere in the other field would come back a room. Each
+    source is read on its own, in turn, and the first to name a type wins.
+    """
+
+    return tuple(
+        part
+        for part in (
+            str(row.get("propertySubType") or ""),
+            str(row.get("propertyTypeFullDescription") or ""),
+        )
+        if part.strip()
+    )
+
+
+def type_of(row: dict[str, Any]) -> str | None:
+    """One of the four words the filter offers, from wherever the card says it."""
+
+    for words in said_type(row):
+        kind = kind_of(words)
+        if kind is not None:
+            return kind
+    return None
+
+
 def picture(images: Any) -> str | None:
     """The preview picture's url — a JPEG for preference. See the module note."""
 
@@ -379,7 +418,7 @@ def as_listing(row: Any, district: str) -> Listing | None:
         # `propertySubType: "Studio"` had `bedrooms: 0`.
         bedrooms=_count(row.get("bedrooms"), default=0) or 0,
         bathrooms=_count(row.get("bathrooms")),
-        property_type=kind_of(row.get("propertySubType")),
+        property_type=type_of(row),
         furnished=furnished,
         # True or None, never False: a listing that does not mention pets has
         # not forbidden them, and recording a refusal nobody made would hide
@@ -728,5 +767,5 @@ __all__ = [
     "NOT_A_DWELLING", "PAGE_MODEL", "PAGE_STEP", "PREFER_JPEG", "SOURCE_KEY",
     "Read", "Rightmove", "a_dwelling", "as_listing", "at", "catches_in",
     "kind_of", "monthly", "next_data", "page_model", "picture", "postcode_on",
-    "promoted", "results_in", "search_url", "when",
+    "promoted", "results_in", "said_type", "search_url", "type_of", "when",
 ]
