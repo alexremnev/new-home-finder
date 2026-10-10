@@ -1,59 +1,56 @@
-# SpareRoom, read as a rotating window over the whole London feed.
+# SpareRoom, read as a rotating window over the search ranking.
 #
-# ── the same schedule as zoopla_london, and why that is the right one ────
+# Costs about 186KB a run and none of it is billed: this reader is pinned to
+# the direct route in code — `SpareRoom.direct_only`, via `sweep._pin_direct` —
+# because the site serves this server every page. So a tighter schedule here
+# buys latency for nothing but bandwidth.
 #
-#   weekdays  07:20–17:00   every 5 minutes
-#   weekdays  17:00–22:00   every 15 minutes
-#   weekdays  22:00–07:20   not at all
-#   weekends  10:00–20:00   every 15 minutes
+# ── the schedule, in London time ─────────────────────────────────────────
 #
-# Deliberately identical to `london-home-finder-zoopla_london.timer`, because
-# this reader's own cycle is measured against that interval: it reads six of a
-# sixty-page window per run, so ten consecutive runs cover the window once.
-# At five minutes that is a fifty-minute cycle. Change the interval and the
-# cycle changes with it — a quarter-hourly band strides three slices at a time,
-# still covering everything but over more runs, which is the trade the evening
-# and the weekend are already making.
+#   every day  00:00–07:00   hourly
+#   weekdays   08:00–18:00   every 5 minutes
+#   weekdays   07:00–08:00   every 10 minutes
+#   weekdays   18:00–24:00   every 10 minutes
+#   weekends   07:00–24:00   every 10 minutes
 #
-# ── what it costs, measured ──────────────────────────────────────────────
+# These are `rightmove`'s bands exactly, which is the point: the three readers
+# that go out over the network now run at one cadence. It replaces a schedule
+# that stopped at 21:00 weekdays and did not run overnight.
 #
-# One search page is 31KB across the wire and carries ten listings, measured
-# against the live site on 9 October 2026. Six pages a run is 186KB; about 136
-# runs on a weekday is some 25MB a day, and 40 runs at the weekend about 7MB.
-# Three to four times `zoopla_london`, for a source the Telegram feed does not
-# publish at all.
+# Each band's stated end is exclusive, so the last five-minute run is 17:58:20
+# and 18:00 belongs to the ten-minute band that follows.
 #
-# Advert pages are extra and rare: one is read only for a listing that is new
-# *and* in a district somebody subscribes to, capped at fifteen a run. With the
-# districts the seed enables that is usually nought.
+# ── what the extra runs buy here, and it is not more stock ───────────────
 #
-# ── why this reader cannot do better than ~25 minutes ────────────────────
+# This reader pages through a rotating window rather than reading newest-first:
+# `WINDOW` pages of ranking, `PAGES_PER_RUN` a run, moving on one slice each
+# time, because robots.txt forbids the sort order that would make a watermark
+# possible. See the module note in worker/sources/spareroom.py.
 #
-# Worth knowing before anybody reads the five-minute interval as a promise.
-# SpareRoom's robots.txt forbids `sort_by=days_since_placed`, so the feed can
-# only be read in its default order — which is their own ranking, driven by
-# paid upgrades. Measured the same day: pages 1-8 read an hour apart held 87 of
-# the same 88 adverts, while the newest listing ids turned up on pages 1, 20 and
-# 40 alike. So there is no front of the feed to watch; the window has to be
-# walked, and a new advert waits up to one cycle. See the module note in
-# worker/sources/spareroom.py.
+# So a run is a slice of a cycle, and the cycle is what the latency is made of:
+# about 10 runs to walk the window, which was some 50 minutes on the old
+# schedule and is the same 50 in the weekday band — the five-minute cadence
+# there is unchanged. What the new bands add is the evening and the night,
+# where the window used to step once a quarter hour and now steps once every
+# ten minutes, and the overnight hours where it did not step at all.
 #
-# ── the minute is :01/5, which is the last free series ───────────────────
+# The slice is taken from the clock in 300-second buckets, not from a counter,
+# so the offset below cannot desynchronise it: a run at 3m20s past a boundary
+# falls in the same bucket as the boundary, and consecutive five-minute runs
+# still get consecutive slices. With the 15s delay the worst draw lands at
+# 3m35s, still 85 seconds inside that bucket.
 #
-# The two readers on the server must not start in the same minute as this one.
-# Rightmove takes the top of the five-minute grid — :00, :05, :10… — and
-# zoopla_london takes :03, :08, :13…. That leaves :01, :02 and :04, and of
-# those :01 and :02 are each a minute from one series and two from the other,
-# where :04 is a minute from both. So :01.
+# ── the offset, and why it is seconds and not minutes ────────────────────
 #
-# One minute of separation is all that is available and it is enough: the
-# advisory lock means two runs of the *same* job cannot overlap at all — the
-# second records `skipped_locked` — and two different readers overlapping costs
-# nothing but bandwidth on one machine.
+# Three readers, one grid, evenly spaced: `rightmove` on the boundary,
+# `zoopla_london` a third of the interval later, this one two thirds. Two
+# thirds of five minutes is 3m20s, which is why the time fields below carry a
+# seconds component — minute offsets cannot divide a five-minute interval into
+# three equal parts.
 #
-# Hence 30 seconds of jitter rather than Rightmove's 90, for the same reason
-# zoopla_london uses 30: at a five-minute period, ninety seconds is a third of
-# the interval and would both slide runs into each other and undo this spacing.
+#   five-minute band   :03 at second 20   → 3m20s after rightmove
+#   ten-minute band    :06 at second 40   → 6m40s after rightmove
+#   hourly night band  :40               → 40m after rightmove
 #
 # ── the zone is stated here, not taken from the machine ──────────────────
 #
@@ -64,7 +61,7 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..16:01/5 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:03/5:20 Europe/London'
 
 [Unit]
 Description=Read the whole of SpareRoom London as a rotating window
@@ -72,27 +69,28 @@ Description=Read the whole of SpareRoom London as a rotating window
 [Timer]
 Unit=london-home-finder@spareroom.service
 
-# Weekdays, the working day. Two lines because the day does not start on the
-# hour: the first covers the runs before 08:00, the second the whole hours
-# after it. Folded into one `07..16` line it would add runs at 07:01 and 07:06
-# that the schedule deliberately excludes.
-OnCalendar=Mon..Fri 07:21/5 Europe/London
-OnCalendar=Mon..Fri 08..16:01/5 Europe/London
-# Weekday evenings, quarter-hourly.
-OnCalendar=Mon..Fri 17..21:01/15 Europe/London
-# Weekends, a shorter day and the same quarter-hour.
-OnCalendar=Sat,Sun 10..19:01/15 Europe/London
+# Nights, every day including weekends: hourly, 00:00 to 07:00.
+OnCalendar=*-*-* 00..06:40 Europe/London
 
-# Half a minute of jitter — enough to be off the stroke of the minute, small
-# enough that two runs of a five-minute timer cannot meet.
-RandomizedDelaySec=30s
+# Weekdays, the working day: every five minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:03/5:20 Europe/London
+
+# Weekdays, the hour before the working day and the evening after it: every ten
+# minutes. Two lines because the morning band is a single hour — folded into
+# `07..17` it would make 07:00–08:00 five-minutely too.
+OnCalendar=Mon..Fri 07:06/10:40 Europe/London
+OnCalendar=Mon..Fri 18..23:06/10:40 Europe/London
+
+# Weekends, from the end of the night band to midnight: every ten minutes.
+OnCalendar=Sat,Sun 07..23:06/10:40 Europe/London
+
+# Fifteen seconds. Small enough to keep the spacing above and to stay inside
+# this run's 300-second window slice. The per-request delay is `SCRAPE_JITTER`.
+RandomizedDelaySec=15s
 AccuracySec=15s
 
-# Deliberately NOT Persistent. A run missed because the machine was off should
-# be skipped, not fired the moment it boots. This reader in particular gains
-# nothing from catching up: its slice is a function of the clock, so a late run
-# reads the slice belonging to the minute it actually starts in, and the next
-# scheduled run takes the one after that either way.
+# Deliberately NOT Persistent. A missed run is a slice of the window skipped,
+# which the next cycle reads anyway; firing on boot would start it off-grid.
 Persistent=false
 
 [Install]

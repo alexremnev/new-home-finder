@@ -1828,6 +1828,38 @@ form p.error {
   margin-bottom: 0.75rem;
 }
 
+/* A picker with more items than a narrow screen can hold in one row.
+   The range picker has four fixed labels and is fine as a segmented control at
+   any width; the run log's job filter has one chip per job that has run in the
+   last thirty days — a dozen or so — and `overflow: hidden` on a single
+   inline-flex row does not clip them politely, it draws them outside the box
+   where they cannot be tapped and leaves nothing on screen to say they are
+   there. So below 44rem the control stops being segmented and becomes pills:
+   each chip gets its own border and the row wraps. Above it, nothing changes.
+*/
+@media (max-width: 44rem) {
+  .window-picker.picker-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    overflow: visible;
+    border: none;
+    border-radius: 0;
+    background: none;
+  }
+
+  .window-picker.picker-wrap .win {
+    border: 1px solid var(--d-line);
+    border-radius: 999px;
+    background: var(--d-card);
+  }
+
+  .window-picker.picker-wrap .win-on {
+    background: var(--d-ink);
+    color: #fff;
+  }
+}
+
 /* ── values ─────────────────────────────────────────────────────────────── */
 
 .metric { min-width: 0; }

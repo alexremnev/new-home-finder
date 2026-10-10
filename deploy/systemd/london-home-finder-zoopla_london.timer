@@ -1,53 +1,50 @@
-# Zoopla, read as one search of the whole city.
+# Zoopla, the whole of London in one search, newest first.
 #
-# A second Zoopla job beside `zoopla`, not a replacement for it. The district
-# reader stays: reading one named district on demand is what onboarding a
-# district and catching up after an outage both need, and it is the fallback if
-# this one is ever refused outright.
-#
-# ── what it costs, measured ──────────────────────────────────────────────
-#
-# One region page is 60KB and holds 25 listings — the same page as a district
-# page, only wider. Measured against two weeks of this project's own
-# `job_stages` counters and against the live site on 8 October 2026:
-#
-#   district sweep   4.8 MB per district per day   (10 districts = 48 MB/day)
-#   region sweep     about 7 MB a day              for every district in London
-#
-# London publishes on the order of 1,100 rental listings a day on Zoopla, so
-# about 15 arrive in five minutes in the busiest hour against 25 on a page.
-# One page per run, almost always — which is why the cost does not grow with
-# the number of districts anybody subscribes to.
+# Costs about 140KB a run through the residential proxy: two pages of the
+# `/to-rent/property/london/?results_sort=newest_listings` search, plus a
+# postcode lookup per new listing. A refused run costs about 20KB instead, all
+# of it paid for and none of it read — see worker/sources/fetch.py.
 #
 # ── the schedule, in London time ─────────────────────────────────────────
 #
-#   weekdays  07:20–17:00   every 5 minutes
-#   weekdays  17:00–22:00   every 15 minutes
-#   weekdays  22:00–07:20   not at all
-#   weekends  10:00–20:00   every 15 minutes
+#   every day  00:00–07:00   hourly
+#   weekdays   08:00–18:00   every 5 minutes
+#   weekdays   07:00–08:00   every 10 minutes
+#   weekdays   18:00–24:00   every 10 minutes
+#   weekends   07:00–24:00   every 10 minutes
 #
-# Five minutes in the working day because that is the promise the product
-# makes, and because a shorter interval is also a cheaper one per run: fewer
-# arrivals between runs means fewer pages to page through. Evenings and
-# weekends are quarter-hourly — agents publish inside office hours, and the
-# measured evening rate was one listing per five minutes.
+# These are `rightmove`'s bands exactly, which is the point: the three readers
+# that go out over the network now run at one cadence, and the question "how
+# often do we ask a portal" has one answer rather than three. It replaces a
+# schedule that stopped at 21:00 weekdays and did not run overnight at all, so
+# this reader is no longer blind between ten at night and seven in the morning
+# — the hours a watermark quietly falls a whole night behind in.
 #
-# ── the minute is :03/5, and that is not arbitrary ───────────────────────
+# Each band's stated end is exclusive, so the last five-minute run is 17:56:40
+# and 18:00 belongs to the ten-minute band that follows.
 #
-# The four readers must not start in the same minute. Rightmove takes :00,
-# :10, :20…; Zoopla by district :07, :27, :47; OpenRent :14, :34, :54. This one
-# takes :03, :08, :13… which lands on none of them.
+# The cost of the extra bands is about 170 runs a weekday against 140 before,
+# some 20% more proxied traffic, and the overnight band is the cheap part of it
+# — nothing is published at four in the morning, so those runs read one page
+# and store nothing.
 #
-# One minute is the best separation available, not a comfortable one: twelve
-# five-minute slots an hour against the twelve minutes the other three already
-# occupy leaves no series further away, and :13 sits a minute from OpenRent's
-# :14. Hence 30 seconds of jitter rather than Rightmove's 90 — at a
-# five-minute period, ninety seconds is a third of the interval and would both
-# slide runs into each other and undo this spacing.
+# ── the offset, and why it is seconds and not minutes ────────────────────
 #
-# What makes one minute enough is the advisory lock: two runs of the same job
-# cannot overlap at all — the second records `skipped_locked` — and two
-# different readers overlapping costs nothing but bandwidth on one machine.
+# Three readers, one grid, evenly spaced: `rightmove` on the boundary, this one
+# a third of the interval later, `spareroom` two thirds. A third of five
+# minutes is 1m40s, which is why the time fields below carry a seconds
+# component — minute offsets cannot divide a five-minute interval into three
+# equal parts, and unequal spacing was the thing to avoid.
+#
+#   five-minute band   :01 at second 40   → 1m40s after rightmove
+#   ten-minute band    :03 at second 20   → 3m20s after rightmove
+#   hourly night band  :20               → 20m after rightmove
+#
+# Why spacing at all: this reader and `spareroom` are the two that cost money
+# or carry weight, two of the three share one residential proxy pool, and three
+# readers started on the same second arrive at three portals as one burst with
+# a period a stopwatch could read off. `SCRAPE_JITTER` blurs the individual
+# requests; this spaces the runs.
 #
 # ── the zone is stated here, not taken from the machine ──────────────────
 #
@@ -58,7 +55,7 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..16:03/5 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:01/5:40 Europe/London'
 
 [Unit]
 Description=Read the whole of Zoopla London, newest first
@@ -66,26 +63,31 @@ Description=Read the whole of Zoopla London, newest first
 [Timer]
 Unit=london-home-finder@zoopla_london.service
 
-# Weekdays, the working day. Two lines because the day does not start on the
-# hour: the first covers the runs before 08:00, the second the whole hours
-# after it. Folded into one `07..16` line it would add runs at 07:03 and 07:08
-# that the schedule deliberately excludes.
-OnCalendar=Mon..Fri 07:23/5 Europe/London
-OnCalendar=Mon..Fri 08..16:03/5 Europe/London
-# Weekday evenings, quarter-hourly.
-OnCalendar=Mon..Fri 17..21:03/15 Europe/London
-# Weekends, a shorter day and the same quarter-hour.
-OnCalendar=Sat,Sun 10..19:03/15 Europe/London
+# Nights, every day including weekends: hourly, 00:00 to 07:00.
+OnCalendar=*-*-* 00..06:20 Europe/London
 
-# Half a minute of jitter — enough to be off the stroke of the minute, small
-# enough that two runs of a five-minute timer cannot meet.
-RandomizedDelaySec=30s
+# Weekdays, the working day: every five minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:01/5:40 Europe/London
+
+# Weekdays, the hour before the working day and the evening after it: every ten
+# minutes. Two lines because the morning band is a single hour — folded into
+# `07..17` it would make 07:00–08:00 five-minutely too.
+OnCalendar=Mon..Fri 07:03/10:20 Europe/London
+OnCalendar=Mon..Fri 18..23:03/10:20 Europe/London
+
+# Weekends, from the end of the night band to midnight: every ten minutes.
+OnCalendar=Sat,Sun 07..23:03/10:20 Europe/London
+
+# Fifteen seconds. Deliberately much smaller than the 100-second gap to the
+# next reader on the tightest band, so the spacing above survives the draw.
+# The per-request delay is `SCRAPE_JITTER` and does the real work.
+RandomizedDelaySec=15s
 AccuracySec=15s
 
 # Deliberately NOT Persistent. A run missed because the machine was off should
-# be skipped, not fired the moment it boots — and this reader in particular
-# cannot usefully catch up on a long gap anyway: the search reaches its newest
-# 1,000 results and no further.
+# be skipped rather than fired on boot: the next slot is at most an hour away
+# and usually five minutes, and a boot-time catch-up would start it off-grid
+# and on top of whichever reader owns that second.
 Persistent=false
 
 [Install]

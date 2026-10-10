@@ -126,6 +126,8 @@ from __future__ import annotations
 
 import io
 import os
+import random
+import time
 from dataclasses import dataclass, field
 
 from curl_cffi import Curl, CurlInfo, CurlOpt
@@ -137,7 +139,51 @@ IMPERSONATE = ("chrome124", "safari17_0", "chrome123", "edge101")
 
 # Long enough for a slow portal, short enough that a run cannot stall behind
 # one page.
-TIMEOUT = 30.0
+#
+# Fifteen rather than thirty because the ladder above it got longer. A page
+# that is going to be served arrives in well under a second — measured over
+# four districts on 27 September 2026, 1.77s for all four on a reused handle —
+# so fifteen is already thirty times the measured figure, and nothing between
+# fifteen and thirty seconds has ever been observed to arrive. What the old
+# value cost was the failing case: with `EXITS` addresses to try, each one
+# allowed to hang for thirty seconds, one url could hold a run for minutes
+# against systemd's `TimeoutStartSec=600` and the next fire of a five-minute
+# timer. Halving it halves that worst case and loses nothing real.
+TIMEOUT = 15.0
+
+# Seconds of random delay before each request, drawn fresh every time.
+#
+# Two separate reasons, and the second is why it is on every request rather
+# than only on the first:
+#
+#   * A timer fires on the dot. Three readers on a five-minute calendar and a
+#     sweep that pages through a portal arrive as a burst on the exact same
+#     second of every period, which is a shape no person browsing produces and
+#     the cheapest possible thing for a portal to key on.
+#   * The pages of one sweep arrive back-to-back as fast as a reused handle can
+#     ask for them — twenty-six requests in one run, measured on 10 October
+#     2026 — which is the same tell at a smaller scale.
+#
+# The cost is a mean of `JITTER / 2` per request, which is worth checking
+# against the per-run ceilings rather than against a typical run:
+#
+#   a two-page zoopla_london read     2 requests    ~1.5s
+#   the largest sweep measured       26 requests     ~20s
+#   sweep's own ceilings             ~90 requests    ~67s   DISTRICT_BUDGET
+#                                                           plus POSTCODE_BUDGET
+#   openrent's slug backlog         400 requests   ~300s   SLUG_BUDGET
+#
+# The first three run under systemd's `TimeoutStartSec=600` and sit well
+# inside it. The last does not — `openrent` runs from the Windows desk, where
+# the task has no execution limit — and 400 is a ceiling for a first run or a
+# backlog, not a steady state, where that reader asks a handful of redirects.
+# Worth knowing before raising this, because that is the run it would bite.
+#
+# It is not a rate limit and not a substitute for one: it is only the removal
+# of a pattern. `sweep.PAUSE_SECONDS` is the other delay in play, a flat second
+# between districts, and deliberately left alone — it is politeness toward the
+# portal rather than camouflage, and the two do not do the same job.
+JITTER = 1.5
 
 # Worth trying under a different browser fingerprint. These are the answers a
 # TLS-fingerprint rule gives.
@@ -240,6 +286,21 @@ def exit_ports(proxy: str | None) -> tuple[int, ...]:
     return tuple(STICKY_PORTS) if port in STICKY_PORTS else (port,)
 
 
+def _seconds(raw: str | None, fallback: float) -> float:
+    """A number of seconds out of the environment, or the fallback.
+
+    Anything unreadable is the fallback rather than an exception: a typo in
+    `SCRAPE_JITTER` should not stop every reader on the box, and zero is a
+    meaningful value here so it cannot double as "unset".
+    """
+
+    try:
+        value = float((raw or "").strip())
+    except ValueError:
+        return fallback
+    return value if value >= 0 else fallback
+
+
 def _number(raw: object) -> int:
     """One of libcurl's counters as a whole number.
 
@@ -284,6 +345,9 @@ class Fetcher:
     #: is the most expensive way to fetch the cheapest thing.
     direct_hosts: tuple[str, ...] = ()
     timeout: float = TIMEOUT
+    #: Seconds of random delay before each request. Zero turns it off, which is
+    #: what a test wants and nothing in production does.
+    jitter: float = JITTER
     targets: tuple[str, ...] = IMPERSONATE
     #: Exit addresses to try for one url before calling it refused. One turns
     #: the rotation off without turning the proxy off.
@@ -364,6 +428,7 @@ class Fetcher:
             targets=targets or IMPERSONATE,
             direct_hosts=direct,
             exits=int(exits) if exits.isdigit() else EXITS,
+            jitter=_seconds(os.environ.get("SCRAPE_JITTER"), JITTER),
         )
 
     def never_proxy(self, url: str) -> bool:
@@ -564,6 +629,7 @@ class Fetcher:
         return status, where
 
     def _head_once(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
+        self._pause()
         body = io.BytesIO()
         headers = io.BytesIO()
         # A host already known to refuse this address skips the direct probe
@@ -643,9 +709,21 @@ class Fetcher:
     def __exit__(self, *_: object) -> None:
         self.close()
 
+    def _pause(self) -> None:
+        """Wait a random fraction of `jitter` before asking. See JITTER.
+
+        Drawn per request rather than per run: one delay chosen at the start
+        would shift the whole burst and leave its shape untouched, which is
+        the part worth removing.
+        """
+
+        if self.jitter > 0:
+            time.sleep(random.uniform(0, self.jitter))
+
     def _once(
         self, url: str, target: str, accept: str, through_proxy: bool
     ) -> Reply:
+        self._pause()
         body = io.BytesIO()
         # Set even though nothing reads it here. A previous `head()` on this
         # handle left the header callback installed, and curl_cffi drops the
@@ -712,7 +790,7 @@ class Fetcher:
 
 
 __all__ = [
-    "BLOCKED", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "ROTATE",
+    "BLOCKED", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "JITTER", "ROTATE",
     "STICKY_PORTS", "TIMEOUT",
     "Fetcher", "Refused", "Reply", "exit_ports", "host_of",
 ]

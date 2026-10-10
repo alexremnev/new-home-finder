@@ -88,7 +88,15 @@ export function LogView({
   return (
     <>
       <div className="dash-head" style={{ marginBottom: "0.6rem" }}>
-        <div className="window-picker">
+        {/*
+          `picker-wrap` because this picker is the one with a dozen items in
+          it. A segmented control is a single clipped row — the range picker
+          beside it has four fixed labels and fits anywhere — and on a phone
+          that meant the jobs past `drain` were drawn outside the box and
+          unreachable, with nothing on screen to say they existed. Below 44rem
+          the row becomes wrapped pills. See globals.css.
+        */}
+        <div className="window-picker picker-wrap">
           <a
             className={!job ? "win win-on" : "win"}
             href={href(undefined, level)}

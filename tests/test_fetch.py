@@ -19,6 +19,7 @@ import pytest
 
 from worker.sources.fetch import (
     BLOCKED,
+    JITTER,
     ROTATE,
     STICKY_PORTS,
     Fetcher,
@@ -323,3 +324,48 @@ def test_a_server_error_on_the_probe_does_not_blame_the_proxy() -> None:
     assert "this address" in str(raised.value)
     assert "proxy" not in str(raised.value)
     assert get.proxied == 0
+
+
+def test_every_request_waits_a_different_random_moment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A timer fires on the dot, and a sweep's pages follow each other as fast
+    # as a reused handle can ask. Both are shapes no person browsing produces,
+    # so the delay is drawn per request rather than once per run — one delay
+    # chosen at the start would move the burst and leave its shape alone.
+    slept: list[float] = []
+    monkeypatch.setattr("worker.sources.fetch.time.sleep", slept.append)
+    monkeypatch.setattr("worker.sources.fetch.random.uniform", lambda low, high: high)
+
+    get = Fetcher(jitter=2.0)
+    get._pause()
+    get._pause()
+
+    assert slept == [2.0, 2.0]
+
+
+def test_jitter_can_be_turned_off_without_touching_the_clock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Zero has to mean zero rather than "unset": the tests above would
+    # otherwise each pay a real delay per request, and a reader run by hand
+    # from a laptop has nothing to hide from.
+    def fail(_: float) -> None:
+        raise AssertionError("slept with jitter off")
+
+    monkeypatch.setattr("worker.sources.fetch.time.sleep", fail)
+    Fetcher(jitter=0)._pause()
+
+
+def test_the_jitter_comes_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A typo must not stop every reader on the box, and zero is meaningful
+    # here, so it cannot double as "unset".
+    monkeypatch.setenv("SCRAPE_JITTER", "0.25")
+    assert Fetcher.from_env().jitter == 0.25
+
+    monkeypatch.setenv("SCRAPE_JITTER", "0")
+    assert Fetcher.from_env().jitter == 0
+
+    monkeypatch.setenv("SCRAPE_JITTER", "soon")
+    assert Fetcher.from_env().jitter == JITTER
+
+    monkeypatch.delenv("SCRAPE_JITTER")
+    assert Fetcher.from_env().jitter == JITTER

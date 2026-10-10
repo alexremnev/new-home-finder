@@ -26,14 +26,25 @@
 # behind the watermark, so a shorter interval means less new stock above it per
 # run rather than proportionally more work.
 #
-# ── nothing to be offset from any more ───────────────────────────────────
+# ── one grid, three readers, evenly spaced ───────────────────────────────
 #
-# This header used to explain why Rightmove took :00/:10/… while Zoopla sat at
-# :07 and OpenRent at :14. Those two timers are disabled and deleted by
-# `install.sh`, and the jobs still running — ingest, drain, rollup, report —
-# are all OnUnitInactiveSec, so they drift and there is no fixed minute to
-# avoid. The phase of this timer is now free, and is simply the top of the
-# five-minute grid.
+# `zoopla_london` and `spareroom` now run on exactly these bands, and the three
+# of them share the grid by phase rather than by accident:
+#
+#   rightmove       on the boundary
+#   zoopla_london   a third of the interval later
+#   spareroom       two thirds later
+#
+# So on the five-minute band it is :00, :01:40 and :03:20, and on the ten it is
+# :00, :03:20 and :06:40. Even spacing is the point: the three readers are the
+# only jobs on this box that reach outward over the network, two of them share
+# one residential proxy session pool, and started together they would arrive at
+# three portals as one burst on the same second of every period.
+#
+# This timer keeps the boundary and so needs no offset of its own. What it did
+# need was less jitter: ninety seconds of RandomizedDelaySec is most of the
+# hundred-second gap to the next reader, which would have made the spacing
+# decorative. See the delay below.
 #
 # A sweep that outlasts its interval does not pile up: systemd will not start a
 # second london-home-finder@rightmove.service while the first is still running,
@@ -71,11 +82,17 @@ OnCalendar=Mon..Fri 18..23:00/10 Europe/London
 # Weekends, from the end of the night band to midnight: every ten minutes.
 OnCalendar=Sat,Sun 07..23:00/10 Europe/London
 
-# A minute and a half of jitter, so we are not on the stroke of the hour with
-# everybody else's crontab. Still well inside the shortest interval, so it
-# blurs a start without ever reordering two runs.
-RandomizedDelaySec=90s
-AccuracySec=30s
+# Fifteen seconds, down from ninety.
+#
+# Jitter here is now the smaller half of the job: `SCRAPE_JITTER` delays every
+# individual request, which is the pattern a portal can actually see, and this
+# only blurs the start. Ninety seconds was most of the hundred-second gap to
+# `zoopla_london` on the five-minute band, so the even spacing above would have
+# existed on paper and not in the logs. Fifteen leaves it intact — the three
+# readers stay at least 85 seconds apart under the worst draw — and still means
+# we are not on the exact stroke of the hour with everybody else's crontab.
+RandomizedDelaySec=15s
+AccuracySec=15s
 
 # Deliberately NOT Persistent. A run missed because the machine was off should
 # be skipped rather than fired on boot: the next slot is at most an hour away

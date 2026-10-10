@@ -246,8 +246,12 @@ class Note:
     def set(self, name: str, value: Any) -> None:
         self.values[name] = value
 
-    def degrade(self, reason: str) -> None:
+    def degrade(self, reason: str, *, recoverable: bool = False) -> None:
         self.status = "degraded"
+        # Kept, because which degradations are the next run's problem rather
+        # than a person's is what the Problems panel acts on. See
+        # `Stage.degrade` and RECOVERABLE_STREAK.
+        self.recoverable = recoverable
         self.log("warn", reason)
 
 
@@ -320,6 +324,14 @@ def test_a_sweep_refused_everywhere_it_asked_is_degraded(monkeypatch: Any) -> No
     assert stage.status == "degraded"
     assert stage.counts["refused"] == 1
     assert stage.values["districts_read"] == 0
+
+    # Degraded and recoverable are different answers to different questions.
+    # The status says this run read nothing, which is true and belongs in the
+    # run log. The flag says the next run fixes it without help, which is also
+    # true — the watermark only moves on a complete read — and is what keeps
+    # one refusal off the Problems panel until it has happened four runs
+    # running. See RECOVERABLE_STREAK in apps/web/lib/admin-queries.ts.
+    assert stage.recoverable is True
 
 
 def test_every_district_refused_is_degraded_whatever_the_count(monkeypatch: Any) -> None:

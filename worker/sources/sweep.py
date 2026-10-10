@@ -86,6 +86,12 @@ DISTRICT_BUDGET = 25
 
 # Between districts. No portal here publishes a crawl delay, so this is manners
 # rather than obedience — and cheap, at a request or two per district.
+#
+# Flat on purpose, and not the same thing as `fetch.JITTER`. This one is a
+# courtesy to the portal and a constant is the clearest way to state it; the
+# jitter is per request and random, and exists to stop a run looking like a
+# timer. Adding randomness here would blur the one of the two that is supposed
+# to be legible.
 PAUSE_SECONDS = 1.0
 
 # Listing pages fetched per run to fill in a missing postcode. Only for
@@ -719,7 +725,11 @@ def _collect(
                 # first district and again at the tenth has had one thing
                 # happen to it, not two.
                 if refusals == 1:
-                    stage.log("warn", f"{district}: {exc}")
+                    # Recoverable: the watermark below only moves on a complete
+                    # read, so a district refused now is read back over by the
+                    # next run. The flag is what keeps a single refusal off the
+                    # Problems panel until it has happened four runs running.
+                    stage.log("warn", f"{district}: {exc}", recoverable=True)
                 stage.count("refused")
                 if in_a_row >= REFUSALS_ALLOWED and not stored:
                     # Says why it stopped and nothing about what the run was
@@ -728,6 +738,7 @@ def _collect(
                         "warn",
                         f"{portal.key} refused {in_a_row} requests in a row and "
                         f"gave nothing — stopping this run rather than asking again",
+                        recoverable=True,
                     )
                     break
                 continue
@@ -891,13 +902,20 @@ def _collect(
         # no new flats on it is the normal quiet case, and most runs are that.
         # What makes this a fault is that nothing was read.
         if refusals and not read:
+            # Recoverable, and the run still records `degraded` — the two are
+            # different questions. The status is "did this run read anything",
+            # which it did not, and the flag is "will the next one fix it",
+            # which it will: `mark_swept` above runs only on a complete read,
+            # so nothing moved and the next run covers the same ground. The
+            # Problems panel acts on the flag, the run log on the status.
             stage.degrade(
                 f"{portal.key} read nothing — "
                 + (
                     "the one district it asked for was refused"
                     if refusals == 1
                     else f"all {refusals} districts it asked for were refused"
-                )
+                ),
+                recoverable=True,
             )
         stage.set("requests", fetcher.requests)
         # The transfer, not the decompressed body — see the module note. Named

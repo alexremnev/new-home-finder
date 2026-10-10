@@ -136,6 +136,31 @@ export type Problem = {
   level: "warn" | "error";
 };
 
+// How many bad runs in a row a recoverable fault has to reach before the
+// Problems panel says anything about it.
+//
+// A portal refusing every exit address for one page costs a late read and
+// nothing else: the watermark only moves on a complete read, so the next run
+// covers the same ground, and the run after a refusal is routinely seen to
+// read seven pages where it usually reads two. Measured on 10 October 2026,
+// `zoopla_london` did that 18 times in 48 runs — eighteen rows on a panel
+// whose job is to show what needs doing, about something that needed nothing
+// done, which is how a panel stops being read.
+//
+// Four is the point where the self-healing story stops being true. Three in a
+// row is a bad patch of exits, and the reader has caught up after each one;
+// four means it has not read for most of an hour and the gap is getting close
+// to what a search page can still reach back over. The streak is counted from
+// the latest run backwards, so one clean run clears it — which is exactly the
+// case "it recovered on the next attempt" and exactly what should vanish from
+// the panel.
+//
+// Only recoverable faults are held back. `failed`, and any degradation the
+// worker did not flag — a channel with no implementation, a district that
+// could not be read back to its watermark — appear on the first occurrence, as
+// before. See `Stage.degrade` in worker/obs/log.py.
+export const RECOVERABLE_STREAK = 4;
+
 /**
  * The checks that look past a job's exit code, over the window the dashboard
  * is set to.
@@ -160,7 +185,26 @@ export type Problem = {
  */
 export async function problems(win: Win): Promise<Problem[]> {
   return query<Problem>(
-    `SELECT CASE WHEN bool_or(status = 'failed') THEN 'run failed'
+    `WITH streaks AS (
+       -- Bad runs since each job's last clean one. Counted from the latest run
+       -- backwards and deliberately not limited to the window: a streak that
+       -- began an hour before a half-hour window is still a streak, and the
+       -- question "has this recovered" is about the job's present state rather
+       -- than about the range the page is set to.
+       SELECT j.job,
+              (SELECT count(*) FROM job_runs b
+                WHERE b.job = j.job
+                  AND b.status IN ('failed', 'degraded')
+                  AND b.started_at > coalesce(
+                        (SELECT max(g.started_at) FROM job_runs g
+                          WHERE g.job = j.job
+                            AND g.status IN ('ok', 'skipped_locked')),
+                        '-infinity'::timestamptz
+                      ))::int AS bad_in_a_row
+         FROM (SELECT DISTINCT job FROM job_runs
+                WHERE started_at > now() - make_interval(mins => $1::int)) j
+     )
+     SELECT CASE WHEN bool_or(status = 'failed') THEN 'run failed'
                  ELSE 'run degraded' END AS kind,
             -- job_runs records the job and the error, and no source: a run is a
             -- job, and which source it touched is a property of its stages.
@@ -173,6 +217,16 @@ export async function problems(win: Win): Promise<Problem[]> {
       WHERE status IN ('failed', 'degraded')
         AND started_at >  now() - make_interval(mins => $1::int)
         AND started_at <= now() - make_interval(mins => $2::int)
+        -- A run whose degradation the worker flagged recoverable waits for a
+        -- streak. 'failed' never does: a run that stopped is not something the
+        -- next one undoes. See RECOVERABLE_STREAK.
+        AND (status = 'failed'
+             OR NOT EXISTS (
+                  SELECT 1 FROM job_events e
+                   WHERE e.run_id = job_runs.id
+                     AND coalesce((e.ctx->>'recoverable')::bool, false))
+             OR coalesce((SELECT s.bad_in_a_row FROM streaks s
+                           WHERE s.job = job_runs.job), 0) >= $3)
       -- Not GROUP BY 1, 2: the first column is now an aggregate over the
       -- statuses in the group, so it cannot also be grouped on.
       GROUP BY job, left(error, 90)
@@ -205,6 +259,12 @@ export async function problems(win: Win): Promise<Problem[]> {
       WHERE e.level IN ('warn', 'error')
         AND e.ts >  now() - make_interval(mins => $1::int)
         AND e.ts <= now() - make_interval(mins => $2::int)
+        -- Dropped per event rather than per group: a stage that said one
+        -- recoverable thing and one lasting thing has to keep the second, and
+        -- a group left with nothing in it disappears on its own.
+        AND (NOT coalesce((e.ctx->>'recoverable')::bool, false)
+             OR coalesce((SELECT s.bad_in_a_row FROM streaks s
+                           WHERE s.job = r.job), 0) >= $3)
       -- A warn-only group and a group with one error in it are two different
       -- rows now, so the kind is an aggregate and the ordinal has to go.
       GROUP BY r.job, e.stage
@@ -256,7 +316,7 @@ export async function problems(win: Win): Promise<Problem[]> {
 
       ORDER BY 4 DESC NULLS LAST
       LIMIT 40`,
-    [Math.round(win.mins), Math.round(win.endMins)],
+    [Math.round(win.mins), Math.round(win.endMins), RECOVERABLE_STREAK],
   );
 }
 
@@ -341,11 +401,17 @@ export type Event = {
 // otherwise haunts the dropdown forever: `hot` was removed with the in-worker
 // scheduler in migration 0021 and cannot run, but its old `job_runs` rows kept
 // listing it as though it could.
+// The run log's job filter. `UNSCHEDULED_JOBS` is left out for the same reason
+// it is left off the Jobs panel, and because a chip is worse than a tile here:
+// the row of them is what has to fit on a phone, and a name that answers no
+// question was pushing the ones that do off the screen.
 export async function knownJobs(): Promise<string[]> {
   const rows = await query<{ job: string }>(
     `SELECT DISTINCT job FROM job_runs
       WHERE started_at > now() - interval '30 days'
+        AND job <> ALL($1::text[])
       ORDER BY job`,
+    [UNSCHEDULED_JOBS],
   );
   return rows.map((r) => r.job);
 }
@@ -695,10 +761,13 @@ export const SCHEDULED_JOBS: {
   { job: "ingest", everyMins: 2 },
   { job: "drain", everyMins: 1 },
   { job: "rollup", everyMins: 2 },
-  { job: "zoopla_london", everyMins: 5 },
-  // The same timer as zoopla_london, deliberately: this reader's own paging
-  // cycle is measured in runs of it. See the unit file.
-  { job: "spareroom", everyMins: 5 },
+  // These three share one grid, offset by a third of its interval each, so one
+  // period covers all of them: five minutes through the working day, ten in the
+  // evenings and at weekends, hourly overnight. Ten is the looser of the two
+  // live gaps and so the one that cannot cry wolf — a reader that has not run
+  // for ten minutes in the evening band is not yet news.
+  { job: "zoopla_london", everyMins: 10 },
+  { job: "spareroom", everyMins: 10 },
   { job: "rightmove", everyMins: 10 },
   // Stopped on purpose, so its silence is the intended state and not a fault.
   // `zoopla_london` reads the whole city in one search, which is what this
@@ -752,12 +821,22 @@ export function expectation(
 }
 
 // `portals` runs every reader in one go and nothing schedules it — it is there
-// for a manual sweep. A tile for it therefore answers no question this panel
-// asks: it appeared only because somebody had run it by hand, and said nothing
-// about whether anything is working. Hidden here rather than left to age out,
-// because what it was is the first thing it makes you ask. Runs of it are
-// still in Last runs and the run log, which is where a run you started
-// yourself belongs.
+// for a manual sweep. A tile for it therefore answers no question the Jobs
+// panel asks: it appeared only because somebody had run it by hand, and said
+// nothing about whether anything is working. Hidden rather than left to age
+// out, because what it was is the first thing it makes you ask.
+//
+// Also out of the run log and its job filter, which is the newer half of this.
+// The argument for keeping it there was that a run you started yourself is
+// exactly what a log is for — true, and still beside the point: each of its
+// runs reads every portal, so it lands in the log as one line with one status
+// standing in for three readers, which is the one shape this panel exists to
+// avoid. What it actually did is in the three readers' own stages. Runs of it
+// remain in Last runs, and in `job_runs` for anyone who asks by hand.
+//
+// Declared here, used above in `knownJobs`: a const is in scope for a function
+// body that runs after the module has finished evaluating, which every query
+// in this file does.
 const UNSCHEDULED_JOBS = ["portals"];
 
 export async function jobStates(win: Win): Promise<JobState[]> {
@@ -888,6 +967,7 @@ export async function runLog(
     filter.q ?? null,
     Math.round(win.endMins),
     STUCK_AFTER_MINUTES,
+    UNSCHEDULED_JOBS,
   ];
 
   // `bad` means the run is worth a look: it failed, it degraded, it logged
@@ -896,6 +976,7 @@ export async function runLog(
   // here too — that is the shape a crash leaves behind.
   const where = `r.started_at >  now() - make_interval(mins => $1::int)
         AND r.started_at <= now() - make_interval(mins => $5::int)
+        AND r.job <> ALL($7::text[])
         AND ($2::text IS NULL OR r.job = $2)
         AND ($4::text IS NULL OR r.error ILIKE '%' || $4 || '%'
              OR EXISTS (SELECT 1 FROM job_events e
@@ -937,7 +1018,7 @@ export async function runLog(
          ) AS n ON true
         WHERE ${where}
         ORDER BY r.started_at DESC
-        LIMIT $7 OFFSET $8`,
+        LIMIT $8 OFFSET $9`,
       [...args, perPage, Math.max(0, page - 1) * perPage],
     ).catch(() => []),
     query<{ total: number }>(

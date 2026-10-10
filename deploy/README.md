@@ -1,18 +1,32 @@
 # Running the worker on a VPS
 
-Five jobs, on systemd timers, on a machine that listens on nothing.
+Eight jobs, on systemd timers, on a machine that listens on nothing.
 
-    ingest      every 5 min   read the feed, parse, match, queue
-    rightmove   by calendar   read Rightmove search pages
-    drain       every 5 min   send the queue, warn about plans, seed new filters
-    rollup      every 5 min   total the day into daily_stats
-    report      hourly        check for silence, alert the ops chat
+    ingest         every 2 min    read the feed, parse, match, queue
+    rightmove      by calendar    read Rightmove search pages
+    zoopla_london  by calendar    read the whole of Zoopla London, newest first
+    spareroom      by calendar    read SpareRoom as a rotating window
+    drain          every 5 min    send the queue, warn about plans, seed filters
+    rollup         every 5 min    total the day into daily_stats
+    report         hourly         check for silence, alert the ops chat
+    purge          nightly        delete rows that have expired
 
-Four of the five are plain intervals and drift. `rightmove` is the exception: it
-runs on a London-time calendar — every 5 minutes on weekdays 08:00–18:00, every
-10 minutes the rest of the day, hourly between midnight and 07:00 — because how
-often it is worth asking a portal depends on when letting agents publish. The
-reasoning is in `systemd/london-home-finder-rightmove.timer`.
+The ones on a plain interval drift, which is what you want from them. The three
+portal readers do not: they share one London-time calendar — every 5 minutes on
+weekdays 08:00–18:00, every 10 minutes either side of that, hourly between
+midnight and 07:00 — because how often it is worth asking a portal depends on
+when letting agents publish.
+
+They share the grid by phase rather than all landing on it: `rightmove` on the
+boundary, `zoopla_london` a third of the interval later, `spareroom` two thirds.
+So on the five-minute band it is :00, :01:40 and :03:20. Those are the only
+three jobs that reach outward over the network and two of them share one
+residential proxy pool, so starting them together would arrive at three portals
+as one burst with a period a stopwatch could read off. The reasoning, band by
+band, is in `systemd/london-home-finder-rightmove.timer`.
+
+Each run's individual requests are spaced too, by `SCRAPE_JITTER` — see
+`.env.example`. The timers blur the start; that blurs the shape.
 
 ## What runs where, and why
 

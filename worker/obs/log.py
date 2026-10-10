@@ -48,6 +48,20 @@ class Run:
         # run did not ask. See `finish`.
         self.worst: str = "ok"
         self._stage_note: str | None = None
+        # Whether that worst thing is the kind the next run undoes by itself.
+        #
+        # A portal refusing every exit address for one page is a lost read and
+        # nothing more: the watermark does not move, so the next run reads back
+        # over the gap and the only cost is latency. A channel with no
+        # implementation behind it is not like that at all, and neither is a
+        # district that could not be read back to its watermark — those stay
+        # broken until somebody acts.
+        #
+        # Carried into the run's own events so the dashboard can tell the two
+        # apart without matching on message text. See `problems` in
+        # apps/web/lib/admin-queries.ts, which holds the recoverable kind back
+        # until it has happened four runs in a row.
+        self._recoverable: bool = False
         # Which machine this is. The portal readers run from the server and
         # from a desk both — Zoopla answers the server 403 and OpenRent 405 on
         # content pages — and without this the run log cannot say which of them
@@ -118,12 +132,24 @@ class Run:
             raise
         else:
             st.finish(st.status)
-            self._note(name, st.status)
+            self._note(name, st.status, recoverable=st.recoverable)
 
-    def _note(self, stage: str, status: str) -> None:
+    def _recoverable_ctx(self) -> dict[str, bool]:
+        """`{"recoverable": True}` when it is, and nothing when it is not.
+
+        Absent rather than false so that every event already in the table
+        reads the same as one written now: a panel that asks for the flag gets
+        no answer from either, which is the honest answer for a run that
+        finished before the flag existed.
+        """
+
+        return {"recoverable": True} if self._recoverable else {}
+
+    def _note(self, stage: str, status: str, *, recoverable: bool = False) -> None:
         if SEVERITY.get(status, 0) > SEVERITY.get(self.worst, 0):
             self.worst = status
             self._stage_note = stage
+            self._recoverable = recoverable
 
     def finish(self, status: str, error: str | None = None) -> None:
         # A run is no better than its worst stage. The job function returns
@@ -136,6 +162,7 @@ class Run:
                 "warn",
                 f"run reported {status} but its {self._stage_note} stage was "
                 f"{self.worst}; recording {self.worst}",
+                **self._recoverable_ctx(),
             )
             status = self.worst
             if error is None:
@@ -155,7 +182,14 @@ class Run:
             else "warn" if status == "degraded"
             else "error"
         )
-        self.event(level, f"run finished: {status}", **self.counters)
+        # Merged rather than passed alongside: the counters are splatted, and a
+        # counter that one day happens to be called `recoverable` would be a
+        # duplicate keyword and a crash at the very end of a run.
+        self.event(
+            level,
+            f"run finished: {status}",
+            **{**self.counters, **self._recoverable_ctx()},
+        )
 
         counts = " ".join(f"{name}={value}" for name, value in sorted(self.counters.items()))
         print(
@@ -173,6 +207,9 @@ class Stage:
         self.source_key = source_key
         self.status = "ok"
         self.counters: dict[str, Any] = {}
+        # True only while every degradation so far has been recoverable. See
+        # `degrade` and `Run._recoverable`.
+        self.recoverable = False
 
     def log(self, level: Level, message: str, **ctx: Any) -> None:
         self.run.event(level, message, stage=self.name, source_key=self.source_key, **ctx)
@@ -184,9 +221,28 @@ class Stage:
     def set(self, name: str, value: Any) -> None:
         self.counters[name] = value
 
-    def degrade(self, reason: str) -> None:
+    def degrade(self, reason: str, *, recoverable: bool = False) -> None:
+        """Record that this stage lost something, and say whether that is final.
+
+        `recoverable` means the next run of this job undoes it with no help:
+        a portal that refused every exit address for one page leaves the
+        watermark where it was, so the read is late rather than lost. Default
+        False, which is right for everything that needs a person — a channel
+        with no implementation, a chat that does not exist, a district that
+        could not be read back as far as its watermark.
+
+        A stage that degrades twice is only recoverable if both were. One
+        fault that outlives the run is enough to make the whole stage worth
+        looking at, and it must not be hidden by a recoverable one beside it.
+        """
+
+        self.recoverable = (
+            recoverable
+            if self.status != "degraded"
+            else self.recoverable and recoverable
+        )
         self.status = "degraded"
-        self.log("warn", reason)
+        self.log("warn", reason, **({"recoverable": True} if recoverable else {}))
 
     def finish(self, status: str) -> None:
         self.run.conn.execute(
