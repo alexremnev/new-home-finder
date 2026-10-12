@@ -2143,3 +2143,101 @@ export async function portalRuns(win: Win): Promise<PortalRun[]> {
   ).catch(() => []);
 }
 
+
+export type ProxySpend = {
+  /** The scraper job, not the source key — see below. */
+  task: string;
+  runs: number;
+  requests: number;
+  proxy_requests: number;
+  bytes: number;
+  proxy_bytes: number;
+  fallback_requests: number;
+  fallback_bytes: number;
+  rotations: number;
+  /** Runs that were refused and deliberately did not retry through the proxy. */
+  pinned: number;
+  refused: number;
+  last_at: string | null;
+};
+
+// What the residential proxy was actually used for, one row per scraper job.
+//
+// ── why this is keyed on the job and not on the source key ───────────────
+//
+// `portalRuns` above groups the same stages by `source_key`, and that is the
+// right key for "what did this portal produce": two readers of one site
+// converge on one row per flat, so their listings belong together. It is the
+// wrong key for a bill. `zoopla` and `zoopla_london` are two jobs reading
+// Zoopla under one source key, on two timers, and only one of them goes out
+// through the proxy at all — grouped by source key their traffic is a single
+// number that cannot be attributed to either. So this joins `job_runs` and
+// groups on the job name, which is what the schedule, the budget and the
+// invoice are all about.
+//
+// `source_key` is the fallback, for the stages of a `portals` run — the manual
+// sweep that runs every reader under one job name. Nothing schedules it, and a
+// stage from it could not be attributed anyway: both Zoopla readers write
+// `zoopla`, which is the whole reason for the join.
+//
+// Every cast is guarded by `jsonb_typeof`, like `portalRuns`: a counter that is
+// somehow not a number must not take the page down. A counter absent
+// altogether sums to nought through `coalesce` — `fallback_requests` and
+// `exit_rotations` are only written when they happened, so that is the normal
+// case for them rather than the exception.
+export async function proxySpend(win: Win, jobs: string[]): Promise<ProxySpend[]> {
+  return query<ProxySpend>(
+    `WITH windowed AS (
+       SELECT CASE WHEN r.job = ANY($3::text[]) THEN r.job ELSE s.source_key END
+                AS task,
+              s.counters, s.started_at
+         FROM job_stages s
+         JOIN job_runs r ON r.id = s.run_id
+        WHERE s.stage = 'scrape'
+          AND s.source_key IS NOT NULL
+          AND s.started_at >  now() - make_interval(mins => $1::int)
+          AND s.started_at <= now() - make_interval(mins => $2::int)
+     )
+     SELECT task,
+            count(*)::int AS runs,
+            coalesce(sum((counters->>'requests')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'requests') = 'number'), 0)::int
+              AS requests,
+            -- Requests that went out through the primary residential pool and
+            -- the bytes they moved. "proxy_bytes" is the figure a DataImpulse
+            -- invoice is checked against; "bytes" is everything, proxied or
+            -- not, so the pair says what the proxy was spared as well as what
+            -- it carried.
+            coalesce(sum((counters->>'proxy_requests')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'proxy_requests') = 'number'), 0)::int
+              AS proxy_requests,
+            coalesce(sum((counters->>'bytes')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'bytes') = 'number'), 0)
+              AS bytes,
+            coalesce(sum((counters->>'proxy_bytes')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'proxy_bytes') = 'number'), 0)
+              AS proxy_bytes,
+            -- The second vendor, kept apart from the first for the same reason
+            -- the worker keeps them apart: a number mixing two invoices can be
+            -- reconciled against neither.
+            coalesce(sum((counters->>'fallback_requests')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'fallback_requests') = 'number'), 0)::int
+              AS fallback_requests,
+            coalesce(sum((counters->>'fallback_bytes')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'fallback_bytes') = 'number'), 0)
+              AS fallback_bytes,
+            coalesce(sum((counters->>'exit_rotations')::bigint)
+                     FILTER (WHERE jsonb_typeof(counters->'exit_rotations') = 'number'), 0)::int
+              AS rotations,
+            -- A refusal the run chose not to pay its way out of: the host is
+            -- pinned to a direct route, so nothing was retried through the
+            -- proxy. This is why a tile can show a refusal and no spend.
+            count(*) FILTER (WHERE counters ? 'refused_and_pinned')::int AS pinned,
+            count(*) FILTER (WHERE counters ? 'refused_this_address')::int AS refused,
+            max(started_at)::text AS last_at
+       FROM windowed
+      GROUP BY task
+      ORDER BY task`,
+    [Math.round(win.mins), Math.round(win.endMins), jobs],
+  ).catch(() => []);
+}

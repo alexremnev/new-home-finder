@@ -12,6 +12,7 @@ const TABS = [
   { href: "/admin/payments", label: "Payments" },
   { href: "/admin/visitors", label: "Visitors" },
   { href: "/admin/districts", label: "Districts" },
+  { href: "/admin/proxy", label: "Proxy" },
 ] as const;
 
 // A client component so the current tab can be marked, the chosen range can

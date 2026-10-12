@@ -14,6 +14,8 @@ handler reports it as one portal having failed.
 
 from __future__ import annotations
 
+import pathlib
+import re
 from typing import Any
 
 from worker import store
@@ -143,3 +145,33 @@ def test_a_disabled_site_stops_both_of_its_jobs(monkeypatch: Any) -> None:
     assert [one.key for one in readers] == ["rightmove"]
     assert keyed == ["rightmove"]
     assert status == "ok"
+
+
+# ── and the dashboard that bills them ────────────────────────────────────
+
+SPEND = (
+    pathlib.Path(__file__).resolve().parents[1]
+    / "apps/web/app/admin/(dash)/proxy/spend.ts"
+)
+
+
+def test_the_proxy_tab_names_every_portal_job() -> None:
+    """The admin Proxy tab lists the jobs it charges, and it has to list all.
+
+    Its query groups `job_stages` by `job_runs.job` when the job is one of
+    these names and by `source_key` otherwise, because that is the only way to
+    tell `zoopla` and `zoopla_london` apart — they write one source key. So a
+    sixth portal job left out of that list does not disappear from the tab, it
+    reappears under its source key, and for a second Zoopla reader it would be
+    silently added to the first one's bill.
+
+    Checked from here rather than from the web tests because this side owns the
+    list: `PORTAL_JOBS` is where a job is added.
+    """
+
+    listed = set(re.findall(r'^\s*job: "([a-z_]+)",', SPEND.read_text(), re.M))
+
+    assert listed == set(runner.PORTAL_JOBS), (
+        "apps/web/app/admin/(dash)/proxy/spend.ts lists "
+        f"{sorted(listed)}; the worker schedules {sorted(runner.PORTAL_JOBS)}"
+    )
