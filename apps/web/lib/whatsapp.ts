@@ -1,3 +1,5 @@
+import { meterWhatsApp, type WaKind } from "./wa-meter";
+
 const GRAPH = "https://graph.facebook.com";
 const VERSION = "v21.0";
 
@@ -43,7 +45,10 @@ function buttonPayload(to: string, body: string, link: WaLink): Payload {
   };
 }
 
-async function post(payload: Payload, phoneId: string, token: string): Promise<boolean> {
+/** What Meta answered: whether it took the message, and what it called it. */
+type Posted = { ok: boolean; id: string | null };
+
+async function post(payload: Payload, phoneId: string, token: string): Promise<Posted> {
   const response = await fetch(`${GRAPH}/${VERSION}/${phoneId}/messages`, {
     method: "POST",
     headers: {
@@ -59,8 +64,23 @@ async function post(payload: Payload, phoneId: string, token: string): Promise<b
       type: payload.type,
       body: await response.text().catch(() => ""),
     });
+    return { ok: false, id: null };
   }
-  return response.ok;
+
+  // The id Meta gives the message, kept for the ledger: it is the only thing
+  // a row in `wa_messages` and a line on the bill have in common.
+  //
+  // Caught rather than propagated. A 200 with a body we cannot read is still
+  // a message the person received and we are charged for, and turning that
+  // into a failed send would be the more expensive mistake: the caller would
+  // report a reply that did not arrive, and on the queue it would be retried
+  // and billed twice. An unnamed ledger row still counts.
+  try {
+    const body = (await response.json()) as { messages?: { id?: string }[] };
+    return { ok: true, id: body?.messages?.[0]?.id ?? null };
+  } catch {
+    return { ok: true, id: null };
+  }
 }
 
 /**
@@ -76,11 +96,18 @@ async function post(payload: Payload, phoneId: string, token: string): Promise<b
  * The button is the only shape here that Meta may decline outright, so a
  * refusal falls back to the plain message with the link on the end of it. A
  * reply nobody receives is worse than a reply nobody can tap.
+ *
+ * `kind` is what the message was, for the meter below. It defaults to `reply`
+ * because that is what almost everything here is — the webhook answering
+ * something the person sent — and the two places that are not say so. Every
+ * message is billed by Meta, so every message that leaves this function is
+ * recorded: see `meterWhatsApp` and 0063.
  */
 export async function sendWhatsApp(
   to: string,
   body: string,
   link?: WaLink,
+  kind: WaKind = "reply",
 ): Promise<boolean> {
   const phoneId = process.env.WA_PHONE_NUMBER_ID;
   const token = process.env.WA_ACCESS_TOKEN;
@@ -103,7 +130,11 @@ export async function sendWhatsApp(
   const number = to.replace(/\D/g, "");
 
   if (link && body.length <= INTERACTIVE_BODY) {
-    if (await post(buttonPayload(number, body, link), phoneId, token)) return true;
+    const tappable = await post(buttonPayload(number, body, link), phoneId, token);
+    if (tappable.ok) {
+      await meterWhatsApp(number, kind, tappable.id);
+      return true;
+    }
     console.error("whatsapp button refused; sending the plain message instead");
   }
 
@@ -112,5 +143,13 @@ export async function sendWhatsApp(
   // goes back into the body — and `preview_url` with it, because a link in the
   // text is a link worth previewing.
   const text = link && !body.includes(link.url) ? `${body}\n${link.url}` : body;
-  return post(textPayload(number, text, Boolean(link)), phoneId, token);
+  const plain = await post(textPayload(number, text, Boolean(link)), phoneId, token);
+
+  // Only what Meta accepted. A refused post is not a message, is not billed,
+  // and must not spend the subscriber's allowance — which is the more
+  // expensive of the two mistakes, because it withholds listings they paid
+  // for. A refused button followed by an accepted text is one message and is
+  // metered once, here.
+  if (plain.ok) await meterWhatsApp(number, kind, plain.id);
+  return plain.ok;
 }

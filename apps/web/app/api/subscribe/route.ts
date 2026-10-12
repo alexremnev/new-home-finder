@@ -83,6 +83,11 @@ export async function POST(request: Request): Promise<NextResponse> {
       const said = await sendWhatsApp(
         edited.address,
         criteriaSet(criteria, edited.replaced),
+        undefined,
+        // Not a reply: they filled in a form on the site, and this arrives in
+        // a chat they were not looking at. The meter keeps the two apart
+        // because only one of them is a message we chose to send — see 0063.
+        "receipt",
       ).catch(() => false);
       if (!said) {
         console.error("subscribe: filter saved but the WhatsApp receipt was not delivered");

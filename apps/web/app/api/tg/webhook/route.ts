@@ -438,8 +438,14 @@ async function grant(chatId: string, ref: string, plan: string, days: number): P
     if (plans[0] === undefined) return "no-plan";
 
     const rows = await run(
+      // `plan_from` moves with `plan_until`, as it does everywhere else one is
+      // written — see 0057. Without it this was the one grant that did
+      // nothing for a WhatsApp subscriber whose nine hundred messages were
+      // spent: the days went up, the allowance stayed spent, the plan stayed
+      // not-live, and the only visible effect was a confirmation message.
       `UPDATE users
           SET plan = $1,
+              plan_from = now(),
               plan_until = greatest(coalesce(plan_until, now()), now())
                            + make_interval(days => $2::int)
         WHERE id = $3

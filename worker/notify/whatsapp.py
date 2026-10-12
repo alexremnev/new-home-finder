@@ -567,7 +567,19 @@ class WhatsAppNotifier:
             )
         except Exception as exc:
             return SendResult(ok=False, error=f"{type(exc).__name__}: {exc}", retryable=True)
-        return _interpret(response)
+
+        # The rate follows from the shape that went out, and this is the only
+        # place that knows it: `body` chose between free-form and the template
+        # by asking whether the window was open, and `_interpret` sees only
+        # Meta's answer. Read off the payload rather than recomputed from
+        # `last_inbound`, so that the ledger records what was sent and not
+        # what a second look at the clock would have sent.
+        result = _interpret(response)
+        return result.model_copy(
+            update={
+                "billed_as": "utility" if payload.get("type") == "template" else "service"
+            }
+        )
 
 # Graph reports everything as an `error` object with a numeric code.
 #

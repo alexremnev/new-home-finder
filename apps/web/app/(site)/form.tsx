@@ -68,7 +68,7 @@ export type Offer = {
   /**
    * Alerts included in a paid period, or null for as many as there are.
    *
-   * From `plans.alert_allowance`, so the card cannot promise a number the
+   * From `plans.message_allowance`, so the card cannot promise a number the
    * delivery rules do not honour — which it did while this was a string typed
    * into the list below.
    */

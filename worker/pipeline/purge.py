@@ -51,6 +51,10 @@ table. Two of them are the point of the job and the rest are housekeeping:
     current paid period is excluded so a WhatsApp allowance cannot be reset by
     this job and sell somebody alerts they already had.
 
+  * **The WhatsApp ledger.** `wa_messages`, on the same two rules: age, and
+    never inside the period an allowance is being counted over. The totals it
+    is deleted *because of* are in `daily_stats`, filed nightly.
+
 ── what it deliberately leaves alone ────────────────────────────────────────
 
 `payments` and `admin_actions`, for ever: one is the financial record and the
@@ -167,6 +171,31 @@ RULES: tuple[Rule, ...] = (
                  AND u.plan_from IS NOT NULL
                  AND coalesce(notifications.sent_at, notifications.created_at)
                      >= u.plan_from)
+        """,
+    ),
+    Rule(
+        name="wa_messages_forgotten",
+        table="wa_messages",
+        keys=("id",),
+        # The same rule as the delivery history above, and for the same two
+        # reasons: the current period is what the nine-hundred-message
+        # allowance is counted over, so deleting inside it would hand somebody
+        # a second allowance they have already spent.
+        #
+        # What survives this is `daily_stats.wa_messages_sent` and
+        # `daily_stats.wa_cost_micros` — the rollup files both every night, so
+        # "what did WhatsApp cost in March" is still answerable in May. See
+        # 0063.
+        #
+        # A row whose `user_id` was set to NULL by an erasure has no period to
+        # be inside, and goes on age alone.
+        where="""
+            sent_at < %(cutoff)s
+          AND NOT EXISTS (
+              SELECT 1 FROM users u
+               WHERE u.id = wa_messages.user_id
+                 AND u.plan_from IS NOT NULL
+                 AND wa_messages.sent_at >= u.plan_from)
         """,
     ),
     Rule(

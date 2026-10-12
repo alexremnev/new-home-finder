@@ -134,7 +134,9 @@ export async function POST(request: Request): Promise<NextResponse> {
     if (!number) continue;
 
     // Whatever they said, saying anything opens the 24-hour window in which a
-    // listing can be sent as free-form text with a photo, and for nothing.
+    // listing can be sent as free-form text with a photo. Not for nothing —
+    // Meta charges for every message now, which is why what goes back out
+    // through here is metered. See 0063.
     await query(
       `UPDATE user_channels SET last_inbound_at = now()
         WHERE channel = 'whatsapp' AND address = $1`,

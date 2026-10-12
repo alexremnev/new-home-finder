@@ -556,9 +556,9 @@ def test_nought_per_cent_is_said_as_stopped() -> None:
 
 
 def test_an_allowance_nobody_configured_still_produces_a_sentence() -> None:
-    # `alert_allowance` is NULL on every unmetered plan, and a notice is only
-    # reached for a metered one — but a stage arriving without the number must
-    # not render "all None alerts".
+    # `message_allowance` is NULL on every unmetered plan, and a notice is
+    # only reached for a metered one — but a stage arriving without the number
+    # must not render "all None alerts".
     text = notice_for("wa_month", None, "spent", 100, None, allowance=None)
     assert "None" not in text
     assert "all alerts" in text

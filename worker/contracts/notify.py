@@ -95,6 +95,17 @@ class SendResult(BaseModel):
     recipient_gone: bool = False
     cost_micros: int = 0
 
+    # Which of the provider's rates the message that actually went out is
+    # charged at. Only WhatsApp sets it, and only it has two: free-form inside
+    # the 24-hour window is a `service` message, and the approved template
+    # that is the only way to reach a shut window is a `utility` one, priced
+    # differently. The notifier is the one thing that knows which payload it
+    # sent, so it is the one thing that can say — see 0063, and `_post`.
+    #
+    # None means "no rate applies", which is Telegram: nothing to meter where
+    # delivery is free.
+    billed_as: Literal["service", "utility"] | None = None
+
 @runtime_checkable
 class Notifier(Protocol):
     key: str

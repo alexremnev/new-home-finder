@@ -38,6 +38,10 @@ export async function tell(userId: number, text: string): Promise<boolean> {
       to.address,
       text,
       carries ? undefined : { label: "Open the site", url: `${site}/` },
+      // Everything through here is unprompted — a payment clearing, a webhook
+      // arriving — so it is a receipt rather than a reply. Both are billed;
+      // only this one is our own doing.
+      "receipt",
     );
   }
 

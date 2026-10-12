@@ -47,11 +47,11 @@ export type Account = {
   // channel connected yet, which cannot reach a paid page anyway.
   channel: Channel | null;
   // Whether the plan is live, answered by `user_entitlement` rather than here.
-  // A WhatsApp month ends at thirty days OR at nine hundred alerts, so the
-  // date alone stopped being the answer — see 0057.
+  // A WhatsApp month ends at thirty days OR at nine hundred messages, so the
+  // date alone stopped being the answer — see 0057 and 0063.
   live: boolean;
-  alert_allowance: number | null;
-  alerts_used: number;
+  message_allowance: number | null;
+  messages_used: number;
 };
 
 export type SignupPlan = Plan & { duration_days_whatsapp: number | null };
@@ -123,8 +123,8 @@ export async function channelPrices(channel: Channel): Promise<Price[]> {
  * How many alerts a messenger's paid plan includes, or null when it includes
  * as many as there are.
  *
- * Read from `plans.alert_allowance` and never written into the copy, for the
- * reason `lapsedShare` gives below: the number is a product decision that
+ * Read from `plans.message_allowance` and never written into the copy, for
+ * the reason `lapsedShare` gives below: the number is a product decision that
  * lives in the table, and a card repeating it is a card that will one day
  * promise nine hundred to somebody whose plan says something else.
  *
@@ -133,7 +133,7 @@ export async function channelPrices(channel: Channel): Promise<Price[]> {
  */
 export async function channelAllowance(channel: Channel): Promise<number | null> {
   const rows = await query<{ allowance: number | null }>(
-    `SELECT max(alert_allowance) AS allowance
+    `SELECT max(message_allowance) AS allowance
        FROM plans
       WHERE enabled AND price_pence > 0
         AND ($1::text IS NULL OR channel IS NULL OR channel = $1)`,
@@ -177,7 +177,7 @@ export async function accountForChat(
             s.id AS subscription_id, s.criteria,
             p.display_name AS plan_name, p.max_districts, p.price_pence,
             uc.channel AS channel,
-            e.live, e.alert_allowance, e.alerts_used
+            e.live, e.message_allowance, e.messages_used
        FROM users u
        JOIN user_channels uc    ON uc.user_id = u.id
        JOIN plans p             ON p.key = u.plan
@@ -413,7 +413,7 @@ export async function accountForToken(
             -- Missing here while accountForChat selected them, which left
             -- planIsLive undefined for every token-based caller: a paying
             -- subscriber opening /update was told their plan had ended.
-            e.live, e.alert_allowance, e.alerts_used
+            e.live, e.message_allowance, e.messages_used
        FROM user_tokens t
        JOIN users u ON u.id = t.user_id
        JOIN plans p ON p.key = u.plan

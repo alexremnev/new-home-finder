@@ -22,3 +22,32 @@ export function pounds(pence: number): string {
     })
   );
 }
+
+/**
+ * Millionths of a US dollar as somebody reads them: "$19.80".
+ *
+ * Dollars and not pounds because that is the currency Meta bills WhatsApp in,
+ * and converting would mean picking an exchange rate and then quoting it as a
+ * cost. The revenue beside it on the same page stays in pounds for the same
+ * reason — it is the currency it arrives in. See 0063.
+ *
+ * Micros in, because a message costs a fraction of a penny ($0.022) and
+ * rounding at the message would lose most of the bill. Rounded only here, at
+ * the total.
+ *
+ * Always two decimal places, unlike `pounds`: this is an amount owed rather
+ * than a price, and a whole number of dollars is a coincidence rather than
+ * something worth reading as one.
+ */
+export function dollars(micros: number): string {
+  const value = micros / 1_000_000;
+  const sign = value < 0 ? "\u2212" : "";
+  return (
+    sign +
+    "$" +
+    Math.abs(value).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })
+  );
+}

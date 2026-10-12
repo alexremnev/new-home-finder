@@ -300,12 +300,19 @@ class Outcome:
     stop_user: bool = False
     provider_msg_id: str | None = None
     cost_micros: int = 0
+    # Which of Meta's rates the message went out at, for the ledger — see
+    # `SendResult.billed_as` and 0063. `service` for everything Telegram does
+    # too, where it is simply never read.
+    billed_as: str = "service"
 
 def outcome_for(result: SendResult, *, attempts: int, max_attempts: int = MAX_ATTEMPTS) -> Outcome:
 
     if result.ok:
         return Outcome(
-            "sent", provider_msg_id=result.provider_msg_id, cost_micros=result.cost_micros
+            "sent",
+            provider_msg_id=result.provider_msg_id,
+            cost_micros=result.cost_micros,
+            billed_as=result.billed_as or "service",
         )
     error = result.error or "unknown error"
     if result.recipient_gone:
@@ -527,6 +534,7 @@ def _apply(conn: Conn, stage: Any, notification_id: int, user_id: int, decision:
         store.mark_sent(
             conn, notification_id,
             provider_msg_id=decision.provider_msg_id, cost_micros=decision.cost_micros,
+            billed_as=decision.billed_as,
         )
         return
 
@@ -592,24 +600,17 @@ def watch_whatsapp_cost(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             user = int(row["user_id"])
             sent = int(row["sent"])
             paid = bool(row["paid"])
-            if row["kind"] == "daily":
-                what = (
-                    f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages today.\n"
-                    + (
-                        "They are paying, so delivery carries on."
-                        if paid
-                        else "They are not paying, so delivery is stopped until tomorrow."
-                    )
+            # One threshold, so one message. The lifetime figure that used to
+            # need a branch here has had no producer since 0057 replaced it
+            # with the allowance — see `costly_whatsapp`.
+            what = (
+                f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages today.\n"
+                + (
+                    "They are paying, so delivery carries on."
+                    if paid
+                    else "They are not paying, so delivery is stopped until tomorrow."
                 )
-            else:
-                what = (
-                    f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages in total.\n"
-                    + (
-                        "They are paying, so delivery carries on."
-                        if paid
-                        else "They are not paying; the daily stop applies as usual."
-                    )
-                )
+            )
             stage.log("warn", f"whatsapp volume: user {user} {row['kind']} {sent}",
                       user_id=user)
             stage.count("alerted" if tell_ops(what) else "alert_failed")
@@ -667,6 +668,11 @@ def ask_before_the_window_shuts(
                 ),
             )
             if result.ok:
+                store.record_wa_message(
+                    conn, user_id, "checkin",
+                    provider_msg_id=result.provider_msg_id,
+                    billed_as=result.billed_as or "service",
+                )
                 stage.count("asked")
                 continue
 
@@ -772,6 +778,18 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         actions=actions,
                     ),
                 )
+                if result.ok and str(row["channel"]) == "whatsapp":
+                    # A digest is a message Meta charges for, so it is in the
+                    # ledger and against the allowance like any other — see
+                    # 0063. It is also the one message here nobody asked for,
+                    # which is why `daily_digests` now stops offering it to a
+                    # WhatsApp plan that is not live: a summary saying nothing
+                    # matched, billed to us, sent for ever.
+                    store.record_wa_message(
+                        conn, int(row["user_id"]), "digest",
+                        provider_msg_id=result.provider_msg_id,
+                        billed_as=result.billed_as or "service",
+                    )
                 stage.count("digest_sent" if result.ok else "digest_failed")
         else:
             stage.count("digest_not_due")
@@ -833,8 +851,8 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         share,
                         link,
                         allowance=(
-                            None if row.get("alert_allowance") is None
-                            else int(row["alert_allowance"])
+                            None if row.get("message_allowance") is None
+                            else int(row["message_allowance"])
                         ),
                     ),
                     actions=[
@@ -847,6 +865,16 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 ),
             )
             if result.ok:
+                if str(row["channel"]) == "whatsapp":
+                    # The one message here that can go out at either rate: an
+                    # `expired` notice to somebody who has not written in for a
+                    # month travels as the template, which Meta charges as a
+                    # utility message rather than a service one.
+                    store.record_wa_message(
+                        conn, int(row["user_id"]), "notice",
+                        provider_msg_id=result.provider_msg_id,
+                        billed_as=result.billed_as or "service",
+                    )
                 stage.count(f"sent_{notice_stage}")
             else:
                 # The claim is given back only when the same send could work

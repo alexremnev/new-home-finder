@@ -128,9 +128,29 @@ The app should be listed already; `POST` to the same path if not. Subscription
 is per WABA, not per app, which is why a new WABA goes silent until this is
 done.
 
-WhatsApp Manager → **Billing** → add a card. Free-form replies inside the
-24-hour window are not billed; templates are, and a template is exactly what
-goes out when the window is shut.
+WhatsApp Manager → **Billing** → add a card. **Every message is billed** —
+free-form replies inside the 24-hour window as much as templates outside it.
+That was not true when this was written, and the code was built on the old
+rule: see 0063, which moved the nine-hundred allowance onto messages and
+started counting all of them in `wa_messages`.
+
+Two rates, and the prices live in `plan_settings` in **millionths of a US
+dollar** — the currency Meta bills in, left unconverted so that no invented
+exchange rate ends up quoted as a cost:
+
+```sql
+-- free-form inside the 24-hour window: $0.022 a message, already set by 0063
+-- the template that reaches a shut window: a different and higher rate, per
+-- category and per country, so read it off the first bill that has one
+SELECT wa_service_micros, wa_template_micros FROM plan_settings;
+UPDATE plan_settings SET wa_template_micros = <price>;
+```
+
+Until the template rate is set, those messages are counted and left out of the
+money, and the dashboard tile says how many — an understated total that admits
+it beats a confident wrong one. In practice almost everything is the service
+rate: the queue holds any alert whose window is shut, so the template path is
+only ever the `expired` plan notice.
 
 ## 6. Business profile
 
@@ -238,8 +258,9 @@ real work lives in the WABA that already worked.
 
 Not the name. Limits: without business verification a number has a lower ceiling
 on business-initiated (template) conversations per 24 hours, and you cannot add
-many numbers. Free-form replies inside the window do not count against it, and
-most alerts here are those.
+many numbers. Free-form replies inside the window do not count against *that
+ceiling* — they are still charged for, which is a separate thing and the one
+`wa_messages` tracks.
 
 Read the current ceiling in WhatsApp Manager → Phone numbers → **Messaging
 limit**; Meta changes the numbers, so trust the page over any document.

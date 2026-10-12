@@ -579,6 +579,43 @@ def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
         "20% of the listings",
     ]
 
+def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
+
+    # Meta prices the template that reaches a shut window differently from
+    # free-form text inside one, and the notifier is the only thing that knows
+    # which it sent: `body` chose by asking about the window, and the ledger
+    # needs the answer to price the row. Read off the payload rather than
+    # recomputed from the clock — see 0063.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    outside = notifier(sender, notice_template="plan_notice").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+    )
+    assert calls[0]["payload"]["type"] == "template"
+    assert outside.billed_as == "utility"
+
+    calls, sender = sent_through(messages=[{"id": "y"}])
+    inside = notifier(sender, notice_template="plan_notice").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+    )
+    assert calls[0]["payload"]["type"] == "text"
+    assert inside.billed_as == "service"
+
+def test_a_listing_is_always_the_cheaper_rate() -> None:
+
+    # Which is a property of the queue rather than of this file: anything whose
+    # window is shut is held rather than sent, so a delivered alert is always
+    # free-form. Asserted here so that a change to the holding rule shows up as
+    # a change in what we are billed.
+    calls, sender = sent_through(messages=[{"id": "z"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    assert result.ok and result.billed_as == "service"
+    assert calls[0]["payload"]["type"] != "template"
+
 def test_without_that_template_nothing_is_invented() -> None:
 
     # A template WhatsApp has not approved is a message it refuses, so saying so

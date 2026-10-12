@@ -27,7 +27,8 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
             INSERT INTO daily_stats (
                 day, alerts_sent, alerts_failed, alerts_withheld,
                 messages_stored, messages_unread, listings_added,
-                visitors, signups, revenue_pence, computed_at
+                visitors, signups, revenue_pence,
+                wa_messages_sent, wa_cost_micros, computed_at
             )
             SELECT
                 span.day,
@@ -52,6 +53,16 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
                 (SELECT count(*) FROM users u WHERE u.created_at::date = span.day),
                 (SELECT coalesce(sum(p.amount_pence), 0) FROM payments p
                   WHERE p.created_at::date = span.day),
+                -- What WhatsApp cost that day, in messages and in money. The
+                -- ledger they are counted from is purged after two months
+                -- (see `purge`), so this is the only lasting record of it —
+                -- and the only answer to "what did we spend in March" once
+                -- March is gone. Both from the price stamped on each row, so
+                -- a later price change does not rewrite a settled month.
+                (SELECT count(*) FROM wa_messages w
+                  WHERE w.sent_at::date = span.day),
+                (SELECT coalesce(sum(w.cost_micros), 0) FROM wa_messages w
+                  WHERE w.sent_at::date = span.day),
                 now()
               FROM span
             ON CONFLICT (day) DO UPDATE SET
@@ -64,6 +75,8 @@ def run_rollup(conn: Conn, run: Run, *, days: int = DAYS, dry_run: bool = False)
                 visitors        = EXCLUDED.visitors,
                 signups         = EXCLUDED.signups,
                 revenue_pence   = EXCLUDED.revenue_pence,
+                wa_messages_sent = EXCLUDED.wa_messages_sent,
+                wa_cost_micros   = EXCLUDED.wa_cost_micros,
                 computed_at     = now()
             RETURNING day
             """,

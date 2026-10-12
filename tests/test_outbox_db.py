@@ -24,8 +24,9 @@ CRITERIA = {
     "areas": {"postcode_districts": ["SE16"]},
 }
 WIPE = """
-TRUNCATE notifications, subscriptions, user_channels, user_tokens, payments, users,
-         listing_price_log, listings, job_events, job_stages, job_runs
+TRUNCATE wa_messages, notifications, subscriptions, user_channels, user_tokens,
+         payments, users, listing_price_log, listings,
+         job_events, job_stages, job_runs
     RESTART IDENTITY CASCADE
 """
 
@@ -380,16 +381,20 @@ def test_an_unimplemented_channel_fails_only_its_own_message(conn: Any, run: Run
     assert row["status"] == "failed"
     assert row["error"] is not None and "email" in row["error"]
 
-# ── the WhatsApp allowance: thirty days or nine hundred alerts ─────────────
+# ── the WhatsApp allowance: thirty days or nine hundred messages ───────────
 #
 # Every one of these asks the same question through `user_entitlement`, because
 # that is the point of the view: the share, the daily cap, the notice stage and
 # the dashboard all read one answer, and a test that bypassed it would be
 # testing a copy nobody uses.
+#
+# What is counted changed in 0063: Meta bills every message, so the ledger
+# `wa_messages` is the thing the allowance is measured over and a listing alert
+# is only one of the six kinds in it.
 
 
 def wa_subscriber(conn: Any, *, allowance: int | None = 900,
-                  days_left: int = 20, used: int = 0) -> int:
+                  days_left: int = 20, used: int = 0, kind: str = "listing") -> int:
     """A paying WhatsApp account, this far into a period, having had `used`."""
 
     user_id = make_user(conn, address="", plan="paid", plan_hours=days_left * 24)
@@ -397,18 +402,25 @@ def wa_subscriber(conn: Any, *, allowance: int | None = 900,
         "UPDATE users SET plan_from = now() - interval '10 days' WHERE id = %s",
         (user_id,),
     )
-    conn.execute("UPDATE plans SET alert_allowance = %s WHERE key = 'paid'", (allowance,))
+    conn.execute("UPDATE plans SET message_allowance = %s WHERE key = 'paid'", (allowance,))
     conn.execute(
         "INSERT INTO user_channels (user_id, channel, address, verified_at, "
         "last_inbound_at) VALUES (%s, 'whatsapp', %s, now(), now())",
         (user_id, f"4477009{user_id:05d}"),
     )
-    for n in range(used):
-        listing_id = make_listing(conn, f"used-{user_id}-{n}")
+    # Straight into the ledger, which is what the view reads, and in one
+    # statement: `used` is nine hundred in half these tests and nine hundred
+    # round trips apiece is a slow suite for no extra coverage. The two paths
+    # that really write it — `mark_sent` and `record_wa_message` — have their
+    # own tests below; these are about what the number then means.
+    if used:
         conn.execute(
-            "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
-            "sent_at) VALUES (%s, %s, 'whatsapp', 'new_listing', 'sent', now())",
-            (user_id, listing_id),
+            """
+            INSERT INTO wa_messages (user_id, kind, cost_micros)
+            SELECT %s, %s, coalesce((SELECT wa_service_micros FROM plan_settings), 0)
+              FROM generate_series(1, %s)
+            """,
+            (user_id, kind, used),
         )
     return user_id
 
@@ -421,11 +433,11 @@ def entitlement(conn: Any, user_id: int) -> dict[str, Any]:
     return row
 
 
-def test_a_month_with_alerts_left_is_live(conn: Any) -> None:
+def test_a_month_with_messages_left_is_live(conn: Any) -> None:
     one = entitlement(conn, wa_subscriber(conn, used=10))
 
     assert one["live"] is True
-    assert (one["alerts_used"], one["alerts_left"]) == (10, 890)
+    assert (one["messages_used"], one["messages_left"]) == (10, 890)
     assert one["delivery_share"] == 100
 
 
@@ -435,7 +447,7 @@ def test_the_period_ends_on_the_allowance_with_days_still_left(conn: Any) -> Non
     one = entitlement(conn, wa_subscriber(conn, used=900, days_left=20))
 
     assert one["live"] is False
-    assert one["out_of_alerts"] is True
+    assert one["out_of_messages"] is True
     assert one["out_of_days"] is False
     # And to nothing, not to the lapsed fifth: this is WhatsApp, where the
     # fallback would be a standing bill for somebody who has stopped paying.
@@ -447,18 +459,18 @@ def test_going_past_the_allowance_does_not_go_negative(conn: Any) -> None:
     # "-3 alerts left" on the dashboard would read as a bug in the counting.
     one = entitlement(conn, wa_subscriber(conn, used=903))
 
-    assert one["alerts_left"] == 0
+    assert one["messages_left"] == 0
     assert one["live"] is False
 
 
-def test_an_unmetered_plan_is_never_out_of_alerts(conn: Any) -> None:
+def test_an_unmetered_plan_is_never_out_of_messages(conn: Any) -> None:
     # Telegram. Nothing is counted, so a busy month cannot end a plan that is
     # free to deliver on.
     one = entitlement(conn, wa_subscriber(conn, allowance=None, used=50))
 
-    assert one["out_of_alerts"] is False
+    assert one["out_of_messages"] is False
     assert one["live"] is True
-    assert one["alerts_left"] is None
+    assert one["messages_left"] is None
 
 
 def test_only_what_was_sent_in_this_period_counts(conn: Any) -> None:
@@ -470,21 +482,156 @@ def test_only_what_was_sent_in_this_period_counts(conn: Any) -> None:
     conn.execute("UPDATE users SET plan_from = now() WHERE id = %s", (user_id,))
     renewed = entitlement(conn, user_id)
 
-    assert (renewed["alerts_used"], renewed["live"]) == (0, True)
+    assert (renewed["messages_used"], renewed["live"]) == (0, True)
 
 
-def test_what_we_chose_to_send_is_not_charged_to_the_allowance(conn: Any) -> None:
-    # The evening digest is ours, not theirs. Counting it would bill somebody
-    # for our own habits.
+def test_every_kind_of_message_is_charged_to_the_allowance(conn: Any) -> None:
+    # The inverse of what 0057 did, and for the reason 0063 gives: Meta bills
+    # every message, ours and the ones answering theirs, so the bound has to
+    # be on the thing the bill is on. A digest the subscriber never asked for
+    # costs exactly as much as a listing they did.
     user_id = wa_subscriber(conn, used=0)
-    listing_id = make_listing(conn, "digest")
-    conn.execute(
-        "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
-        "sent_at) VALUES (%s, %s, 'whatsapp', 'digest', 'sent', now())",
-        (user_id, listing_id),
-    )
+    for kind in ("listing", "digest", "checkin", "notice", "reply", "receipt"):
+        store.record_wa_message(conn, user_id, kind)
 
-    assert entitlement(conn, user_id)["alerts_used"] == 0
+    assert entitlement(conn, user_id)["messages_used"] == 6
+
+
+def test_a_listing_alert_writes_itself_into_the_ledger(conn: Any) -> None:
+    # The path that matters most, because it is the one that runs thousands of
+    # times a day: `mark_sent` is where a delivered alert becomes a metered
+    # message, so that no caller has to remember to do it.
+    user_id = wa_subscriber(conn, used=0)
+    listing_id = make_listing(conn, "metered")
+    row = conn.execute(
+        "INSERT INTO notifications (user_id, listing_id, channel, kind, status) "
+        "VALUES (%s, %s, 'whatsapp', 'new_listing', 'queued') RETURNING id",
+        (user_id, listing_id),
+    ).fetchone()
+    assert row is not None
+
+    store.mark_sent(conn, int(row["id"]), provider_msg_id="wamid.test")
+
+    ledger = conn.execute(
+        "SELECT kind, provider_msg_id, billed_as, cost_micros FROM wa_messages "
+        "WHERE user_id = %s",
+        (user_id,),
+    ).fetchall()
+    # `service`, and not by default: the queue holds any alert whose window is
+    # shut, so a delivered listing is always the free-form rate.
+    assert [
+        (r["kind"], r["provider_msg_id"], r["billed_as"], int(r["cost_micros"]))
+        for r in ledger
+    ] == [("listing", "wamid.test", "service", 22000)]
+    assert entitlement(conn, user_id)["messages_used"] == 1
+
+    # Idempotent through `notification_id`: a row marked sent twice is one
+    # message and must not spend two of the nine hundred.
+    store.mark_sent(conn, int(row["id"]), provider_msg_id="wamid.test")
+    assert entitlement(conn, user_id)["messages_used"] == 1
+
+
+def test_a_telegram_alert_is_not_metered(conn: Any) -> None:
+    # Nothing to meter where delivery is free, and a row here would make the
+    # Telegram plans look like they had a cost to control.
+    user_id = make_user(conn, plan="paid")
+    listing_id = make_listing(conn, "free-channel")
+    row = conn.execute(
+        "INSERT INTO notifications (user_id, listing_id, channel, kind, status) "
+        "VALUES (%s, %s, 'telegram', 'new_listing', 'queued') RETURNING id",
+        (user_id, listing_id),
+    ).fetchone()
+    assert row is not None
+
+    store.mark_sent(conn, int(row["id"]), provider_msg_id="tg.1")
+
+    assert conn.execute("SELECT count(*) AS n FROM wa_messages").fetchone()["n"] == 0
+
+
+def test_the_price_is_stamped_on_each_message_as_it_is_sent(conn: Any) -> None:
+    # So that a price change does not rewrite a month that has already been
+    # billed. `plan_settings` is one row and is not in WIPE, hence the reset.
+    user_id = wa_subscriber(conn, used=0)
+    conn.execute("UPDATE plan_settings SET wa_service_micros = 4200")
+    try:
+        store.record_wa_message(conn, user_id, "reply")
+    finally:
+        conn.execute("UPDATE plan_settings SET wa_service_micros = 22000")
+
+    # The second message is charged at the restored price, and the first keeps
+    # what it was sent under.
+    store.record_wa_message(conn, user_id, "reply")
+
+    spent = conn.execute(
+        "SELECT count(*) AS n, sum(cost_micros) AS micros FROM wa_messages "
+        "WHERE user_id = %s",
+        (user_id,),
+    ).fetchone()
+    assert spent is not None
+    assert (int(spent["n"]), int(spent["micros"])) == (2, 26200)
+
+
+def test_the_two_rates_are_charged_apart(conn: Any) -> None:
+    # Meta prices a free-form message inside the window and the template that
+    # reaches a shut one differently, and the expensive one is the rarer one —
+    # so one price for both would misreport exactly the messages that cost the
+    # most. The notifier says which went out; this is what the ledger does
+    # with the answer.
+    user_id = wa_subscriber(conn, used=0)
+    conn.execute("UPDATE plan_settings SET wa_template_micros = 50000")
+    try:
+        store.record_wa_message(conn, user_id, "notice", billed_as="service")
+        store.record_wa_message(conn, user_id, "notice", billed_as="utility")
+    finally:
+        conn.execute("UPDATE plan_settings SET wa_template_micros = 0")
+
+    rows = conn.execute(
+        "SELECT billed_as, cost_micros FROM wa_messages WHERE user_id = %s "
+        "ORDER BY id",
+        (user_id,),
+    ).fetchall()
+    assert [(r["billed_as"], int(r["cost_micros"])) for r in rows] == [
+        ("service", 22000),
+        ("utility", 50000),
+    ]
+    # Both still count against the allowance: the bound is on messages.
+    assert entitlement(conn, user_id)["messages_used"] == 2
+
+
+def test_a_template_with_no_rate_is_counted_and_not_costed(conn: Any) -> None:
+    # The honest shape of an unset price: the message is in the ledger, so the
+    # allowance and the volume are right, and the money is understated rather
+    # than invented. The dashboard says how many are uncosted.
+    user_id = wa_subscriber(conn, used=0)
+    store.record_wa_message(conn, user_id, "notice", billed_as="utility")
+
+    row = conn.execute(
+        "SELECT billed_as, cost_micros FROM wa_messages WHERE user_id = %s",
+        (user_id,),
+    ).fetchone()
+    assert row is not None
+    assert (row["billed_as"], int(row["cost_micros"])) == ("utility", 0)
+    assert entitlement(conn, user_id)["messages_used"] == 1
+
+
+def test_a_lapsed_whatsapp_plan_is_not_sent_a_digest(conn: Any) -> None:
+    # The digest is the one message nobody asked for, and on WhatsApp it is
+    # billed like the rest. A finished plan there falls back to no listings at
+    # all (0058), so this was a nightly charge to tell somebody who had
+    # stopped paying that nothing had been sent to them.
+    user_id = wa_subscriber(conn, used=900)
+    make_subscription(conn, user_id)
+
+    assert store.daily_digests(conn) == []
+
+
+def test_a_live_whatsapp_plan_is_still_sent_its_digest(conn: Any) -> None:
+    # The other side of it, so the rule above is "not to somebody receiving
+    # nothing" rather than "not on WhatsApp".
+    user_id = wa_subscriber(conn, used=10)
+    make_subscription(conn, user_id)
+
+    assert [int(r["user_id"]) for r in store.daily_digests(conn)] == [user_id]
 
 
 def test_a_spent_allowance_brings_the_daily_cap_back(conn: Any) -> None:
@@ -550,13 +697,13 @@ def test_the_notice_for_a_spent_allowance_is_claimed_once(conn: Any) -> None:
 
     first = store.claim_plan_notices(conn)
     assert [row["stage"] for row in first] == ["spent"]
-    assert int(first[0]["alert_allowance"]) == 900
+    assert int(first[0]["message_allowance"]) == 900
     # Said once per period: the unique key is (user, stage, plan_until), so a
     # drain every minute does not say it sixty times an hour.
     assert store.claim_plan_notices(conn) == []
 
 
-def test_out_of_days_outranks_out_of_alerts(conn: Any) -> None:
+def test_out_of_days_outranks_out_of_messages(conn: Any) -> None:
     # Both true at once. "You have used all 900" would be answering the
     # smaller question about a period that is over either way.
     user_id = wa_subscriber(conn, used=900, days_left=20)
@@ -993,24 +1140,19 @@ def test_a_lapsed_whatsapp_plan_is_not_asked(conn: Any) -> None:
     assert asked(conn) == []
 
 def test_a_spent_allowance_is_not_asked_either(conn: Any) -> None:
-    # The other half of `live`: three weeks still on the clock and no alerts
+    # The other half of `live`: three weeks still on the clock and no messages
     # left to send, so the window is worth nothing.
     user_id = wa_window_closing(conn)
-    conn.execute("UPDATE plans SET alert_allowance = 2 WHERE key = 'paid'")
-    for n in range(2):
-        listing_id = make_listing(conn, f"spent-{n}")
-        conn.execute(
-            "INSERT INTO notifications (user_id, listing_id, channel, kind, status, "
-            "sent_at) VALUES (%s, %s, 'whatsapp', 'new_listing', 'sent', now())",
-            (user_id, listing_id),
-        )
+    conn.execute("UPDATE plans SET message_allowance = 2 WHERE key = 'paid'")
+    for _ in range(2):
+        store.record_wa_message(conn, user_id, "listing")
 
     try:
         assert asked(conn) == []
     finally:
         # `plans` is not in WIPE, so an allowance of two left behind would be
         # the allowance every later test runs under.
-        conn.execute("UPDATE plans SET alert_allowance = NULL WHERE key = 'paid'")
+        conn.execute("UPDATE plans SET message_allowance = NULL WHERE key = 'paid'")
 
 def test_the_check_in_asks_how_the_search_is_going(
     conn: Any, run: Run, notifier: FakeNotifier
@@ -1080,6 +1222,51 @@ def test_an_unanswered_check_in_is_its_own_reason(conn: Any, run: Run) -> None:
     whatsapp_queued(conn, run, inbound_hours=23.9, asked=True)
 
     assert held_reasons(conn) == ["check-in unanswered"]
+
+def test_the_daily_cap_counts_every_message_not_only_the_alerts(
+    conn: Any, run: Run
+) -> None:
+    # Thirty a day bounds what a non-payer costs. Every message is billed, so
+    # counting only the listing alerts let somebody chatting to the bot cost a
+    # second thirty on top of the first — see 0063. The subscriber here is on
+    # a free plan, so the cap applies.
+    user_id = whatsapp_queued(conn, run, inbound_hours=1)
+    conn.execute("UPDATE users SET plan = 'free' WHERE id = %s", (user_id,))
+    for _ in range(30):
+        store.record_wa_message(conn, user_id, "reply")
+
+    assert held_reasons(conn) == ["daily cap"]
+
+
+def test_a_paying_subscriber_is_exempt_from_the_daily_cap(
+    conn: Any, run: Run
+) -> None:
+    # The other side of the same rule, so that the test above is about what is
+    # counted rather than about who it applies to.
+    user_id = whatsapp_queued(conn, run, inbound_hours=1)
+    for _ in range(30):
+        store.record_wa_message(conn, user_id, "reply")
+
+    assert held_reasons(conn) == [None]
+
+
+def test_yesterdays_messages_do_not_count_against_today(
+    conn: Any, run: Run
+) -> None:
+    # London days, like every other date in here. Counted from the ledger now,
+    # so the boundary is worth asserting again.
+    user_id = whatsapp_queued(conn, run, inbound_hours=1)
+    conn.execute("UPDATE users SET plan = 'free' WHERE id = %s", (user_id,))
+    for _ in range(30):
+        store.record_wa_message(conn, user_id, "reply")
+    conn.execute(
+        "UPDATE wa_messages SET sent_at = sent_at - interval '1 day' "
+        "WHERE user_id = %s",
+        (user_id,),
+    )
+
+    assert held_reasons(conn) == [None]
+
 
 def test_nothing_holds_a_telegram_message(conn: Any, run: Run) -> None:
     # Which is what keeps `Oldest queued` honest: it ages the rows with no

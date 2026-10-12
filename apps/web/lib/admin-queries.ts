@@ -483,12 +483,16 @@ export type Person = {
   plan_until: string | null;
   plan_from: string | null;
   // Why alerts stopped, when the date alone does not explain it: a WhatsApp
-  // month ends at thirty days or at nine hundred alerts. Without these two the
-  // commonest support question — "my subscription has weeks left and nothing
-  // is arriving" — has no answer on this page.
-  alert_allowance: number | null;
-  alerts_used: number;
+  // month ends at thirty days or at nine hundred messages. Without these two
+  // the commonest support question — "my subscription has weeks left and
+  // nothing is arriving" — has no answer on this page.
+  message_allowance: number | null;
+  messages_used: number;
   plan_live: boolean;
+  // What this period has cost on WhatsApp, in millionths of a pound, summed
+  // from the price stamped on each message. 0 when nobody has set a price —
+  // not the same as free, and the page says which.
+  wa_cost_micros: number;
   joined: string;
   consent_at: string | null;
   consent_source: string | null;
@@ -517,7 +521,15 @@ export async function person(userId: number): Promise<Person | null> {
   const rows = await query<Person>(
     `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
             u.plan_until::text, u.plan_from::text,
-            e.alert_allowance, e.alerts_used, e.live AS plan_live,
+            e.message_allowance, e.messages_used, e.live AS plan_live,
+            -- int, not bigint: node-postgres hands bigints back as strings,
+            -- and one subscriber's period is bounded by the allowance times
+            -- the price, which is nowhere near 32 bits. The monthly total
+            -- across everybody is not, and waSpend reads that one as a
+            -- string on purpose.
+            (SELECT coalesce(sum(w.cost_micros), 0)::int FROM wa_messages w
+              WHERE w.user_id = u.id
+                AND (u.plan_from IS NULL OR w.sent_at >= u.plan_from)) AS wa_cost_micros,
             u.created_at::text AS joined, u.consent_at::text,
             u.consent_source, u.stopped_at::text, u.payment_ref,
             uc.channel, uc.address, uc.verified_at::text,
@@ -1069,6 +1081,98 @@ export async function logPage(
 
 export const WA_DAILY_ALERT = 30;
 
+// ── what WhatsApp costs, across everybody ─────────────────────────────────
+//
+// Meta bills every message, so the only honest answer to "what are we
+// spending" is a count of messages — all of them, not the listing alerts that
+// happened to have a `notifications` row. Before 0063 nothing counted the
+// other four kinds at all and this page could not be written.
+//
+// The calendar month in London, because that is the unit a bill arrives in.
+// Not the dashboard's selected window: every other panel moves with that
+// control and this one must not, or "are we near the month's spend" becomes a
+// question about which range is selected.
+
+export type WaSpend = {
+  /** Every message since the first of this month, London time. */
+  messages: number;
+  /** What they cost, in millionths of a US dollar, from the price on each one. */
+  cost_micros: number;
+  /** The free-form rate in force now. 0 means nobody has set one — see 0063. */
+  service_micros: number;
+  /** The template rate. 0 is the usual answer: nobody has read it off a bill. */
+  template_micros: number;
+  /** How many of the messages went out as templates, at that other rate. */
+  templates: number;
+  /** How many accounts were messaged at all. */
+  people: number;
+  /** The heaviest single account this month, which is where a bill comes from. */
+  busiest: number;
+  /** Messages per kind, largest first — who caused the spend. */
+  by_kind: Slice[];
+};
+
+const NO_SPEND: WaSpend = {
+  messages: 0, cost_micros: 0, service_micros: 0, template_micros: 0,
+  templates: 0, people: 0, busiest: 0, by_kind: [],
+};
+
+// The month boundary below is written out four times rather than held in a
+// constant and interpolated. `check-sql-columns.mjs` skips any query carrying
+// a `${}`, and these two are the newest SQL in the file — the place that check
+// is worth the most. Four copies of one predicate is the cheaper of the two
+// costs.
+export async function waSpend(): Promise<WaSpend> {
+  const [kinds, totals] = await Promise.all([
+    query<{ label: string; value: number; cost: number; templates: number }>(
+      `SELECT w.kind AS label, count(*)::int AS value,
+              coalesce(sum(w.cost_micros), 0)::bigint AS cost,
+              count(*) FILTER (WHERE w.billed_as = 'utility')::int AS templates
+         FROM wa_messages w
+        WHERE (w.sent_at AT TIME ZONE 'Europe/London')
+              >= date_trunc('month', now() AT TIME ZONE 'Europe/London')
+        GROUP BY w.kind
+        ORDER BY value DESC`,
+    ).catch(() => []),
+    query<{
+      service_micros: number; template_micros: number;
+      people: number; busiest: number;
+    }>(
+      // The prices are read even when the month is empty, so a dashboard
+      // opened on the first still says whether they are configured.
+      `SELECT coalesce((SELECT ps.wa_service_micros FROM plan_settings ps), 0)
+                AS service_micros,
+              coalesce((SELECT ps.wa_template_micros FROM plan_settings ps), 0)
+                AS template_micros,
+              coalesce((SELECT count(DISTINCT w.user_id)::int FROM wa_messages w
+                         WHERE w.user_id IS NOT NULL
+                           AND (w.sent_at AT TIME ZONE 'Europe/London')
+              >= date_trunc('month', now() AT TIME ZONE 'Europe/London')), 0) AS people,
+              coalesce((SELECT max(n.sent) FROM (
+                          SELECT count(*)::int AS sent FROM wa_messages w
+                           WHERE w.user_id IS NOT NULL
+                             AND (w.sent_at AT TIME ZONE 'Europe/London')
+              >= date_trunc('month', now() AT TIME ZONE 'Europe/London')
+                           GROUP BY w.user_id
+                        ) AS n), 0) AS busiest`,
+    ).catch(() => []),
+  ]);
+
+  const head = totals[0];
+  if (!head && kinds.length === 0) return NO_SPEND;
+
+  return {
+    messages: kinds.reduce((sum, one) => sum + Number(one.value), 0),
+    cost_micros: kinds.reduce((sum, one) => sum + Number(one.cost), 0),
+    templates: kinds.reduce((sum, one) => sum + Number(one.templates), 0),
+    service_micros: Number(head?.service_micros ?? 0),
+    template_micros: Number(head?.template_micros ?? 0),
+    people: Number(head?.people ?? 0),
+    busiest: Number(head?.busiest ?? 0),
+    by_kind: kinds.map((one) => ({ label: one.label, value: Number(one.value) })),
+  };
+}
+
 export type SubscriberRow = {
   user_id: number;
   /** WhatsApp messages sent to them today, in London days. */
@@ -1078,8 +1182,8 @@ export type SubscriberRow = {
   plan_until: string | null;
   /** Whether the plan is live — days AND allowance. See 0057. */
   plan_live: boolean;
-  alert_allowance: number | null;
-  alerts_used: number;
+  message_allowance: number | null;
+  messages_used: number;
   channel: string | null;
   last_inbound_at: string | null;
   districts: string | null;
@@ -1099,7 +1203,7 @@ export async function subscriberPage(
     query<SubscriberRow>(
       `SELECT u.id AS user_id, u.status, u.plan,
               u.plan_until::text AS plan_until,
-              e.live AS plan_live, e.alert_allowance, e.alerts_used,
+              e.live AS plan_live, e.message_allowance, e.messages_used,
               uc.channel,
               uc.last_inbound_at::text AS last_inbound_at,
               s.label AS districts,
@@ -1115,13 +1219,15 @@ export async function subscriberPage(
                   AND n.created_at <= now() - make_interval(mins => $2::int)) AS failed_window,
               (SELECT max(n.sent_at)::text FROM notifications n
                 WHERE n.user_id = u.id AND n.status = 'sent') AS last_sent,
-              -- WhatsApp today, on its own: Meta bills per message, and thirty
-              -- in a day is the figure that stops delivery for somebody who is
-              -- not paying. Counted in London days, like every other date here.
-              (SELECT count(*)::int FROM notifications n
-                WHERE n.user_id = u.id AND n.channel = 'whatsapp'
-                  AND n.status = 'sent'
-                  AND (n.sent_at AT TIME ZONE 'Europe/London')::date
+              -- WhatsApp today, on its own: Meta bills per message and
+              -- thirty in a day is the figure that stops delivery for
+              -- somebody who is not paying. Counted in London days like
+              -- every other date here. From the ledger rather than from
+              -- the notifications table because the cap counts replies and
+              -- digests as well: the bill does. See 0063.
+              (SELECT count(*)::int FROM wa_messages w
+                WHERE w.user_id = u.id
+                  AND (w.sent_at AT TIME ZONE 'Europe/London')::date
                     = (now() AT TIME ZONE 'Europe/London')::date) AS wa_today,
               u.created_at::text AS created_at
          FROM users u

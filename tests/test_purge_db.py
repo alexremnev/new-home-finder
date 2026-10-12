@@ -31,9 +31,9 @@ pytestmark = pytest.mark.skipif(not URL, reason="TEST_DATABASE_URL is not set")
 MIGRATIONS = pathlib.Path(__file__).resolve().parents[1] / "db" / "migrations"
 
 WIPE = """
-TRUNCATE notifications, subscriptions, user_channels, user_tokens, payments, users,
-         listing_sightings, listing_price_log, listings, source_messages,
-         site_visits, job_events, job_stages, job_runs
+TRUNCATE wa_messages, notifications, subscriptions, user_channels, user_tokens,
+         payments, users, listing_sightings, listing_price_log, listings,
+         source_messages, site_visits, job_events, job_stages, job_runs
     RESTART IDENTITY CASCADE
 """
 
@@ -276,13 +276,62 @@ def test_a_queued_alert_is_kept_however_stale(conn: Any, run: Run) -> None:
 
 def test_the_current_paid_period_is_never_counted_down(conn: Any, run: Run) -> None:
     # A plan that started 200 days ago and is still running: its alerts are
-    # what `user_entitlement.alerts_used` counts, so deleting them would hand
-    # the allowance back.
+    # the delivery history behind what `user_entitlement.messages_used`
+    # counts, so deleting them would misreport what has been delivered.
     uid = user(conn, status="active", plan="paid", plan_from_days_ago=200)
     live = listing(conn, external_id="live", last_seen_days_ago=0)
     inside = alert(conn, user_id=uid, listing_id=live, status="sent", days_ago=150)
     run_purge(conn, run)
     assert inside in ids(conn, "notifications")
+
+
+def metered(conn: Any, *, user_id: int | None, days_ago: int, kind: str = "reply") -> int:
+    row = conn.execute(
+        """
+        INSERT INTO wa_messages (user_id, kind, sent_at)
+        VALUES (%s, %s, now() - make_interval(days => %s::int))
+        RETURNING id
+        """,
+        (user_id, kind, days_ago),
+    ).fetchone()
+    assert row is not None
+    return int(row["id"])
+
+
+def test_the_whatsapp_ledger_keeps_two_months(conn: Any, run: Run) -> None:
+    uid = user(conn, status="active", plan="paid")
+    old = metered(conn, user_id=uid, days_ago=70)
+    new = metered(conn, user_id=uid, days_ago=10)
+
+    run_purge(conn, run)
+
+    assert ids(conn, "wa_messages") == {new}
+    assert old not in ids(conn, "wa_messages")
+
+
+def test_the_ledger_is_never_cut_inside_a_live_period(conn: Any, run: Run) -> None:
+    # The one rule that matters here: the nine hundred messages are counted
+    # over the current period, so deleting a row inside it would hand back an
+    # allowance that has been spent and sell somebody a second one.
+    uid = user(conn, status="active", plan="paid", plan_from_days_ago=200)
+    inside = metered(conn, user_id=uid, days_ago=150)
+
+    run_purge(conn, run)
+
+    assert inside in ids(conn, "wa_messages")
+
+
+def test_an_erased_subscribers_spend_goes_on_age_alone(conn: Any, run: Run) -> None:
+    # `user_id` is NULL once somebody has been erased — the row stops naming
+    # them and still counts towards what WhatsApp cost. With no period to be
+    # inside, age is the whole rule.
+    orphan = metered(conn, user_id=None, days_ago=70)
+    recent = metered(conn, user_id=None, days_ago=10)
+
+    run_purge(conn, run)
+
+    assert ids(conn, "wa_messages") == {recent}
+    assert orphan not in ids(conn, "wa_messages")
 
 
 # ── the rest ────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@ import { Panel, PanelWait } from "../panel";
 import { DEFAULT_SPAN, spanFrom } from "../span";
 import {
   AlertDistricts, AlertPrices, AlertsDelivered, EveryoneTable, PlanMix,
-  SubscriberTiles,
+  SubscriberTiles, WhatsAppSpend,
 } from "./bodies";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +48,16 @@ export default async function SubscribersPage({
           </Suspense>
         </Panel>
       </div>
+
+      <Panel
+        wide
+        title="WhatsApp this month"
+        why="Единственное место, где видно, сколько мы на самом деле отправили в WhatsApp: Meta берёт деньги за каждое сообщение, поэтому здесь считаются все виды сообщений, а не только объявления. Календарный месяц по Лондону — в таком виде приходит счёт — и он не меняется от выбранного сверху периода. Лимит 900 действует на подписчика за оплаченный период, а не на этот счётчик."
+      >
+        <Suspense fallback={<PanelWait />}>
+          <WhatsAppSpend />
+        </Suspense>
+      </Panel>
 
       <div className="dash-row dash-row-wide">
         <Panel

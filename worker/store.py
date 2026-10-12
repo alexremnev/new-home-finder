@@ -149,8 +149,8 @@ def active_subscriptions(conn: Conn) -> list[Row]:
             SELECT s.id, s.user_id, s.criteria, s.backfill_from, uc.channel,
                    -- The plan's own share while it is live, the lapsed tier's once
                    -- it is not — and "live" is two questions now, days and
-                   -- alerts. Both are answered by `user_entitlement`; see 0057
-                   -- for why this is not written out here any more.
+                   -- messages. Both are answered by `user_entitlement`; see
+                   -- 0057 for why this is not written out here any more.
                    e.delivery_share
               FROM subscriptions s
               JOIN users u            ON u.id = s.user_id
@@ -583,15 +583,20 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
         conn.execute(
             """
             WITH tally AS (
-                SELECT n.user_id,
-                       count(*) FILTER (
-                           WHERE (n.sent_at AT TIME ZONE 'Europe/London')::date
-                               = (now() AT TIME ZONE 'Europe/London')::date
-                       ) AS today,
-                       count(*) AS ever
-                  FROM notifications n
-                 WHERE n.channel = 'whatsapp' AND n.status = 'sent'
-                 GROUP BY n.user_id
+                -- The ledger, not `notifications`: the cap is on what a
+                -- subscriber costs, every message is billed, and only the
+                -- listings were ever in `notifications`. See 0063.
+                --
+                -- `ever` went with the lifetime alert 0057 removed. A single
+                -- aggregate over the whole table, computed every minute, for
+                -- a column nothing read.
+                SELECT w.user_id,
+                       count(*) AS today
+                  FROM wa_messages w
+                 WHERE w.user_id IS NOT NULL
+                   AND (w.sent_at AT TIME ZONE 'Europe/London')::date
+                     = (now() AT TIME ZONE 'Europe/London')::date
+                 GROUP BY w.user_id
             ),
             owed AS (
                 -- The threshold is the cap itself: the alert says "we have
@@ -600,7 +605,7 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
                 --
                 -- The lifetime figure that used to sit beside this is gone. It
                 -- was a proxy for a bound on what one subscriber can cost, and
-                -- 0057 made that a real one: `plans.alert_allowance`, which
+                -- 0057 made that a real one: `plans.message_allowance`, which
                 -- ends the period and tells the person rather than telling us.
                 SELECT t.user_id, 'daily' AS kind, t.today AS sent
                   FROM tally t
@@ -755,8 +760,8 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
             """
             WITH candidate AS (
                 SELECT u.id AS user_id, u.plan, u.plan_until,
-                       e.alert_allowance, e.alerts_used,
-                       -- Out of days outranks out of alerts: when both are
+                       e.message_allowance, e.messages_used,
+                       -- Out of days outranks out of messages: when both are
                        -- true the period is over either way, and "you have
                        -- used all 900" would be answering the smaller
                        -- question. Otherwise a spent allowance is its own
@@ -773,7 +778,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                        -- record of what was sent.
                        CASE
                            WHEN u.plan_until <= now() THEN 'expired'
-                           WHEN e.out_of_alerts       THEN 'spent'
+                           WHEN e.out_of_messages     THEN 'spent'
                            ELSE 'hour'
                        END AS stage
                   FROM users u
@@ -783,7 +788,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                    -- The window and the CASE are one rule: narrowed to an
                    -- hour, the ELSE above can only be the hour warning.
                    AND (u.plan_until <= now() + interval '1 hour'
-                     OR e.out_of_alerts)
+                     OR e.out_of_messages)
             ),
             due AS (
                 -- The limit has to count people who still need telling, which
@@ -824,7 +829,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                    -- which has no template, was dropped even for the trial
                    -- whose window was still open.
                    uc.last_inbound_at,
-                   d.alert_allowance, d.alerts_used,
+                   d.message_allowance, d.messages_used,
                    -- What the alerts fall back to, so the notice can say so
                    -- rather than guessing. Read from the entitlement view and
                    -- not from the lapsed plan directly: the fallback depends on
@@ -943,14 +948,25 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
             SELECT d.user_id, d.matched, d.sent, d.withheld,
                    uc.channel, uc.address, uc.last_inbound_at,
                    -- Paid means a plan that costs money and has not run out —
-                   -- of days or of alerts. A live trial is not paid: it is the
-                   -- thing the button is there to convert.
+                   -- of days or of messages. A live trial is not paid: it is
+                   -- the thing the button is there to convert.
                    (e.priced AND e.live) AS paid,
                    e.delivery_share
               FROM claimed c
               JOIN due d              ON d.user_id = c.user_id
               JOIN user_entitlement e ON e.user_id = c.user_id
               JOIN user_channels uc   ON uc.user_id = c.user_id AND uc.is_primary
+             -- Not on WhatsApp to somebody who is receiving nothing. Every
+             -- message there is billed (0063), a finished plan falls back to
+             -- no listings at all on that channel (0058), and the digest is
+             -- the one message in the system nobody asked for — so this was a
+             -- nightly charge, for ever, to tell a lapsed subscriber that
+             -- nothing had been sent to them. The same test `closing_windows`
+             -- uses, for the same reason.
+             --
+             -- The claim above is still written, so this is "not sent" and not
+             -- "tried again every minute until midnight".
+             WHERE uc.channel <> 'whatsapp' OR (e.live AND e.delivery_share > 0)
              ORDER BY d.user_id
             """,
             (limit,),
@@ -1031,7 +1047,12 @@ def queued_count(conn: Conn) -> int:
     return int((row or {}).get("n") or 0)
 
 def mark_sent(
-    conn: Conn, notification_id: int, *, provider_msg_id: str | None, cost_micros: int = 0
+    conn: Conn,
+    notification_id: int,
+    *,
+    provider_msg_id: str | None,
+    cost_micros: int = 0,
+    billed_as: str = "service",
 ) -> None:
     conn.execute(
         """
@@ -1041,6 +1062,83 @@ def mark_sent(
          WHERE id = %s
         """,
         (provider_msg_id, cost_micros, notification_id),
+    )
+
+    # Meta bills every message, so every message goes in the ledger — see
+    # 0063. Done here rather than in the caller because this is the one place
+    # a delivered alert is recorded, and a meter that has to be remembered
+    # separately is a meter that will one day be forgotten on a new path.
+    #
+    # The channel is read from the row rather than passed in: the caller is
+    # `_apply`, which is channel-blind by design, and the alternative is a
+    # parameter that exists only to be threaded through it.
+    conn.execute(
+        """
+        INSERT INTO wa_messages
+               (user_id, kind, notification_id, provider_msg_id, billed_as,
+                cost_micros, sent_at)
+        SELECT n.user_id, 'listing', n.id, n.provider_msg_id, %(billed_as)s,
+               (SELECT CASE WHEN %(billed_as)s = 'utility'
+                            THEN ps.wa_template_micros
+                            ELSE ps.wa_service_micros
+                       END
+                  FROM plan_settings ps),
+               n.sent_at
+          FROM notifications n
+         WHERE n.id = %(id)s AND n.channel = 'whatsapp'
+        ON CONFLICT (notification_id) DO NOTHING
+        """,
+        {"id": notification_id, "billed_as": billed_as},
+    )
+
+
+def record_wa_message(
+    conn: Conn,
+    user_id: int | None,
+    kind: str,
+    *,
+    provider_msg_id: str | None = None,
+    billed_as: str = "service",
+) -> None:
+    """One WhatsApp message we sent and will be charged for.
+
+    For everything that is not a listing alert: the evening digest, the
+    check-in before the window shuts, the plan notices. Listings arrive
+    through `mark_sent`, which has a `notifications` row to hang the ledger
+    entry on; these have nothing of the sort, which is exactly why they went
+    uncounted until 0063.
+
+    Called only after Meta accepted the message. A refusal is not billed and
+    must not look like spend — and it must not eat the subscriber's allowance
+    either, which is the worse of the two mistakes.
+
+    `billed_as` is which of Meta's two rates applied, and it comes from the
+    notifier rather than from a second look at the window: the plan notice is
+    the one message here that can go either way, and it is also the only one
+    charged at the template rate. Defaulted to `service` because that is what
+    every other path can produce.
+
+    The price is read inside the statement so that it is the price now, with
+    no round trip and nothing cached in a process that runs for days.
+    """
+
+    conn.execute(
+        """
+        INSERT INTO wa_messages
+               (user_id, kind, provider_msg_id, billed_as, cost_micros)
+        SELECT %(user_id)s, %(kind)s, %(msg_id)s, %(billed_as)s,
+               (SELECT CASE WHEN %(billed_as)s = 'utility'
+                            THEN ps.wa_template_micros
+                            ELSE ps.wa_service_micros
+                       END
+                  FROM plan_settings ps)
+        """,
+        {
+            "user_id": user_id,
+            "kind": kind,
+            "msg_id": provider_msg_id,
+            "billed_as": billed_as,
+        },
     )
 
 def mark_failed(conn: Conn, notification_id: int, error: str) -> None:

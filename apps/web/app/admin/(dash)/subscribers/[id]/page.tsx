@@ -1,4 +1,4 @@
-import { pounds } from "@/lib/money";
+import { dollars, pounds } from "@/lib/money";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
@@ -42,7 +42,14 @@ export default async function UserPage({
   if (!who) notFound();
 
   const live = who.status === "active";
-  const expired = who.plan_until !== null && new Date(who.plan_until) < new Date();
+  // Read from `user_entitlement`, not worked out from the date. A WhatsApp
+  // month ends at thirty days or at nine hundred messages, whichever comes
+  // first, so this page used to show `active` and a date three weeks away for
+  // somebody who had been receiving nothing for a fortnight — which is the
+  // one case where the page has to explain itself.
+  const ended = who.plan_live === false;
+  const spent =
+    who.message_allowance !== null && who.messages_used >= who.message_allowance;
 
   return (
     <>
@@ -54,7 +61,11 @@ export default async function UserPage({
           <h1>
             {who.plan_display ?? who.plan}
             <span className={`badge ${live ? "good" : "warning"}`}> {who.status}</span>
-            {expired && <span className="badge warning"> expired</span>}
+            {ended && (
+              <span className="badge warning">
+                {spent ? " out of messages" : " expired"}
+              </span>
+            )}
           </h1>
           <p className="hint">
             Joined {at(who.joined)} · consent {who.consent_source ?? "—"}{" "}
@@ -86,6 +97,26 @@ export default async function UserPage({
           <Metric label="Plan runs to"
                 value={who.plan_until ? dayOf(who.plan_until) : "no end"}
                 note={who.comped_days > 0 ? `${who.comped_days} days comped` : undefined} />
+          {/* The other half of "is this plan live", and the half the date
+              cannot show. Only for a metered plan, which is WhatsApp's: there
+              is nothing to meter where delivery is free, and a tile reading
+              "— / —" is a tile that has to be explained every time. */}
+          {who.message_allowance !== null && (
+            <Metric
+              label="WhatsApp messages"
+              value={`${comma(who.messages_used)} / ${comma(who.message_allowance)}`}
+              tone={spent ? "bad" : undefined}
+              note={
+                // Dollars: it is what Meta bills in, and the money this page
+                // shows above it is in pounds because that is what arrived.
+                // Mixing them is honest; converting one would not be.
+                who.wa_cost_micros > 0
+                  ? `${dollars(who.wa_cost_micros)} this period`
+                  : `since ${who.plan_from ? dayOf(who.plan_from) : "the start"}`
+              }
+              why="Сколько сообщений ушло этому человеку в WhatsApp за текущий оплаченный период и сколько включено в тариф. Считаются все: объявления, ответы бота, вечерняя сводка, чек-ин и уведомления о тарифе — Meta берёт деньги за каждое. Когда счётчик доходит до лимита, период заканчивается так же, как если бы кончились дни, и человек получает об этом сообщение."
+            />
+          )}
         </div>
       </section>
 

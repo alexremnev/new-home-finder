@@ -2,6 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sendWhatsApp } from "../whatsapp";
 
+// The meter writes a row per delivered message and needs a database for it.
+// Stubbed, not pointed at one: these tests are about the shape of what goes
+// to Meta, and the ledger has its own tests against a real Postgres
+// (`test_outbox_db`). Without this every case here would log a connection
+// failure it is not about.
+vi.mock("../wa-meter", () => ({ meterWhatsApp: vi.fn(async () => {}) }));
+
 type Call = { url: string; payload: Record<string, any> };
 
 function fetching(...answers: boolean[]): Call[] {
@@ -10,7 +17,15 @@ function fetching(...answers: boolean[]): Call[] {
   vi.stubGlobal("fetch", async (url: string, init: { body: string }) => {
     calls.push({ url, payload: JSON.parse(init.body) });
     const ok = answers[Math.min(turn++, answers.length - 1)] ?? true;
-    return { ok, status: ok ? 200 : 400, text: async () => "no" } as Response;
+    // `json` as well as `text`: a successful send reads the message id out of
+    // the body for the ledger, so a fake without it would be testing a path
+    // the real sender does not take.
+    return {
+      ok,
+      status: ok ? 200 : 400,
+      text: async () => "no",
+      json: async () => ({ messages: [{ id: "wamid.test" }] }),
+    } as unknown as Response;
   });
   return calls;
 }
