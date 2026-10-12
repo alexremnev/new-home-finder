@@ -521,7 +521,7 @@ def test_the_only_warning_before_the_end_is_the_hour_one() -> None:
         text = notice_for("trial", ENDS_AT, stage, 20, None, allowance=900)
         assert "tomorrow" not in text
 
-    assert "ends in about an hour" in notice_for("trial", ENDS_AT, "hour", 20, None)
+    assert "ends in a few minutes" in notice_for("trial", ENDS_AT, "hour", 20, None)
 
 def test_a_trial_about_to_end_says_what_it_falls_back_to() -> None:
 

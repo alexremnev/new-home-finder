@@ -40,19 +40,24 @@ def expiring_notice(
     plan: str, plan_until: datetime | None, share: int | None = None,
     link: str | None = None,
 ) -> str:
-    """The one warning before a plan ends, an hour out.
+    """The one warning before a plan ends, `NOTICE_LEAD_MINUTES` out.
 
     There was a second a day out, with its own wording — "ends tomorrow". It is
     gone, and so is the `stage` argument that chose between the two: a day's
-    notice is a day too early to act on, and the hour is the one that arrives
-    while the decision is in front of the person. See `claim_plan_notices`,
-    which no longer produces the stage.
+    notice is a day too early to act on, and this is the one that arrives while
+    the decision is in front of the person. See `claim_plan_notices`, which no
+    longer produces the stage.
+
+    "In a few minutes" rather than a count of them. The lead lives in
+    `claim_plan_notices` and `drain` fires on its own timer, so the two would
+    have to agree for a number here to be true; the exact clock time is
+    already on the line and needs nobody to be right about the cadence.
     """
 
     what = "free trial" if plan == "trial" else "subscription"
     when = _when(plan_until)
 
-    opening = f"Your {what} ends in about an hour"
+    opening = f"Your {what} ends in a few minutes"
     opening += f" — {when}." if when else "."
 
     # The link is a button rather than a line of text — see `plan_actions` in

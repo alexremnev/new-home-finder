@@ -675,7 +675,7 @@ def test_a_live_trial_is_told_what_it_will_fall_back_to(conn: Any) -> None:
     assert one["lapsed_share"] == 20
 
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s", (user_id,)
     )
     notices = store.claim_plan_notices(conn)
     assert [row["stage"] for row in notices] == ["hour"]
@@ -725,7 +725,7 @@ def test_a_notice_that_could_not_be_sent_is_offered_again(conn: Any) -> None:
     user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=1)
     make_subscription(conn, user_id)
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s",
         (user_id,),
     )
 
@@ -745,7 +745,7 @@ def test_a_released_notice_becomes_the_expiry_once_the_plan_has_gone(conn: Any) 
     user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=1)
     make_subscription(conn, user_id)
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s",
         (user_id,),
     )
     claimed = store.claim_plan_notices(conn)
@@ -758,7 +758,7 @@ def test_a_released_notice_becomes_the_expiry_once_the_plan_has_gone(conn: Any) 
     assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
 
 def wa_plan_ending(
-    conn: Any, *, plan: str = "paid", minutes_left: int = 30,
+    conn: Any, *, plan: str = "paid", minutes_left: int = 3,
     inbound_minutes: int = 60,
 ) -> int:
     """A WhatsApp account whose plan ends shortly, and whose window is open.
@@ -811,14 +811,14 @@ def test_a_paid_month_is_warned_before_it_ends_not_only_a_trial(
     # construction (it runs a day from the message that started it) and a
     # month's is open only because the check-in has been holding it so: the
     # paying subscriber is who the warning was being lost for.
-    wa_plan_ending(conn, plan="paid", minutes_left=30)
+    wa_plan_ending(conn, plan="paid", minutes_left=3)
 
     outbox.notify_plan_changes(conn, run)
 
     assert len(notifier.sent) == 1
     _, alert = notifier.sent[0]
     assert alert.kind == "expiring"
-    assert "subscription ends in about an hour" in (alert.text or "")
+    assert "subscription ends in a few minutes" in (alert.text or "")
     assert [a.url is not None for a in alert.actions] == [True]
     assert notifier.to[0].last_inbound is not None
 
@@ -829,7 +829,7 @@ def test_accounts_that_lapsed_long_ago_do_not_crowd_out_todays_warning(
     # is ordered by the oldest expiry first — so every account that had ever
     # lapsed sat at the front of the batch for ever, claimed, returning
     # nothing. Past the limit the INSERT had nothing left to claim and somebody
-    # whose plan ends in half an hour was never produced at all.
+    # whose plan ends in minutes was never produced at all.
     for n in range(3):
         old = make_user(conn, address="", plan="paid", plan_days=None,
                         plan_hours=None)
@@ -852,7 +852,7 @@ def test_accounts_that_lapsed_long_ago_do_not_crowd_out_todays_warning(
             (old, old),
         )
 
-    today = wa_plan_ending(conn, minutes_left=30)
+    today = wa_plan_ending(conn, minutes_left=3)
 
     # A limit smaller than the crowd, so the test fails on the ordering rather
     # than on the two hundred the worker uses.
@@ -892,6 +892,72 @@ def test_a_notice_that_failed_with_the_window_shut_keeps_its_claim(
     outbox.notify_plan_changes(conn, run)
     assert store.claim_plan_notices(conn) == []
 
+def test_a_plan_ending_with_its_whatsapp_window_is_warned_while_it_still_can_be(
+    conn: Any
+) -> None:
+    # On WhatsApp the deadline is the 24 hours, not the plan: outside the window
+    # there is no route at all without an approved template, so a notice that
+    # waits for `plan_until` to come within the lead is a notice that waits
+    # until nothing can be sent. The one-day trial is exactly this shape — it
+    # starts on the message that connected the number, so its last minutes and
+    # the window's are the same minutes.
+    wa_plan_ending(conn, plan="trial", minutes_left=8, inbound_minutes=24 * 60 - 3)
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
+def test_the_same_plan_is_not_warned_early_while_the_window_is_wide_open(
+    conn: Any
+) -> None:
+    # The shutting window is the only reason the notice above went out ahead of
+    # the lead. With twenty-three hours of window left there is nothing to race,
+    # and eight minutes before the end is eight minutes before the end.
+    wa_plan_ending(conn, plan="trial", minutes_left=8, inbound_minutes=60)
+
+    assert store.claim_plan_notices(conn) == []
+
+def test_a_subscriber_with_weeks_left_is_not_warned_when_their_window_shuts(
+    conn: Any
+) -> None:
+    # The bound on the window rule, and the reason it is bounded by
+    # `plan_until`: a window shutting on somebody who has alerts to carry on
+    # with is the check-in's business — `closing_windows` — and "your plan is
+    # ending" every evening for three weeks is not true on any of them.
+    wa_plan_ending(conn, plan="paid", minutes_left=20 * 24 * 60,
+                   inbound_minutes=24 * 60 - 3)
+
+    assert store.claim_plan_notices(conn) == []
+
+def test_a_notice_nobody_can_receive_is_not_logged_as_a_fault(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # It was a warning for every lapsed WhatsApp account, about something that
+    # cannot be fixed from here — there is no template and nothing reopens the
+    # window — and that the warning before the window shut has already said.
+    # Counted so it stays visible, at info so the log is not asking anybody to
+    # act on a decision.
+    wa_plan_ending(conn, plan="trial", minutes_left=-1, inbound_minutes=30 * 60)
+    fake = FakeNotifier(
+        SendResult(
+            ok=False,
+            error="outside the 24h window and expired has no template",
+            retryable=True,
+        )
+    )
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    outbox.notify_plan_changes(conn, run)
+
+    events = conn.execute(
+        "SELECT level FROM job_events WHERE run_id = %s AND stage = 'expire'",
+        (run.id,),
+    ).fetchall()
+    assert [e["level"] for e in events] == ["info"]
+    stage = conn.execute(
+        "SELECT counters FROM job_stages WHERE run_id = %s AND stage = 'expire'",
+        (run.id,),
+    ).fetchone()
+    assert stage["counters"]["window_shut"] == 1
+
 def test_telegram_still_gets_its_claim_back(
     conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -899,7 +965,7 @@ def test_telegram_still_gets_its_claim_back(
     # always worth repeating, and there is no `last_inbound_at` to read.
     user_id = make_user(conn, plan="trial", plan_hours=None)
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s",
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s",
         (user_id,),
     )
     make_subscription(conn, user_id)
@@ -1370,14 +1436,14 @@ def test_an_hour_out_is_warned_once(
     user_id = make_user(conn, plan="trial", plan_hours=23)
     make_subscription(conn, user_id)
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s", (user_id,)
     )
 
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
     _, alert = notifier.sent[0]
     assert alert.kind == "expiring"
-    assert "about an hour" in (alert.text or "")
+    assert "in a few minutes" in (alert.text or "")
     # The payment link is the button, not a line of url in the body.
     assert len(alert.actions) == 1
     assert alert.actions[0].url
@@ -1395,7 +1461,7 @@ def test_paying_re_arms_the_warning_with_nothing_reset(
     user_id = make_user(conn, plan="trial", plan_hours=1)
     make_subscription(conn, user_id)
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s", (user_id,)
     )
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 1
@@ -1410,11 +1476,11 @@ def test_paying_re_arms_the_warning_with_nothing_reset(
     # `plan_until` is in the unique key, so moving it is what re-arms the
     # warning — there is no flag to reset.
     conn.execute(
-        "UPDATE users SET plan_until = now() + interval '30 minutes' WHERE id = %s", (user_id,)
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s", (user_id,)
     )
     outbox.notify_plan_changes(conn, run)
     assert len(notifier.sent) == 2
-    assert "subscription ends in about an hour" in (notifier.sent[1][1].text or "")
+    assert "subscription ends in a few minutes" in (notifier.sent[1][1].text or "")
 
 def test_a_plan_that_lapsed_unnoticed_is_told_it_ended_not_that_it_will(
     conn: Any, run: Run, notifier: FakeNotifier

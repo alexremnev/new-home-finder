@@ -676,9 +676,12 @@ def closing_windows(conn: Conn, *, minutes: int = 5, limit: int = 200) -> list[R
         A lapsed plan falls back to nothing on WhatsApp — see 0058 — so the
         window is worth nothing to them, and a spent allowance is the same
         answer by the other half of `live`.
-      * the hour's grace is so that this never follows "your plan ends in about
-        an hour" on the same conversation. Within that hour the plan notice is
-        the message, and this one would contradict it.
+      * the hour's grace is so that this never follows the notice saying the
+        plan is ending, on the same conversation. The notice itself goes out
+        `NOTICE_LEAD_MINUTES` before the end, and the grace is far wider than
+        that on purpose: inside the last hour the plan notice is the message
+        that is due, and "tap below and the alerts carry on" contradicts it
+        whether it arrives before or after.
 
     Which is what takes the WhatsApp trial out: it runs a single day from the
     first alert, so its end always falls inside the window it was started in
@@ -753,7 +756,26 @@ def unmark_window_asked(conn: Conn, user_id: int) -> None:
         (user_id,),
     )
 
-def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
+# How long before a plan ends the one warning goes out.
+#
+# Five minutes, not the hour it was. The warning is the message that carries
+# the payment button, and a trial is decided on when it is actually running
+# out: an hour ahead it arrives next to alerts that are still arriving, which
+# is a reason to come back to it later and not a reason to tap. `drain` runs
+# every minute, so five minutes is four or five chances to claim the stage
+# rather than one.
+#
+# On WhatsApp this is also the last message that can be delivered at all. The
+# 24-hour window and a trial's `plan_until` run out together — the trial starts
+# when the messenger is connected, which is an inbound message — so the
+# `expired` notice that follows needs the approved template in
+# `WA_NOTICE_TEMPLATE` to leave the building, and without it is dropped. Five
+# minutes still sits inside the window; much less would not.
+NOTICE_LEAD_MINUTES = 5
+
+def claim_plan_notices(
+    conn: Conn, *, limit: int = 200, lead_minutes: int = NOTICE_LEAD_MINUTES
+) -> list[Row]:
 
     return list(
         conn.execute(
@@ -766,16 +788,21 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                        -- used all 900" would be answering the smaller
                        -- question. Otherwise a spent allowance is its own
                        -- stage, and it can fire with weeks still on the clock
-                       -- — which is why the window below is not only "within
-                       -- an hour of the end".
+                       -- — which is why the WHERE below is not only "close to
+                       -- the end"
                        --
-                       -- One warning before the end, an hour out. There was a
-                       -- second a day out as well; two messages about one
-                       -- ending is one more than anybody asked for, and the
-                       -- hour is the one that arrives while the decision is in
-                       -- front of them. 'day' is left in the stage constraint
-                       -- rather than dropped: the rows already sent are a
-                       -- record of what was sent.
+                       -- One warning before the end, `NOTICE_LEAD_MINUTES`
+                       -- out. There was a second a day out as well, and the
+                       -- one that remains used to be an hour out; two messages
+                       -- about one ending is one more than anybody asked for,
+                       -- and the one worth keeping is the one that arrives
+                       -- while the decision is in front of them.
+                       --
+                       -- Still keyed 'hour'. It is a claim key in a table whose
+                       -- rows go back to when that was the lead, and a counter
+                       -- name in the stage log; renaming it would buy a truer
+                       -- word and cost the record. 'day' is left in the stage
+                       -- constraint for the same reason.
                        CASE
                            WHEN u.plan_until <= now() THEN 'expired'
                            WHEN e.out_of_messages     THEN 'spent'
@@ -783,12 +810,42 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                        END AS stage
                   FROM users u
                   JOIN user_entitlement e ON e.user_id = u.id
+                  -- For the window below. LEFT so that somebody with no
+                  -- primary channel is still a candidate on the strength of
+                  -- their plan alone, exactly as before this join existed.
+                  LEFT JOIN user_channels uc
+                         ON uc.user_id = u.id AND uc.is_primary
                  WHERE u.status = 'active'
                    AND u.plan_until IS NOT NULL
-                   -- The window and the CASE are one rule: narrowed to an
-                   -- hour, the ELSE above can only be the hour warning.
-                   AND (u.plan_until <= now() + interval '1 hour'
-                     OR e.out_of_messages)
+                   -- The window and the CASE are one rule: every row here has
+                   -- `plan_until` either behind it or within two leads of now,
+                   -- so the ELSE above can only be the warning before the end.
+                   AND (u.plan_until <= now() + make_interval(mins => %(lead)s)
+                     OR e.out_of_messages
+                     -- Or because on WhatsApp the deadline is the window
+                     -- shutting and not the plan ending. Outside the 24 hours
+                     -- there is no route at all without an approved template,
+                     -- which is why the `expired` notice is never delivered
+                     -- there — so a plan whose end lands with the window, or
+                     -- within a lead of it, is warned while somebody is still
+                     -- able to hear it. The one-day WhatsApp trial is exactly
+                     -- that shape: it starts on the message that connected the
+                     -- number, so its last minutes and the window's are the
+                     -- same minutes, and the notice sent now is the last one
+                     -- that will arrive.
+                     --
+                     -- Bounded by `plan_until` so this is not a daily "your
+                     -- plan is ending" to a subscriber with three weeks left.
+                     -- A window shutting on somebody who has alerts to carry
+                     -- on with is the check-in's business — `closing_windows`
+                     -- — and not this one's.
+                     OR (uc.channel = 'whatsapp'
+                         AND uc.last_inbound_at > now() - interval '24 hours'
+                         AND uc.last_inbound_at <= now() - interval '24 hours'
+                                                 + make_interval(mins => %(lead)s)
+                         AND u.plan_until <= uc.last_inbound_at
+                                           + interval '24 hours'
+                                           + make_interval(mins => %(lead)s)))
             ),
             due AS (
                 -- The limit has to count people who still need telling, which
@@ -811,7 +868,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
                         AND pn.plan_until = c.plan_until
                  )
                  ORDER BY c.plan_until
-                 LIMIT %s
+                 LIMIT %(limit)s
             ),
             claimed AS (
                 INSERT INTO plan_notices (user_id, stage, plan_until, plan)
@@ -849,7 +906,7 @@ def claim_plan_notices(conn: Conn, *, limit: int = 200) -> list[Row]:
               JOIN user_entitlement e ON e.user_id = c.user_id
               JOIN user_channels uc   ON uc.user_id = c.user_id AND uc.is_primary
             """,
-            (limit,),
+            {"lead": lead_minutes, "limit": limit},
         ).fetchall()
     )
 

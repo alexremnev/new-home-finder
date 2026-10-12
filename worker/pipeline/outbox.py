@@ -704,10 +704,10 @@ def reachable_later(row: Row) -> bool:
 
     So a shut window keeps its claim. What was given up with it is the chance
     that somebody writes in unprompted during that hour; what was bought is
-    that the hour warning now goes out on the first attempt whenever the
-    window is open, which — for a trial that runs a day from the message that
-    started it, and for a subscriber whose window the daily check-in has been
-    holding open — is nearly always.
+    that the warning before the end goes out on the first attempt whenever the
+    window is open — and `claim_plan_notices` treats the window shutting as a
+    deadline of its own, so on WhatsApp that warning is the last message that
+    can arrive rather than merely one that usually does.
     """
 
     if str(row["channel"]) != "whatsapp":
@@ -902,6 +902,30 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         "info",
                         f"the {notice_stage} plan notice for user "
                         f"{row['user_id']} is waiting: {result.error}",
+                        user_id=int(row["user_id"]),
+                    )
+                    continue
+                # A shut WhatsApp window is the one failure here that is a
+                # decision rather than a fault. Without an approved template
+                # there is no route out of it — and `claim_plan_notices` now
+                # treats the window shutting as a deadline of its own for
+                # exactly this reason, so what this notice would have said has
+                # already gone out while somebody could still read it. Counted,
+                # so the dashboard keeps seeing it; info, so the log stops
+                # asking somebody to fix what was chosen.
+                #
+                # `result.retryable` is what keeps this to the window-shaped
+                # failures. A permanent error with the window shut — a number
+                # that is not on WhatsApp, a 131047 — is a fault like any
+                # other and still earns the warning below.
+                if result.retryable and not reachable_later(row):
+                    stage.count("window_shut")
+                    stage.log(
+                        "info",
+                        f"the {notice_stage} plan notice for user "
+                        f"{row['user_id']} was not sent: {result.error}. "
+                        "Expected — the notice sent before the window shut is "
+                        "the one that carries this.",
                         user_id=int(row["user_id"]),
                     )
                     continue
