@@ -276,6 +276,189 @@ function RunHover({
   );
 }
 
+// ── alerts delivered, split by which reader found the listing first ───────
+//
+// Stacked, because this is two questions at once: how many alerts went out,
+// and how many of them the feed found first. Side-by-side bars answer the
+// second and lose the first — the total is the product, and on a stack the
+// total is the bar.
+//
+// The feed sits at the bottom. It is the segment that has to reach zero before
+// the feed can be switched off, and only the segment standing on the baseline
+// can be read for a trend; the one riding on top of it moves with both
+// numbers.
+//
+// Two categories, not two magnitudes, so the hues are fixed to the reader
+// rather than to which segment happens to be larger: a chart whose colours
+// moved with the numbers would make "the scrapers took over" look the same as
+// "the feed came back".
+//
+// FEED is the dashboard's existing data hue and SCRAPER the next categorical
+// slot. The pair was validated rather than chosen by eye — worst-case
+// colour-vision separation ΔE 32 (protan), 39 for normal vision, both well
+// clear of the floors, and each clears 3:1 against the card.
+const FEED = LINE;
+const SCRAPER = "#eb6834";
+
+// The card behind the chart, for the gap drawn between two stacked segments.
+// `--d-card` in globals.css, as `Spark`'s marker ring already assumes.
+const SURFACE = "#fff";
+
+// What separates the two segments of one bar.
+const BAR_GAP = 2;
+
+// The chart's floor and the height it has to draw in, the same two numbers
+// `Spark` uses, so a split chart beside a plain one has its baseline and its
+// top gridline in the same places.
+const FLOOR = H - 18;
+const PLOT = H - 30;
+
+export type Split = { label: string; feed: number; scraper: number };
+
+/** A rectangle's vertical extent, in viewBox units. */
+type Band = { y: number; height: number };
+
+/**
+ * Where one bucket's segments sit. Separated from the drawing because this is
+ * the part that fails silently: a bar that escapes the plot is drawn outside
+ * the card rather than throwing, and an empty window divides by a total that
+ * could be zero. `__tests__/charts.test.ts` holds it to the floor, the top
+ * gridline, and the stack summing to the bar.
+ *
+ * `join` is the gap between two stacked segments, and it is a band to paint in
+ * the card's colour rather than space between them. Spacing them apart made
+ * the bar taller than its own total, so a full bucket crossed the top gridline
+ * and the stack no longer measured against the scale beside it. Painted over
+ * the boundary it costs a pixel either side and leaves every height true.
+ *
+ * Vertical units are pixels here — the viewBox is stretched across the card's
+ * width but not its height — so the gap is 2px wherever the card ends up.
+ */
+export function bar(
+  d: Split,
+  top: number,
+): { feed: Band | null; scraper: Band | null; join: Band | null } {
+  const feedH = (d.feed / top) * PLOT;
+  const scraperH = (d.scraper / top) * PLOT;
+
+  return {
+    feed: feedH > 0 ? { y: FLOOR - feedH, height: feedH } : null,
+    scraper:
+      scraperH > 0
+        ? { y: FLOOR - feedH - scraperH, height: scraperH }
+        : null,
+    // Only where there are two segments to separate, and only where both can
+    // spare the pixel: a gap drawn across a one-pixel segment would erase it.
+    join:
+      feedH > BAR_GAP && scraperH > BAR_GAP
+        ? { y: FLOOR - feedH - BAR_GAP / 2, height: BAR_GAP }
+        : null,
+  };
+}
+
+/** What the legend and the header count, over the whole window. */
+export function splitTotals(data: Split[]): { feed: number; scraper: number } {
+  return {
+    feed: data.reduce((sum, d) => sum + d.feed, 0),
+    scraper: data.reduce((sum, d) => sum + d.scraper, 0),
+  };
+}
+
+export function OriginBars({ data }: { data: Split[] }) {
+  if (!data.length) return <Empty />;
+
+  const top = niceMax(Math.max(...data.map((d) => d.feed + d.scraper), 1));
+  const { feed: feedTotal, scraper: scraperTotal } = splitTotals(data);
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: FAINT }}>
+        <span>{comma(top)}</span>
+        <span style={{ color: SOFT }}>
+          {comma(feedTotal + scraperTotal)} delivered
+        </span>
+      </div>
+
+      <SplitHover data={data} top={top} />
+
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: FAINT }}>
+        {ticksOf(data).map((at) => (
+          <span key={at}>{clock(data[at]?.label ?? "")}</span>
+        ))}
+      </div>
+
+      {/* Identity is never colour alone: the swatch names its series and
+          carries its own total, so the split is legible from the legend even
+          where a bucket is one pixel tall. */}
+      <div style={{ display: "flex", gap: 12, marginTop: 6, fontSize: 11, color: SOFT }}>
+        <Key hue={SCRAPER} name="scraper first" value={scraperTotal} />
+        <Key hue={FEED} name="tg feed first" value={feedTotal} />
+      </div>
+    </div>
+  );
+}
+
+function Key({ hue, name, value }: { hue: string; name: string; value: number }) {
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+      <span style={{ width: 8, height: 8, borderRadius: 2, background: hue, flex: "none" }} />
+      {name}
+      <strong style={{ color: INK }}>{comma(value)}</strong>
+    </span>
+  );
+}
+
+function SplitHover({ data, top }: { data: Split[]; top: number }) {
+  const [at, setAt] = useState<number | null>(null);
+  const point = at === null ? null : data[at];
+
+  const width = 100 / data.length;
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onMouseMove={(event) => setAt(indexFrom(event, data.length))}
+      onMouseLeave={() => setAt(null)}
+    >
+      {point && (
+        <Tip at={at as number} count={data.length}>
+          <strong>{comma(point.feed + point.scraper)} delivered</strong>
+          <br />
+          {point.scraper} scraper · {point.feed} tg feed
+          <br />
+          {spell(point.label)}
+        </Tip>
+      )}
+      <svg viewBox={`0 0 100 ${H}`} width="100%" height={H} preserveAspectRatio="none"
+           role="img" aria-label="alerts delivered, by which reader found the listing first">
+        {[0, 0.5, 1].map((part) => (
+          <line key={part} x1="0" x2="100"
+                y1={FLOOR - part * PLOT} y2={FLOOR - part * PLOT}
+                stroke={GRID} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        ))}
+        {at !== null && (
+          <rect x={at * width} y="0" width={Math.max(width, 0.5)} height={FLOOR}
+                fill="rgba(28, 35, 48, 0.06)" />
+        )}
+        {data.map((d, i) => {
+          const { feed, scraper, join } = bar(d, top);
+          const x = i * width;
+          const w = Math.max(width * 0.7, 0.35);
+          return (
+            <g key={d.label}>
+              {feed && <rect x={x} {...feed} width={w} fill={FEED} rx="0.3" />}
+              {scraper && <rect x={x} {...scraper} width={w} fill={SCRAPER} rx="0.3" />}
+              {join && <rect x={x} {...join} width={w} fill={SURFACE} />}
+            </g>
+          );
+        })}
+        <line x1="0" x2="100" y1={FLOOR} y2={FLOOR} stroke={GRID} strokeWidth="1"
+              vectorEffect="non-scaling-stroke" />
+      </svg>
+    </div>
+  );
+}
+
 export function Rank({
   data,
   suffix = "",

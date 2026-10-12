@@ -1969,6 +1969,95 @@ export async function sightingsSince(): Promise<string | null> {
   return rows[0]?.first_at ?? null;
 }
 
+export type OriginSlice = {
+  label: string;
+  /** Alerts whose listing the Telegram feed saw before any scraper did. */
+  feed: number;
+  /** Alerts a scraper saw first. */
+  scraper: number;
+  /**
+   * Alerts with no sighting on either side, and so drawn in neither segment.
+   * Reported under the chart rather than stacked on it: these are listings
+   * stored before 0052 began recording, not evidence about either reader.
+   */
+  unrecorded: number;
+};
+
+// Alerts delivered for one portal over time, split by which reader found the
+// listing first.
+//
+// Why per portal and not one chart for both: the feed carried Rightmove and
+// Zoopla on different footings — Zoopla's scraper is the one that gets refused
+// (403, Cloudflare), so its reliance on the feed is a different number that a
+// combined chart would average away. Two charts, one scale each.
+//
+// What "came from" means here. `notifications` records nothing about which
+// reader queued a row — delivery is UNIQUE (user_id, listing_id), so whichever
+// path arrived first wins and the row remembers nothing — so the split is the
+// earliest sighting per reader from `listing_sightings`, the same comparison
+// `readerOverlap` and `feedReliance` make. It answers "who found it first",
+// which is not quite "who caused the send": with the feed muted (0060) the
+// feed can have seen a listing first while the scraper is what actually
+// queued the alert. Recording the queueing reader would need a column and a
+// worker change, and would have no history.
+//
+// A tie goes to the feed, which can only happen at the same instant and is
+// arbitrary either way; it is written down so the two segments always sum to
+// the alerts that had a sighting at all, with nothing double-counted.
+export async function originPoints(
+  portal: string,
+  win: Win,
+  minutes: number,
+): Promise<OriginSlice[]> {
+  return query<OriginSlice>(
+    `WITH span AS (
+       SELECT generate_series(
+                date_trunc('hour', now() - make_interval(mins => $1::int)),
+                now() - make_interval(mins => $3::int),
+                make_interval(mins => $2::int)
+              ) AS bucket
+     ),
+     alerted AS (
+       SELECT n.id, n.listing_id, n.sent_at
+         FROM notifications n
+         JOIN listings l ON l.id = n.listing_id
+        WHERE n.kind = 'new_listing' AND n.status = 'sent'
+          AND l.source_key = $4
+          AND n.sent_at >  now() - make_interval(mins => $1::int)
+          AND n.sent_at <= now() - make_interval(mins => $3::int)
+     ),
+     origin AS (
+       SELECT a.id, a.sent_at,
+              min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
+              min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
+         FROM alerted a
+         LEFT JOIN listing_sightings g ON g.listing_id = a.listing_id
+        GROUP BY a.id, a.sent_at
+     )
+     SELECT to_char(span.bucket AT TIME ZONE 'Europe/London', 'YYYY-MM-DD HH24:MI') AS label,
+            count(o.id) FILTER (
+              WHERE o.feed_at IS NOT NULL
+                AND (o.scraper_at IS NULL OR o.feed_at <= o.scraper_at))::int AS feed,
+            count(o.id) FILTER (
+              WHERE o.scraper_at IS NOT NULL
+                AND (o.feed_at IS NULL OR o.scraper_at < o.feed_at))::int AS scraper,
+            count(o.id) FILTER (
+              WHERE o.feed_at IS NULL AND o.scraper_at IS NULL)::int AS unrecorded
+       FROM span
+       LEFT JOIN origin o
+              ON o.sent_at >= span.bucket
+             AND o.sent_at <  span.bucket + make_interval(mins => $2::int)
+      GROUP BY span.bucket
+      ORDER BY span.bucket`,
+    [
+      Math.round(win.mins),
+      Math.round(minutes),
+      Math.round(win.endMins),
+      portal,
+    ],
+  ).catch(() => []);
+}
+
 export type PortalRun = {
   source: string;
   runs: number;

@@ -5,13 +5,14 @@ import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerOverlap, readerTally, recentRuns,
   feedOnlyListings, feedReliance,
+  originPoints,
   runLog, runPoints, sightingPoints, sightingsSince, sourceFeeds, sourceSwitches,
   unparseablePoints,
 } from "@/lib/admin-queries";
 import { ago, at } from "@/lib/when";
 
 import { jobStatesOnce, windowFor } from "./cached";
-import { Metric, RunBars, Series, Why } from "./charts";
+import { Metric, OriginBars, RunBars, Series, Why } from "./charts";
 import { Paged, type MorePage } from "./paged";
 import { LogView } from "./log";
 import { moreFaults, moreLastRuns, moreLog } from "./more";
@@ -847,6 +848,46 @@ export async function PortalSeen({
   const win = windowFor(span);
   return (
     <Series data={await sightingPoints(source, win, bucketMinutes(win.hours))} />
+  );
+}
+
+// Alerts delivered for one portal, split by which reader found the listing
+// first. One panel per portal: the feed carried Rightmove and Zoopla, and the
+// two scrapers behind them do not fail the same way, so the reliance is a
+// different number for each and a combined chart would average them.
+export async function AlertsByOrigin({
+  portal,
+  span,
+}: {
+  portal: string;
+  span: string;
+}) {
+  const win = windowFor(span);
+  const data = await originPoints(portal, win, bucketMinutes(win.hours));
+
+  const drawn = data.reduce((sum, d) => sum + d.feed + d.scraper, 0);
+  const unrecorded = data.reduce((sum, d) => sum + d.unrecorded, 0);
+
+  if (drawn === 0 && unrecorded === 0) {
+    return (
+      <p className="hint">
+        No {PORTAL_NAMES[portal] ?? portal} alert was sent {spanWords(win)}.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <OriginBars data={data} />
+      {unrecorded > 0 && (
+        <p className="hint">
+          {unrecorded} further {unrecorded === 1 ? "alert is" : "alerts are"} not
+          on the chart: neither reader recorded a sighting for them, so there is
+          nothing to attribute them to. Listings stored before recording began —
+          see “Feed versus scrapers” above for when that was.
+        </p>
+      )}
+    </>
   );
 }
 

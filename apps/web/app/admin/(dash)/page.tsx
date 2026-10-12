@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 
 import {
-  AlertsWithoutFeed,
+  AlertsByOrigin, AlertsWithoutFeed,
   Duplicates, Faults, FeedState, FeedVersusScrapers, Feeds, Health, Jobs, LastRuns,
   ListingsCreated, LogLines, Portals, PortalSeen,
   MessagesRead, QueueTiles, RunsChart,
@@ -89,6 +89,26 @@ export default async function SystemPage({
           <AlertsWithoutFeed span={span} />
         </Suspense>
       </Panel>
+
+      <div className="dash-row dash-row-wide">
+        <Panel
+          title="Rightmove alerts by origin"
+          why="Сколько алертов по Rightmove реально ушло подписчикам в каждом окне времени, и у скольких из них объявление первым увидел Telegram-фид, а у скольких — собственный скрапер. Высота столбика — все отправленные алерты, то есть сам продукт; нижняя часть, сиреневая, — те, где раньше оказался фид, верхняя, оранжевая, — где раньше был скрапер. Разделение берётся из listing_sightings: у каждого читателя своё время первого наблюдения, и сравниваются они между собой. ВАЖНО, чего график не говорит: кто поставил алерт в очередь, нигде не записано — notifications уникальна по (user_id, listing_id), так что отправляет тот путь, который пришёл первым, а строка не помнит, какой это был. Поэтому «фид увидел раньше» не то же самое, что «отправил фид»: при заглушённом фиде (см. «What the feed is still for») объявление мог первым увидеть фид, а в очередь его поставил скрапер. Что здесь искать: сиреневая часть, уходящая к нулю, — ровно то, что должно случиться до выключения фида; сиреневый столбик без оранжевого над ним — алерты, которых без фида не было бы вовсе. Алерты по объявлениям, у которых наблюдений нет ни от кого (сохранены до миграции 0052, с которой начался учёт), не нарисованы ни одним цветом и посчитаны отдельной строкой под графиком: записать их в чью-то заслугу было бы выдумкой."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <AlertsByOrigin portal="rightmove" span={span} />
+          </Suspense>
+        </Panel>
+
+        <Panel
+          title="Zoopla alerts by origin"
+          why="То же для Zoopla, и панель отдельная не ради симметрии: скрапер Zoopla — тот, которому отказывают (403 и Cloudflare), поэтому его зависимость от фида другая, и в одном графике с Rightmove она бы усреднилась. Сиреневая часть, которая вдруг выросла при упавшем до нуля графике «Zoopla read», — это не возвращение фида, а отказ скрапера: сверять с «refused» в Portal scrapers. Остальное читается так же, как в панели слева, включая то, что цвет говорит, кто увидел объявление раньше, а не кто отправил алерт."
+        >
+          <Suspense fallback={<PanelWait />}>
+            <AlertsByOrigin portal="zoopla" span={span} />
+          </Suspense>
+        </Panel>
+      </div>
 
       <Panel
         wide

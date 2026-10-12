@@ -79,20 +79,37 @@ export async function POST(request: Request) {
       if (action === "set_plan") {
         const plan = String(form?.get("plan") ?? "");
         const known = await run(
-          `SELECT key, duration_days FROM plans WHERE key = $1`, [plan],
+          `SELECT key FROM plans WHERE key = $1`, [plan],
         );
         if (known.length === 0) throw new Error("no such plan");
         const rows = await run(
-          `UPDATE users
-              SET plan = $2,
+          // The length comes from the plan and the messenger, not the plan
+          // alone: a WhatsApp alert is billed per message, so the trial there
+          // is one day where Telegram's is two. Granting from the admin has to
+          // agree with `beginSubscription` — otherwise moving a WhatsApp
+          // subscriber back onto the trial hands out twice the trial they would
+          // have got by signing up. `duration_days_whatsapp` is NULL wherever
+          // the channel makes no difference, and coalesce falls back.
+          `UPDATE users u
+              SET plan = p.key,
                   plan_from = now(),
                   plan_until = CASE
-                      WHEN $3::int IS NULL THEN NULL
-                      ELSE now() + make_interval(days => $3::int)
+                      WHEN days.count IS NULL THEN NULL
+                      ELSE now() + make_interval(days => days.count)
                   END
-            WHERE id = $1
-            RETURNING plan, plan_until::text`,
-          [userId, plan, known[0]?.duration_days ?? null],
+             FROM plans p
+             CROSS JOIN LATERAL (
+               SELECT CASE
+                   WHEN (SELECT uc.channel FROM user_channels uc
+                          WHERE uc.user_id = u.id AND uc.is_primary) = 'whatsapp'
+                   THEN coalesce(p.duration_days_whatsapp, p.duration_days)
+                   ELSE p.duration_days
+               END AS count
+             ) AS days
+            WHERE u.id = $1
+              AND p.key = $2
+            RETURNING u.plan, u.plan_until::text`,
+          [userId, plan],
         );
         detail.plan = plan;
         detail.plan_until = rows[0]?.plan_until;
