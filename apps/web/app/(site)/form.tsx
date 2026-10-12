@@ -162,7 +162,15 @@ export function SubscribeForm({
   // meaningless for a room, and the date's window only matters with a date.
   const [wantedTypes, setWantedTypes] = useState<string[]>(start.types);
   const [availableOn, setAvailableOn] = useState(start.availableOn);
-  const [dayWindow, setDayWindow] = useState(start.dayWindow);
+  // Held as text, not a number, so the box can be emptied while it is being
+  // retyped: coercing every keystroke to a number leaves a 0 sitting in front
+  // of whatever is typed next. The number below is what the rest of the form
+  // reads; an empty box counts as 0.
+  const [dayWindowText, setDayWindowText] = useState(String(start.dayWindow));
+  const dayWindow = Math.min(
+    DAY_WINDOW_MAX,
+    Number.parseInt(dayWindowText, 10) || 0,
+  );
   const [area, setArea] = useState<[number, number]>(start.size);
   // Controlled, and the only control on the form whose default is "on": an
   // uncontrolled checkbox would send nothing when it is left alone, and nothing
@@ -654,16 +662,24 @@ export function SubscribeForm({
               min={0}
               max={DAY_WINDOW_MAX}
               step={1}
-              value={dayWindow}
+              value={dayWindowText}
               // Off until there is a date to be either side of.
               disabled={availableOn === ""}
               onChange={(event) => {
-                const days = Number(event.target.value);
-                setDayWindow(
-                  Number.isFinite(days)
-                    ? Math.min(DAY_WINDOW_MAX, Math.max(0, Math.round(days)))
-                    : 0,
+                // Digits only, and no zero in front of them, so typing into a
+                // box showing 0 reads 7 rather than 07. A lone 0 survives.
+                const digits = event.target.value
+                  .replace(/\D/g, "")
+                  .replace(/^0+(?=\d)/, "");
+                setDayWindowText(
+                  digits === ""
+                    ? ""
+                    : String(Math.min(DAY_WINDOW_MAX, Number(digits))),
                 );
+              }}
+              // An empty box already counts as 0; blurring says so out loud.
+              onBlur={() => {
+                if (dayWindowText === "") setDayWindowText("0");
               }}
             />
           </label>
