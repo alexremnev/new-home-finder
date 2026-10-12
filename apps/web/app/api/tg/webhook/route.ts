@@ -11,6 +11,7 @@ import { query, transaction } from "@/lib/db";
 import { SUPPORT_REPLY } from "@/lib/support";
 import {
   CHANGE_FILTER,
+  CHOOSE_PLAN_BUTTON,
   FILTERS_BUTTON,
   FOUND_A_PLACE,
   LINK_EXPIRED,
@@ -25,7 +26,9 @@ import {
   criteriaSet,
   noFilterYet,
   planLine,
+  stillSearching,
   upgradeInvitation,
+  upgradeUrl,
 } from "@/lib/messages";
 import {
   type Account,
@@ -296,9 +299,7 @@ async function start(chatId: string, token: string | null): Promise<void> {
 
 async function offerUpgrade(chatId: string, account: Account): Promise<void> {
   const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
-  const keyboard: Keyboard = [
-    [{ text: "💎 Choose a plan", url: `${siteUrl()}/upgrade?t=${token}` }],
-  ];
+  const keyboard: Keyboard = [[{ text: CHOOSE_PLAN_BUTTON, url: upgradeUrl(token) }]];
   await reply(chatId, await upgradeInvitation(account, token), keyboard);
 }
 
@@ -331,6 +332,13 @@ async function pressed(
   if (data === "change") {
     if (press.id) await answerCallback(press.id).catch(() => undefined);
     return sendToForm(chatId, true);
+  }
+  // The digest's third button. It changes nothing, which is the point — so the
+  // reply has to exist, or the tap looks like a tap that failed. Shared with
+  // WhatsApp, where the same button also reopens the 24-hour window.
+  if (data === "continue") {
+    if (press.id) await answerCallback(press.id).catch(() => undefined);
+    return keepSearching(chatId);
   }
 
   if (press.id) {
@@ -374,6 +382,15 @@ async function pauseAlerts(chatId: string, reason: Reason): Promise<void> {
     return;
   }
   await reply(chatId, reason === "found_a_place" ? FOUND_A_PLACE : PAUSED);
+}
+
+async function keepSearching(chatId: string): Promise<void> {
+  const account = await accountForChat(chatId).catch(() => null);
+  if (!account || account.subscription_id === null) {
+    await reply(chatId, noFilterYet(siteUrl()));
+    return;
+  }
+  await reply(chatId, stillSearching((account.criteria ?? {}) as Criteria));
 }
 
 async function resume(chatId: string): Promise<void> {

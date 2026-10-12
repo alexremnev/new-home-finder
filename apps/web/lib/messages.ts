@@ -180,30 +180,41 @@ export const FOUND_A_PLACE = [
 
 export const RESUMED = "🔔 Alerts are back on. Your filter is unchanged.";
 
+/**
+ * The answer to "Keep searching" on the evening digest.
+ *
+ * Nothing changes when it is tapped, which is exactly why the reply has to say
+ * something: a button that produces no message reads as a button that failed.
+ * So it confirms the alerts are on and restates what is being searched for —
+ * the one thing somebody deciding whether to keep going wants to check.
+ *
+ * On WhatsApp the tap does one more thing, which the webhook says there: it is
+ * an inbound message, and that reopens the 24-hour window.
+ */
+export function stillSearching(criteria: Criteria): string {
+  return [
+    "🔔 Alerts stay on — I'll message you the moment a new listing matches.",
+    "",
+    criteriaCard(criteria),
+    "",
+    COMMAND_HELP,
+  ].join("\n");
+}
+
 export const NOTHING_TO_RESUME = [
   "You have no paused filter to turn back on.",
   "If you used /stop it was deleted — set one up again and the alerts start.",
 ].join("\n");
 
-/**
- * The site, added to a reply that does not already point at it.
- *
- * Every message except a listing alert should offer a way back to the site, and
- * doing it here rather than in twenty places is what keeps them consistent. A
- * message that already carries the address — "change your search here" — is
- * left alone: two links to the same place in one short message is noise.
- *
- * `url` is where that link should go, which for somebody the bot recognises is
- * their own filter rather than the landing page. The bare site is the fallback,
- * and the only thing to offer a number with no account behind it.
- *
- * Telegram gets a button instead; see `reply` in its webhook.
- */
-export function withSiteLink(text: string, url?: string): string {
-  const site = siteUrl();
-  return text.includes(site) ? text : `${text}\n🌐 ${url ?? `${site}/`}`;
-}
+// Gone: `withSiteLink`, which put "🌐 <url>" on the end of a WhatsApp reply.
+// Both channels now draw that link as a button — see `reply` in the Telegram
+// webhook and `withSite` in WhatsApp's — because a url written out in a chat
+// message is a url somebody has to select and copy.
 
+export const NO_FILTER_YET = "🎯 You don't have a search yet — set one up and the alerts start.";
+
+// The same thing with the address written out, for a caller that has no button
+// to put it on.
 export function noFilterYet(site: string): string {
   return `🎯 You don't have a search yet — set one up and the alerts start:\n${site}`;
 }
@@ -214,6 +225,32 @@ export function planLine(name: string, until: Date | null, live: boolean): strin
   return live ? `Plan: ${name}, until ${date}` : `Plan: ${name} — ended ${date}, alerts are off`;
 }
 
+export const CHOOSE_PLAN_BUTTON = "\ud83d\udc8e Choose a plan";
+
+// What the button on the upgrade offer points at. One function, because the two
+// webhooks draw the same button and a checkout page reached without a token
+// does not know whose plan is being bought.
+export function upgradeUrl(token?: string): string {
+  return token ? `${siteUrl()}/upgrade?t=${token}` : `${siteUrl()}/upgrade`;
+}
+
+/**
+ * The answer to /pay: what they are on now, what a plan costs, and nothing else.
+ *
+ * No url, no blank lines, and no payment reference.
+ *
+ * The link is the button — `CHOOSE_PLAN_BUTTON` over `upgradeUrl`, on both
+ * channels — so writing it out here too would be the same link twice, and the
+ * written one is the one somebody has to select and copy.
+ *
+ * The blank lines went with it. They were paragraph breaks around a price list
+ * that is four short lines long, which in a chat window is a message with holes
+ * in it rather than a message with sections.
+ *
+ * The payment reference went because it answers a question nobody asked here:
+ * it belongs to the bank-transfer route, and on a message whose one job is to
+ * get the card paid it reads as a second way to pay that is not explained.
+ */
 export async function upgradeInvitation(account: Account, token?: string): Promise<string> {
   // Only what their messenger is priced at. Listing the Telegram week to a
   // WhatsApp subscriber offers a price checkout will then refuse.
@@ -231,7 +268,6 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   } else if (share === 0) {
     lines.push("Once a plan ends the alerts stop. A paid plan sends everything that matches.");
   }
-  lines.push("");
   if (!plans.length) {
     lines.push("There is nothing to upgrade to at the moment.");
     return lines.join("\n");
@@ -240,10 +276,6 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
     const span = plan.duration_days ? `${plan.duration_days} days` : "no time limit";
     lines.push(`${plan.display_name} — ${price(plan.price_pence)} for ${span}`);
   }
-  lines.push("", token ? `${siteUrl()}/upgrade?t=${token}` : `${siteUrl()}/upgrade`);
-  if (account.payment_ref) {
-
-    lines.push("", `Your payment reference: ${account.payment_ref}`);
-  }
   return lines.join("\n");
 }
+

@@ -1,7 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Criteria } from "../criteria";
-import { criteriaCard, criteriaSet, refundIssued } from "../messages";
+import {
+  criteriaCard,
+  criteriaSet,
+  refundIssued,
+  upgradeInvitation,
+  upgradeUrl,
+} from "../messages";
 
 // Every field the form can send, and nothing else: see parseForm.
 const full: Criteria = {
@@ -179,5 +185,78 @@ describe("a refund", () => {
     expect(text).toContain("Your filter is kept");
     expect(text).toContain("/pay");
     expect(text).toContain("/update");
+  });
+});
+
+describe("the upgrade invitation", () => {
+  // The real one reads two tables. What it says is the point here, so the
+  // tables are stood in for and the wording is what is asserted.
+  const plans = vi.hoisted(() => ({
+    paidPlans: vi.fn(),
+    lapsedShare: vi.fn(),
+  }));
+
+  vi.mock("../plans", async (original) => ({
+    ...(await original<Record<string, unknown>>()),
+    paidPlans: plans.paidPlans,
+    lapsedShare: plans.lapsedShare,
+  }));
+
+  const account = {
+    user_id: 7,
+    channel: "telegram" as const,
+    plan_name: "Free trial",
+    plan_until: new Date("2026-10-20T10:00:00Z"),
+    payment_ref: "LHF-1234",
+    subscription_id: 1,
+    criteria: {},
+  };
+
+  beforeEach(() => {
+    plans.lapsedShare.mockResolvedValue(20);
+    plans.paidPlans.mockResolvedValue([
+      { display_name: "Week", price_pence: 500, duration_days: 7 },
+      { display_name: "Month", price_pence: 1500, duration_days: 30 },
+    ]);
+  });
+
+  it("states the plan and the prices and nothing else", async () => {
+    const text = await upgradeInvitation(account as never, "abc");
+    expect(text.split("\n")).toEqual([
+      "Plan: Free trial, until 2026-10-20",
+      "Once a plan ends you receive 20% of what matches. A paid plan sends all of it.",
+      "Week — £5 for 7 days",
+      "Month — £15 for 30 days",
+    ]);
+  });
+
+  it("writes no url out, because the button carries it", async () => {
+    // A link in the body of a message is a link somebody has to select and
+    // copy, and this is the one message whose whole purpose is the tap.
+    const text = await upgradeInvitation(account as never, "abc");
+    expect(text).not.toContain("http");
+    expect(upgradeUrl("abc")).toContain("/upgrade?t=abc");
+    expect(upgradeUrl()).toContain("/upgrade");
+  });
+
+  it("leaves the payment reference out", async () => {
+    // It belongs to the bank-transfer route. On the message asking for a card
+    // payment it reads as a second way to pay that is never explained.
+    const text = await upgradeInvitation(account as never, "abc");
+    expect(text).not.toContain("LHF-1234");
+    expect(text.toLowerCase()).not.toContain("reference");
+  });
+
+  it("carries no blank line at all", async () => {
+    const text = await upgradeInvitation(account as never, "abc");
+    expect(text).not.toContain("\n\n");
+    expect(text.split("\n").every((line) => line.trim().length > 0)).toBe(true);
+  });
+
+  it("says so plainly when there is nothing to sell", async () => {
+    plans.paidPlans.mockResolvedValue([]);
+    const text = await upgradeInvitation(account as never, "abc");
+    expect(text).toContain("There is nothing to upgrade to at the moment.");
+    expect(text).not.toContain("\n\n");
   });
 });

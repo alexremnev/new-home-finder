@@ -41,6 +41,10 @@ def view(**overrides: Any) -> ListingView:
     values.update(overrides)
     return ListingView(**values)
 
+# The portal url the fixture above carries, named so a test can say "this link
+# is the button" without writing it out again.
+LISTING = "https://www.openrent.co.uk/property-to-rent/london/x/123"
+
 def facts(text: str) -> list[str]:
 
     # The wording with the markup taken off, so the two channels can be compared
@@ -172,12 +176,29 @@ def test_inside_the_window_the_message_is_the_same_one_telegram_gets() -> None:
     )
     assert result.ok and result.provider_msg_id == "wamid.1"
     body = calls[0]["payload"]
-    assert body["type"] == "text"
     assert body["to"] == "447700900123"
-    assert body["text"]["preview_url"] is True
-    assert "🏠 *New listing spotted!*" in body["text"]["body"]
+    assert "🏠 *New listing spotted!*" in body["interactive"]["body"]["text"]
     assert calls[0]["headers"]["Authorization"] == "Bearer EAAG-secret"
     assert calls[0]["url"].endswith("/1234567890/messages")
+
+def test_the_listing_link_is_a_view_button_rather_than_a_line_of_url() -> None:
+
+    # A url written out in the body is a url somebody has to select and copy,
+    # and on a listing the tap is the whole point.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(kind="listing", listing=view()),
+    )
+    body = calls[0]["payload"]
+    assert body["type"] == "interactive"
+    assert body["interactive"]["type"] == "cta_url"
+    assert body["interactive"]["action"] == {
+        "name": "cta_url",
+        "parameters": {"display_text": "View", "url": LISTING},
+    }
+    # Once, as the button. Repeating it in the body would be the same link twice.
+    assert LISTING not in body["interactive"]["body"]["text"]
 
 def test_outside_the_window_it_becomes_the_approved_template() -> None:
     calls, sender = sent_through(messages=[{"id": "wamid.2"}])
@@ -242,10 +263,8 @@ def test_the_uploaded_photograph_wins_over_the_portal_url() -> None:
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=PICTURE, wa_media_id=MEDIA_ID)),
     )
-    body = calls[0]["payload"]
-    assert body["type"] == "image"
-    assert body["image"] == {"id": MEDIA_ID, "caption": body["image"]["caption"]}
-    assert "link" not in body["image"]
+    header = calls[0]["payload"]["interactive"]["header"]
+    assert header == {"type": "image", "image": {"id": MEDIA_ID}}
 
 def test_the_portal_url_is_the_fallback_when_there_is_no_upload() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
@@ -253,7 +272,8 @@ def test_the_portal_url_is_the_fallback_when_there_is_no_upload() -> None:
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=PICTURE, wa_media_id=None)),
     )
-    assert calls[0]["payload"]["image"]["link"] == PICTURE
+    header = calls[0]["payload"]["interactive"]["header"]
+    assert header == {"type": "image", "image": {"link": PICTURE}}
 
 def test_a_template_header_takes_the_upload_too() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
@@ -265,13 +285,18 @@ def test_a_template_header_takes_the_upload_too() -> None:
     assert header["type"] == "header"
     assert header["parameters"][0]["image"] == {"id": MEDIA_ID}
 
-def test_with_neither_a_photograph_nor_a_url_it_is_plain_text() -> None:
+def test_with_no_photograph_the_button_message_simply_has_no_header() -> None:
+
+    # The View button does not depend on the picture, and the picture is the
+    # part that can be absent.
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=None, wa_media_id=None)),
     )
-    assert calls[0]["payload"]["type"] == "text"
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["type"] == "cta_url"
+    assert "header" not in interactive
 
 def test_an_upload_needs_credentials_and_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("WA_PHONE_NUMBER_ID", raising=False)
@@ -285,21 +310,21 @@ def test_an_upload_needs_credentials_and_bytes(monkeypatch: pytest.MonkeyPatch) 
     # Credentials but nothing to send is still nothing to do.
     assert upload_image(b"") is None
 
-def test_inside_the_window_a_picture_is_sent_as_a_picture() -> None:
+def test_inside_the_window_a_picture_is_still_a_picture_beside_the_button() -> None:
     calls, sender = sent_through(messages=[{"id": "wamid.3"}])
     result = notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=PICTURE)),
     )
     assert result.ok
-    body = calls[0]["payload"]
+    interactive = calls[0]["payload"]["interactive"]
 
     # Not a link preview: WhatsApp's own thumbnail is small and compressed, and
-    # there is no setting for it.
-    assert body["type"] == "image"
-    assert body["image"]["link"] == PICTURE
-    assert "🏠 *New listing spotted!*" in body["image"]["caption"]
-    assert "text" not in body
+    # there is no setting for it. A cta_url header is a real image message, so
+    # the View button costs nothing here.
+    assert interactive["header"] == {"type": "image", "image": {"link": PICTURE}}
+    assert "🏠 *New listing spotted!*" in interactive["body"]["text"]
+    assert "text" not in calls[0]["payload"]
 
 def test_a_message_too_long_for_a_caption_keeps_its_words_not_its_picture() -> None:
 
@@ -315,14 +340,20 @@ def test_a_message_too_long_for_a_caption_keeps_its_words_not_its_picture() -> N
     assert len(body["text"]["body"]) > 1024
     assert "x" * 100 in body["text"]["body"]
 
-def test_without_a_picture_it_falls_back_to_the_preview() -> None:
+def test_a_message_too_long_for_a_button_keeps_its_words_and_its_link() -> None:
+
+    # The same trade as the caption above, for the same reason: a message cut
+    # off mid-fact is worse than a link somebody has to copy.
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
-        Alert(kind="listing", listing=view(image_url=None)),
+        Alert(kind="listing", listing=view(image_url=None, address="x" * 4000)),
     )
-    assert calls[0]["payload"]["type"] == "text"
-    assert calls[0]["payload"]["text"]["preview_url"] is True
+    body = calls[0]["payload"]
+    assert body["type"] == "text"
+    assert body["text"]["preview_url"] is True
+    assert len(body["text"]["body"]) > 1024
+    assert "x" * 100 in body["text"]["body"]
 
 def test_a_template_gets_no_header_until_the_template_has_one() -> None:
 
@@ -370,9 +401,10 @@ def test_inside_the_window_taps_become_reply_buttons() -> None:
         Alert(kind="expiring", text="🔔 12 new listings matched your filter today.",
               actions=[
                   Action(label="Upgrade today for full access", url="https://t.me/b?start=pay"),
-                  Action(label="✏️ Change my search", short="Change search", callback="change"),
-                  Action(label="🏠 I found a place", short="Found a place", callback="found"),
+                  Action(label="✏️ Change search", short="Change search", callback="change"),
                   Action(label="⏸️ Pause alerts", short="Pause alerts", callback="pause"),
+                  Action(label="🔔 Keep searching", short="Keep searching",
+                         callback="continue"),
               ]),
     )
     assert result.ok
@@ -383,9 +415,9 @@ def test_inside_the_window_taps_become_reply_buttons() -> None:
     buttons = body["interactive"]["action"]["buttons"]
     # Three is the ceiling WhatsApp imposes, and the url is not one of them.
     assert len(buttons) == 3
-    assert [b["reply"]["id"] for b in buttons] == ["change", "found", "pause"]
+    assert [b["reply"]["id"] for b in buttons] == ["change", "pause", "continue"]
     assert [b["reply"]["title"] for b in buttons] == [
-        "Change search", "Found a place", "Pause alerts",
+        "Change search", "Pause alerts", "Keep searching",
     ]
     assert all(len(b["reply"]["title"]) <= 20 for b in buttons)
     # The link still reaches the person, in the text.
@@ -401,17 +433,19 @@ def test_whatsapp_does_not_offer_to_dismiss_a_listing() -> None:
     # rather than drawing a button that would visibly do nothing.
     assert not offerable(actions[0])
 
-def test_a_pictureless_listing_inside_the_window_is_plain_text() -> None:
+def test_an_unofferable_action_does_not_cost_the_listing_its_view_button() -> None:
 
-    # Nothing is offerable on a listing here, so there is no interactive
-    # message to send even though the window is open.
+    # Ignore is not drawn here — WhatsApp cannot delete a delivered message —
+    # so it must not count as "this message already has buttons" either.
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=None),
               actions=[Action(label="Ignore", callback="ignore:7")]),
     )
-    assert calls[0]["payload"]["type"] == "text"
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["type"] == "cta_url"
+    assert interactive["action"]["parameters"]["display_text"] == "View"
 
 def restricted(**extra: Any) -> Alert:
     return Alert(
@@ -508,17 +542,19 @@ def test_a_message_with_no_taps_stays_plain_text() -> None:
     )
     assert calls[0]["payload"]["type"] == "text"
 
-def test_a_listing_with_a_picture_is_still_a_picture_not_a_button_message() -> None:
+def test_a_listing_with_a_picture_keeps_both_the_picture_and_the_button() -> None:
 
-    # The Ignore action is a callback, but a listing's picture matters more than
-    # a button: an image message cannot carry reply buttons.
+    # Reply buttons cannot share a message with a photograph; the one url
+    # button can, as the header of the same message. So nothing is traded.
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
         Alert(kind="listing", listing=view(image_url=PICTURE),
               actions=[Action(label="Ignore", callback="ignore:7")]),
     )
-    assert calls[0]["payload"]["type"] == "image"
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["header"] == {"type": "image", "image": {"link": PICTURE}}
+    assert interactive["action"]["parameters"]["display_text"] == "View"
 
 def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
 

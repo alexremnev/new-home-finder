@@ -61,12 +61,27 @@ def render(alert: Alert) -> str:
 
 def keyboard_for(alert: Alert) -> dict[str, Any] | None:
 
+    # One button per row unless the actions ask otherwise. `Action.row` is how
+    # they ask: consecutive actions carrying the same number share a row, so the
+    # digest can put "Change search" and "Pause alerts" side by side and give
+    # "Keep searching" the width of the message. Consecutive rather than grouped
+    # by number, because the order the actions arrive in is the order they are
+    # meant to be read in, and a grouping pass could move a button away from the
+    # one it belongs next to.
     rows: list[list[dict[str, str]]] = []
+    previous: int | None = None
     for action in alert.actions:
         if action.url:
-            rows.append([{"text": action.label, "url": action.url}])
+            button = {"text": action.label, "url": action.url}
         elif action.callback:
-            rows.append([{"text": action.label, "callback_data": action.callback}])
+            button = {"text": action.label, "callback_data": action.callback}
+        else:
+            continue
+        if action.row is not None and action.row == previous and rows:
+            rows[-1].append(button)
+        else:
+            rows.append([button])
+        previous = action.row
     return {"inline_keyboard": rows} if rows else None
 
 Sender = Callable[[str, dict[str, Any]], dict[str, Any]]

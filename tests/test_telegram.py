@@ -273,6 +273,21 @@ def test_each_action_gets_its_own_row_in_the_order_given() -> None:
         "Pause all notifications",
     ]
 
+def test_actions_sharing_a_row_number_sit_side_by_side() -> None:
+    alert = Alert(kind="expiring", text="x", actions=[
+        Action(label="Upgrade", url="https://pay.test/u"),
+        Action(label="✏️ Change search", callback="change", row=0),
+        Action(label="⏸️ Pause alerts", callback="pause", row=0),
+        Action(label="🔔 Keep searching", callback="continue", row=1),
+    ])
+    keyboard = keyboard_for(alert)
+    assert keyboard is not None
+    assert [[b["text"] for b in row] for row in keyboard["inline_keyboard"]] == [
+        ["Upgrade"],
+        ["✏️ Change search", "⏸️ Pause alerts"],
+        ["🔔 Keep searching"],
+    ]
+
 def test_an_action_with_neither_a_url_nor_a_callback_is_dropped() -> None:
 
     assert keyboard_for(Alert(kind="ops", text="x", actions=[Action(label="Nothing")])) is None

@@ -726,15 +726,22 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
                 # Three taps, each useful to the person and each an inbound
                 # message — the only thing that reopens WhatsApp's free window.
-                # Asking "did you find one?" is worth answering, which is why it
-                # gets tapped; a button that only serves us would not be.
+                # "Keep searching" is the one most people want and is worth
+                # answering on its own terms, which is why it gets tapped; a
+                # button that only serves us would not be.
+                #
+                # "I found a place" used to sit here, in the middle, where it
+                # was the easiest of the three to hit by accident — and hitting
+                # it stops the alerts. The two that change something now share
+                # the top row and the harmless one has the row below to itself.
+                # `row` is Telegram's layout; WhatsApp stacks all three.
                 actions = [
-                    Action(label="✏️ Change my search", short="Change search",
-                           callback="change"),
-                    Action(label="🏠 I found a place", short="Found a place",
-                           callback="found"),
+                    Action(label="✏️ Change search", short="Change search",
+                           callback="change", row=0),
                     Action(label="⏸️ Pause alerts", short="Pause alerts",
-                           callback="pause"),
+                           callback="pause", row=0),
+                    Action(label="🔔 Keep searching", short="Keep searching",
+                           callback="continue", row=1),
                 ]
                 # Only when something is actually being withheld. `paid` was the
                 # wrong test: a live trial is not paid but is not restricted

@@ -24,6 +24,11 @@ class Action(BaseModel):
     short: str | None = None
     url: str | None = None
     callback: str | None = None
+    # Which keyboard row this button belongs on, for a channel that lays buttons
+    # out itself. Consecutive actions sharing a number sit side by side; None —
+    # the default — takes a row of its own. WhatsApp ignores it: it stacks reply
+    # buttons and there is no setting for that.
+    row: int | None = None
 
     def button(self, limit: int) -> str:
         return (self.short or self.label)[:limit]

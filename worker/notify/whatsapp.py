@@ -63,13 +63,18 @@ def restriction_notice(view: ListingView) -> str | None:
     emphasised, rest = parts
     return f"🔒 *{emphasised}*{rest}"
 
-def render_listing(view: ListingView) -> str:
+def render_listing(view: ListingView, *, with_url: bool = True) -> str:
 
     # Only ever sent inside the 24-hour window, where a link preview works and
     # the message costs nothing. The map link is left out so the preview is the
     # flat: WhatsApp previews the first url it finds.
+    #
+    # `with_url` is off when the listing link is drawn as the View button of the
+    # same message. The same link twice is the same link twice, and the one
+    # written out in the body is the one somebody has to select and copy.
     lines = [_plain(line) for line in listing_fields(view)]
-    lines.append(view.url)
+    if with_url:
+        lines.append(view.url)
 
     notice = restriction_notice(view)
     if notice:
@@ -82,7 +87,8 @@ def render(alert: Alert, button: Action | None = None) -> str:
     if alert.kind == "listing":
         if alert.listing is None:
             raise ValueError("a listing alert needs a listing")
-        text = render_listing(alert.listing)
+        on_the_button = button is not None and button.url == alert.listing.url
+        text = render_listing(alert.listing, with_url=not on_the_button)
     else:
         text = alert.text or ""
 
@@ -139,6 +145,11 @@ def template_params(view: ListingView) -> list[str]:
 # people's chats should keep working.
 UNOFFERABLE = ("ignore:",)
 
+# What the listing link is called when it is drawn as a button rather than
+# written out. Short because the button is narrow, and a verb because that is
+# what the tap does.
+VIEW = "View"
+
 def call_to_action(alert: Alert) -> Action | None:
 
     # WhatsApp's one url button. It carries exactly one, and it cannot share a
@@ -147,7 +158,40 @@ def call_to_action(alert: Alert) -> Action | None:
     if any(offerable(a) for a in alert.actions):
         return None
     links = [a for a in alert.actions if a.url]
-    return links[0] if len(links) == 1 else None
+    if len(links) == 1:
+        return links[0]
+    if links:
+        return None
+
+    # No action carries a link, which on a listing does not mean there is
+    # nothing to tap: the portal's own url is in the body of every alert. Drawn
+    # as a button it keeps the photograph — a cta_url message takes an image
+    # header, which is the shape the restricted alerts already use — so nothing
+    # is given up by promoting it.
+    listing = alert.listing
+    if alert.kind == "listing" and listing is not None and listing.url:
+        return Action(label=VIEW, short=VIEW, url=listing.url)
+    return None
+
+def cta_shape(alert: Alert) -> Action | None:
+    """The url button this alert will actually be sent with, if any.
+
+    Asked twice — once to build the message and once, in `send`, to decide
+    whether a refusal is worth retrying as the plain shape — so the answer
+    lives here rather than being worked out twice and drifting.
+
+    Never truncated to fit the button, for the reason the caption path gives: a
+    message cut off mid-fact is worse than a message whose link has to be
+    copied. Longer than a cta_url body holds and it falls through to the shapes
+    that hold more.
+    """
+
+    offer = call_to_action(alert)
+    if offer is None or not offer.url:
+        return None
+    if len(render(alert, offer)) > INTERACTIVE_BODY:
+        return None
+    return offer
 
 def offerable(action: Action) -> bool:
 
@@ -331,7 +375,7 @@ class WhatsAppNotifier:
             # A tappable button beats a url in the text, and unlike reply
             # buttons it keeps the photograph, as the header of the same
             # message.
-            offer = call_to_action(alert) if cta else None
+            offer = cta_shape(alert) if cta else None
             if offer is not None and offer.url:
                 text = render(alert, offer)
                 action: dict[str, Any] = {
@@ -504,7 +548,7 @@ class WhatsAppNotifier:
         # refusal of that one shape is retried once as the plain message, which
         # is known to work. Only that shape: retrying anything else would post
         # the identical payload twice for the identical refusal.
-        used_button = window_open(to.last_inbound) and call_to_action(alert) is not None
+        used_button = window_open(to.last_inbound) and cta_shape(alert) is not None
         if used_button and not result.ok and not result.retryable and not result.recipient_gone:
             plain = self._post(to, alert, cta=False)
             if plain.ok:

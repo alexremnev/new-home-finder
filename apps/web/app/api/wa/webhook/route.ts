@@ -5,7 +5,9 @@ import { beginSubscription } from "@/lib/activate";
 import { query, transaction } from "@/lib/db";
 import { COMMAND_HELP, parseCommand } from "@/lib/commands";
 import {
+  CHOOSE_PLAN_BUTTON,
   FOUND_A_PLACE,
+  NO_FILTER_YET,
   NOTHING_TO_PAUSE,
   NOTHING_TO_RESUME,
   NOTHING_TO_STOP,
@@ -13,13 +15,13 @@ import {
   RESUMED,
   STOPPED,
   CHANGE_FILTER,
+  FILTERS_BUTTON,
   criteriaCard,
   LINK_EXPIRED,
-  withSiteLink,
   criteriaSet,
-  noFilterYet,
   planLine,
   upgradeInvitation,
+  upgradeUrl,
 } from "@/lib/messages";
 import {
   accountForChat, filterUrl, issueToken, planIsLive, siteUrl,
@@ -28,7 +30,7 @@ import {
 import { dismiss } from "@/lib/dismiss";
 import { deleteFilter, resumeFilter, stopFilter } from "@/lib/stopping";
 import { SUPPORT_REPLY } from "@/lib/support";
-import { sendWhatsApp } from "@/lib/whatsapp";
+import { sendWhatsApp, type WaLink } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +61,27 @@ type Message = {
   // A template's quick reply.
   button?: { payload?: string; text?: string };
 };
+
+/**
+ * What one inbound message is answered with, or null to say nothing.
+ *
+ * `button` is a link drawn under the words rather than written out among them.
+ * Every reply that points anywhere carries one — WhatsApp holds exactly one url
+ * button per message, which is why this is a single link and not a keyboard.
+ *
+ * A bare string is the common case and stays a bare string; `linked` is how a
+ * reply says it has somewhere to send them.
+ */
+type Reply = string | { text: string; button: WaLink };
+
+const linked = (text: string, label: string, url: string): Reply => ({
+  text,
+  button: { label, url },
+});
+
+// The emoji come off the button labels: a cta_url label is cut at twenty
+// characters and WhatsApp spends some of them on the glyph.
+const plainLabel = (label: string) => label.replace(/[^\p{L}\p{N} ]/gu, "").trim();
 
 function tapped(message: Message): string | null {
   return (
@@ -128,10 +151,10 @@ export async function POST(request: Request): Promise<NextResponse> {
       // Never swallowed. A tap that was understood but whose answer could not
       // be delivered is indistinguishable, from the outside, from a button
       // that does nothing — and the webhook still returns 200 either way.
-      // Every reply carries the site, unless it already names it. One place,
-      // so no command can be the one that forgets.
-      const body = await withSite(number, reply);
-      const sent = await sendWhatsApp(number, body).catch((error) => {
+      // Every reply carries the site, unless it has a button of its own. One
+      // place, so no command can be the one that forgets.
+      const { text, button } = await withSite(number, reply);
+      const sent = await sendWhatsApp(number, text, button).catch((error) => {
         console.error("wa reply threw", { from: number.slice(-4), error: String(error) });
         return false;
       });
@@ -143,16 +166,27 @@ export async function POST(request: Request): Promise<NextResponse> {
 }
 
 /**
- * A reply with the site on the end of it, the link pointing at this person's
- * own filter rather than at the landing page.
+ * A reply with a way back to the site on it, pointing at this person's own
+ * filter rather than at the landing page.
+ *
+ * A button, not a line of url: a link written out in a chat message is a link
+ * somebody has to select and copy. WhatsApp allows one per message, so a reply
+ * that already has a button of its own — the payment link, the form — keeps it
+ * and gets nothing added.
  *
  * The url is built only when it is going to be used: it costs a query and a
- * write, and a message that already names the address — /update, which carries
- * its own link — has no use for a second one.
+ * write.
  */
-async function withSite(number: string, text: string): Promise<string> {
-  if (text.includes(siteUrl())) return text;
-  return withSiteLink(text, await filterUrl(number, "whatsapp"));
+async function withSite(
+  number: string,
+  reply: Reply,
+): Promise<{ text: string; button?: WaLink }> {
+  if (typeof reply !== "string") return reply;
+  if (reply.includes(siteUrl())) return { text: reply };
+  return {
+    text: reply,
+    button: { label: "Open the site", url: await filterUrl(number, "whatsapp") },
+  };
 }
 
 async function signed(request: Request, raw: string): Promise<boolean> {
@@ -186,7 +220,7 @@ async function commanded(
   number: string,
   userId: number,
   text: string,
-): Promise<string | null> {
+): Promise<Reply | null> {
   const command = parseCommand(text);
   console.log("wa command", { from: number.slice(-4), kind: command.kind });
 
@@ -209,7 +243,7 @@ async function commanded(
 
     case "show": {
       const account = await accountForChat(number, "whatsapp");
-      if (!account || account.subscription_id === null) return noFilterYet(siteUrl());
+      if (!account || account.subscription_id === null) return NO_FILTER_YET;
       return [
         criteriaCard((account.criteria ?? {}) as Criteria),
         "",
@@ -221,9 +255,13 @@ async function commanded(
 
     case "upgrade": {
       const account = await accountForChat(number, "whatsapp");
-      if (!account) return noFilterYet(siteUrl());
+      if (!account) return NO_FILTER_YET;
       const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
-      return await upgradeInvitation(account, token);
+      return linked(
+        await upgradeInvitation(account, token),
+        plainLabel(CHOOSE_PLAN_BUTTON),
+        upgradeUrl(token),
+      );
     }
 
     case "start":
@@ -232,7 +270,11 @@ async function commanded(
       // their current criteria and offers "back to WhatsApp" rather than the
       // sign-up offer. Without an account — or if issuing it fails — the plain
       // form is still the right page.
-      return `${CHANGE_FILTER}\n${await filterUrl(number, "whatsapp")}`;
+      return linked(
+        CHANGE_FILTER,
+        plainLabel(FILTERS_BUTTON),
+        await filterUrl(number, "whatsapp"),
+      );
     }
 
     default:
@@ -240,7 +282,7 @@ async function commanded(
   }
 }
 
-async function pressed(number: string, id: string): Promise<string | null> {
+async function pressed(number: string, id: string): Promise<Reply | null> {
   console.log("wa tap", { from: number.slice(-4), id });
 
   // The answer to the check-in sent five minutes before the window shut. The
@@ -251,7 +293,7 @@ async function pressed(number: string, id: string): Promise<string | null> {
   // once it has asked, so that the question stays the last thing on screen.
   if (id === "continue") {
     const account = await accountForChat(number, "whatsapp").catch(() => null);
-    if (!account || account.subscription_id === null) return noFilterYet(siteUrl());
+    if (!account || account.subscription_id === null) return NO_FILTER_YET;
     return [
       "✅ Alerts are back on — anything held while it was quiet is on its way.",
       "",
@@ -285,7 +327,11 @@ async function pressed(number: string, id: string): Promise<string | null> {
     // The same tokenised link as /update. Without it, the one button on the
     // evening digest that offers to change the search landed on a blank
     // sign-up form.
-    return `${CHANGE_FILTER}\n${await filterUrl(number, "whatsapp")}`;
+    return linked(
+      CHANGE_FILTER,
+      plainLabel(FILTERS_BUTTON),
+      await filterUrl(number, "whatsapp"),
+    );
   }
 
   // Unknown. The tap has already reopened the window, which was most of the
@@ -295,7 +341,7 @@ async function pressed(number: string, id: string): Promise<string | null> {
   return null;
 }
 
-async function handle(number: string, text: string): Promise<string | null> {
+async function handle(number: string, text: string): Promise<Reply | null> {
   const token = tokenIn(text);
   // The token itself is a live credential and is never logged; its length is
   // enough to tell "they typed something else" from "the link was mangled".
