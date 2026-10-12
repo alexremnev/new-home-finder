@@ -12,20 +12,26 @@ developer's own connection, because from here nothing is blocked.
 
 from __future__ import annotations
 
-import os
+import pathlib
+import time
 from dataclasses import dataclass
 
 import pytest
 from curl_cffi import CurlError
 
+from worker.sources import session
 from worker.sources.fetch import (
+    BACKOFF_CAP,
     BLOCKED,
     JITTER,
+    KEPT_REFUSALS,
+    RETRY_AFTER_CAP,
     ROTATE,
     STICKY_PORTS,
     Fetcher,
     Refused,
     Reply,
+    _evidence,
     exit_ports,
     host_of,
 )
@@ -43,6 +49,7 @@ class Fake(Fetcher):
     """A Fetcher whose single request is scripted rather than performed."""
 
     def __init__(self, answers: dict[bool, int], **kw: object) -> None:
+        kw.setdefault("backoff", 0)
         super().__init__(**kw)  # type: ignore[arg-type]
         # status to answer with, per route: True = through the proxy.
         self.answers = answers
@@ -132,19 +139,56 @@ def test_the_memory_is_per_host_and_not_shared() -> None:
     assert next(one.through_proxy for one in get.tried) is False
 
 
-def test_it_is_forgotten_when_the_run_ends() -> None:
-    # Deliberately per Fetcher and no longer. A portal that stops blocking us
-    # goes back to being free by itself on the next run, with nothing to
-    # reconfigure — and a config file that has to be edited when a block lifts
-    # is a config file that will be wrong.
+def test_a_block_outlives_the_run_that_learned_it() -> None:
+    # It used to be forgotten at the end of the run, on the reasoning that a
+    # portal which stops blocking us should go back to being free by itself.
+    # The reasoning survives — see the test below — but the price did not: the
+    # probe that re-learns it is a request whose answer has been the same since
+    # September, so every run paid one 403 to be told what the last one knew.
+    # On a five-minute timer that is twelve wasted requests an hour, from the
+    # very address the portal is already scoring. See `session.BLOCK_FOR`.
     first = Fake({False: 403, True: 200}, proxy=PROXY)
     first.get(ZOOPLA)
-    assert first.blocked
+    assert first.blocked == {"www.zoopla.co.uk"}
+    first.close()
+
+    later = Fake({False: 200, True: 200}, proxy=PROXY)
+    assert later.blocked == {"www.zoopla.co.uk"}, "a separate Fetcher, as a run is"
+    later.get(ZOOPLA)
+    # Straight to the proxy, and the saving is counted rather than implied.
+    assert [one.through_proxy for one in later.tried] == [True]
+    assert later.probes_skipped == 1
+
+
+def test_a_block_that_has_expired_is_probed_directly_again() -> None:
+    # The half of the old behaviour that had to be kept. Nothing has to be
+    # reconfigured when a portal stops refusing us; it only takes longer to
+    # notice than it did, and `BLOCK_FOR` is how long.
+    first = Fake({False: 403, True: 200}, proxy=PROXY)
+    first.get(ZOOPLA)
+    first.close()
+
+    aged = session.Session.load("default")
+    aged.blocked = {"www.zoopla.co.uk": time.time() - 1}
+    aged.dirty = True
+    aged.save()
 
     later = Fake({False: 200}, proxy=PROXY)
     assert later.blocked == set()
     later.get(ZOOPLA)
     assert later.proxied == 0
+
+
+def test_a_block_is_never_remembered_for_a_host_pinned_to_the_direct_route() -> None:
+    # SpareRoom is pinned in code, so there is nowhere to escalate it to.
+    # Remembering its refusal would not save a request — it would skip the only
+    # route that can ever read it, which is a reader that silently stops.
+    get = Fake({False: 403}, proxy=PROXY, direct_hosts=("spareroom.co.uk",))
+    with pytest.raises(Refused):
+        get.get("https://www.spareroom.co.uk/flatshare/?search_id=1")
+    get.close()
+
+    assert session.Session.load("default").blocked == {}
 
 
 def test_a_cdn_picture_is_never_proxied_however_blocked_we_are() -> None:
@@ -176,17 +220,34 @@ def test_with_no_proxy_a_refusal_stays_a_refusal() -> None:
     assert get.blocked == {"www.zoopla.co.uk"}
 
 
-def test_a_fingerprint_rule_is_answered_by_rotation_before_the_proxy() -> None:
+def test_the_free_route_gathers_evidence_rather_than_exhausting_the_list() -> None:
     # 403 can be either a fingerprint rule or an address rule, and rotating is
-    # free where the proxy is not. So every fingerprint is tried on this
-    # address first, and only then is the address the suspect.
+    # free where the proxy is not — so the cheap suspect still goes first. What
+    # changed is how much of the budget it may have. Two attempts can tell the
+    # two rules apart, because a rule that catches chrome150 will not catch
+    # firefox147; the third and fourth are three more requests from an address
+    # that has already said no twice, and the budget they spend is the budget
+    # the paid route needs to actually get the page. See DIRECT_PROBES.
     get = Fake({False: 403, True: 200}, proxy=PROXY,
-               targets=("chrome124", "safari17_0", "chrome123"))
+               targets=("chrome150", "firefox147", "chrome146"))
     get.get(ZOOPLA)
 
     direct = [one.target for one in get.tried if not one.through_proxy]
-    assert direct == ["chrome124", "safari17_0", "chrome123"]
+    assert direct == ["chrome150", "firefox147"]
     assert sum(1 for one in get.tried if one.through_proxy) == 1
+
+
+def test_one_url_costs_at_most_the_whole_budget_and_not_two_of_them() -> None:
+    # The ceiling nobody could read off the old constants. `EXITS = 3` named
+    # the paid ladder and `_order()` named the free one, so a page that failed
+    # everywhere cost four plus three — seven requests, which is not what three
+    # looks like. Now the number is the number.
+    get = Fake({False: 403, True: 403}, proxy=PROXY, attempts=5)
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert len(get.tried) == 5
+    assert [one.through_proxy for one in get.tried] == [False, False, True, True, True]
 
 
 def test_the_two_status_lists_say_what_they_mean() -> None:
@@ -220,6 +281,7 @@ class Rotating(Fetcher):
     """
 
     def __init__(self, serves_on: int, **kw: object) -> None:
+        kw.setdefault("backoff", 0)
         super().__init__(**kw)  # type: ignore[arg-type]
         self.serves_on = serves_on
         self.exits_tried: list[str] = []
@@ -264,8 +326,8 @@ def test_the_proxy_route_spends_its_budget_on_addresses_not_fingerprints() -> No
     # The inversion that this change is: the old ladder tried four
     # fingerprints against one address, which spent three paid 403s learning
     # what the first one had already said.
-    get = Rotating(99, proxy=STICKY, exits=3,
-                   targets=("chrome124", "safari17_0", "chrome123", "edge101"))
+    get = Rotating(99, proxy=STICKY, attempts=5,
+                   targets=("chrome150", "firefox147", "chrome146", "safari2601"))
     with pytest.raises(Refused) as raised:
         get.get(ZOOPLA)
 
@@ -303,14 +365,56 @@ def test_only_a_sticky_port_gets_the_range() -> None:
 
 
 def test_two_readers_through_one_proxy_do_not_share_one_exit() -> None:
-    # Three readers scrape through this proxy and two of them are Zoopla.
-    # Started from the one configured port they would share one sticky session
-    # and so one address, and a single burned exit would take all three out at
-    # once. The offset is the pid, so this asserts the mechanism rather than
-    # the value.
-    get = Fetcher(proxy=STICKY)
-    assert get._exit == os.getpid() % len(STICKY_PORTS)
-    assert get._proxy_now() != STICKY or len(STICKY_PORTS) == 1
+    # Three readers scrape through this proxy. Started from the one configured
+    # port they would share one sticky session and so one address, and a single
+    # burned exit would take all three out at once.
+    #
+    # This used to be done by offsetting into the range by pid, which separated
+    # the readers and — because a oneshot unit's pid is arbitrary — separated
+    # every *run* from the one before it as well. That second half was the bug:
+    # see `test_the_exit_that_worked_is_kept_for_the_next_run`. The name is what
+    # separates them now, so what is asserted is two names, not two pids.
+    one = Fetcher(proxy=STICKY, session="zoopla")
+    two = Fetcher(proxy=STICKY, session="openrent")
+
+    assert one.exit_port != two.exit_port
+    assert one._proxy_now() != two._proxy_now()
+    assert one._proxy_now() != STICKY or len(STICKY_PORTS) == 1
+
+
+def test_the_exit_that_worked_is_kept_for_the_next_run() -> None:
+    # The point of all of it. A run is a process, so "the rest of the run" was
+    # as far as the old stickiness reached: five minutes later the next run
+    # asked Zoopla from a residential address it had never used, with no
+    # cookies, which is the worst thing to present to a bot score. Measured
+    # 12 October 2026: a cold request gets four Set-Cookie headers, a warm one
+    # gets a refreshed `__cf_bm` and nothing else.
+    first = Rotating(2, proxy=STICKY, session="zoopla")
+    first.get(ZOOPLA)
+    served = first.exit_port
+    first.close()
+
+    # A separate Fetcher under the same name, which is what the next run is.
+    second = Rotating(1, proxy=STICKY, session="zoopla")
+    assert second.exit_port == served
+    second.get(ZOOPLA)
+    assert second.rotations == 0, "nothing to rotate away from: it still serves"
+
+
+def test_a_burned_exit_is_not_offered_again_next_run() -> None:
+    # The other half: the old rotation advanced an index, so on a 501-port
+    # range it could come back round to an address it had already been refused
+    # by. An hour on the cooldown list is what stops that. See session.COOLDOWN.
+    first = Rotating(99, proxy=STICKY, session="zoopla", attempts=4)
+    with pytest.raises(Refused):
+        first.get(ZOOPLA)
+    burned = {int(one.rpartition(":")[2]) for one in first.exits_tried}
+    first.close()
+
+    # Four in the budget, two of which the free route spends on evidence.
+    assert len(burned) == 2, "two paid attempts, two addresses"
+    later = Rotating(1, proxy=STICKY, session="zoopla")
+    assert later.exit_port not in burned
 
 
 def test_a_server_error_on_the_probe_does_not_blame_the_proxy() -> None:
@@ -421,6 +525,7 @@ class Breaking(Fetcher):
     def __init__(
         self, code: int, *, direct_breaks: bool = True, serves_on: int = 99, **kw: object
     ) -> None:
+        kw.setdefault("backoff", 0)
         super().__init__(**kw)  # type: ignore[arg-type]
         self.code = code
         self.direct_breaks = direct_breaks
@@ -462,7 +567,7 @@ def test_every_exit_breaking_is_a_refusal_and_not_a_crash(code: int) -> None:
     # `Refused` is what every call site handles: the district is counted,
     # described, left incomplete and read again next run. A `CurlError` here
     # is what killed the stage and took the other nineteen districts with it.
-    get = Breaking(code, direct_breaks=False, proxy=STICKY, exits=3)
+    get = Breaking(code, direct_breaks=False, proxy=STICKY, attempts=5)
     with pytest.raises(Refused) as raised:
         get.get(ZOOPLA)
 
@@ -505,7 +610,9 @@ def test_a_fingerprint_is_not_rotated_against_a_connection_that_never_opened() -
     # Four handshakes that never got as far as a handshake. The direct route's
     # ladder varies the fingerprint, and a tunnel or a timeout is no evidence
     # about one, so it stops at the first.
-    get = Breaking(60, serves_on=99, proxy=PROXY, exits=1)
+    # Two attempts in the whole budget, so what this pins is the direct
+    # ladder stopping dead rather than the paid ladder's length.
+    get = Breaking(60, serves_on=99, proxy=PROXY, attempts=2)
     with pytest.raises(Refused):
         get.get(ZOOPLA)
 
@@ -537,7 +644,7 @@ def test_three_dead_exits_are_still_three_requests_somebody_paid_for() -> None:
     # and a timed-out handshake both cost the proxy's traffic, and the stage
     # reports `requests` as what the run cost: reading zero after three
     # attempts is why yesterday's failures looked like no attempt at all.
-    get = Fetcher(jitter=0, exits=3, timeout=2.0)
+    get = Fetcher(jitter=0, attempts=3, timeout=2.0)
     with pytest.raises(Refused) as raised:
         # 127.0.0.1:1 refuses immediately, so this is fast and offline.
         get.get("http://127.0.0.1:1/to-rent/e14")
@@ -626,3 +733,254 @@ def test_a_lookup_with_no_proxy_configured_is_refused_once_and_not_twice() -> No
 
     assert get.routes == [False]
     assert "from this address" in str(raised.value)
+
+
+# ── the cookies, the referer and the diagnosis ─────────────────────────────
+#
+# These are what the five-minute `zoopla_london` timer needed and did not
+# have. Measured against the live London search page on 12 October 2026: it is
+# served by Cloudflare, it issues `__cf_bm` with an 1800 second expiry, and a
+# request presenting a jar gets one Set-Cookie where a cold one gets four. The
+# transport discarded every cookie it was ever given, so every run arrived as
+# a visitor the site had never seen.
+
+
+class Served(Fetcher):
+    """A Fetcher whose `_once` is real but whose `perform` is not.
+
+    `Fake` cannot be used for any of this: what is under test is the options
+    set on the libcurl handle and the headers parsed off it, which is exactly
+    the part `Fake` replaces. So the handle is real and only the transfer is
+    scripted.
+    """
+
+    def __init__(self, status: int = 200, headers: str = "", **kw: object) -> None:
+        kw.setdefault("backoff", 0)
+        kw.setdefault("jitter", 0)
+        super().__init__(**kw)  # type: ignore[arg-type]
+        self.status = status
+        self.raw = headers
+        self.sent: list[dict[str, object]] = []
+
+    def _once(self, url: str, target: str, accept: str, through_proxy: bool) -> Reply:
+        # Build the handle exactly as the real path does, then record what it
+        # was told rather than performing it.
+        # The handle is built for its side effects and not to be performed on:
+        # building it is what opens the cookie jar, which is the part of this
+        # path the tests below are about.
+        slot, _ = self._handle(target, through_proxy=through_proxy)
+        came_from = self._seen.get(host_of(url), "")
+        self.sent.append(
+            {"url": url, "slot": slot, "referer": came_from, "target": target}
+        )
+        self.requests += 1
+        if through_proxy:
+            self.proxied += 1
+        return Reply(
+            status=self.status,
+            body="ok",
+            wire=1,
+            impersonated=target,
+            headers={} if 200 <= self.status < 300 else _evidence(self.raw.encode()),
+        )
+
+
+def test_a_cookie_jar_is_opened_per_exit_address_and_survives_the_run(
+    isolated_state: pathlib.Path,
+) -> None:
+    # The file is what outlives the process, and the process is the run. Six
+    # consecutive runs fit inside one `__cf_bm`, which is only reachable if
+    # something on disk carries it between them.
+    get = Served(proxy=STICKY, session="zoopla")
+    get.get(ZOOPLA)
+    jar = get._memory.jar("direct", get._best or get.targets[0])
+
+    assert jar is not None
+    assert jar.parent == isolated_state / "cookies"
+    # libcurl writes the jar on handle cleanup, so closing is what persists it.
+    get.close()
+
+
+def test_cookies_can_be_turned_off_without_turning_the_proxy_off() -> None:
+    get = Served(proxy=STICKY, session="zoopla", cookies=False)
+    get.get(ZOOPLA)
+    get.close()
+
+    assert not list((isolated := get._memory).path.parent.glob("cookies/*"))  # type: ignore[union-attr]
+    assert isolated is get._memory
+
+
+def test_one_handle_per_target_and_route_so_no_two_share_a_jar() -> None:
+    # A slot is a target and an address. Two handles writing one jar file would
+    # mean the last one closed silently discarding the other's cookies.
+    get = Served(403, proxy=PROXY, session="zoopla")
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    slots = [str(one["slot"]) for one in get.sent]
+    assert any(one.endswith("@direct") for one in slots)
+    assert any(one.endswith("@823") for one in slots)
+    # One slot is one jar file. The claim is the mapping: two slots never land
+    # on the same path, so the last handle closed cannot discard what another
+    # one had been given.
+    jars = {
+        get._memory.jar(one.split("@")[1], one.split("@")[0]) for one in slots
+    }
+    assert len(jars) == len(set(slots))
+    get.close()
+
+
+def test_the_second_page_of_a_search_quotes_the_first() -> None:
+    # A browser paginating carries the previous page here; we carried nothing
+    # at all, on every request, which is a thing no navigation does.
+    get = Served(proxy=None, session="zoopla")
+    get.get(ZOOPLA)
+    get.get(ZOOPLA + "?pn=2")
+
+    assert [one["referer"] for one in get.sent] == ["", ZOOPLA]
+    get.close()
+
+
+def test_a_page_that_was_refused_never_becomes_a_referer() -> None:
+    # A browser has no referer for a page it never saw.
+    get = Served(403, proxy=None, session="zoopla")
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+    assert get._seen == {}
+    get.close()
+
+
+def test_a_referer_is_never_carried_across_hosts() -> None:
+    # The only cross-origin fetches here are images on a CDN, and what a
+    # browser sends there is a different decision from this one.
+    get = Served(proxy=None, session="zoopla")
+    get.get(ZOOPLA)
+    get.get(OPENRENT)
+
+    assert get.sent[-1]["referer"] == ""
+    get.close()
+
+
+CHALLENGED = (
+    "HTTP/2 403\r\n"
+    "server: cloudflare\r\n"
+    "cf-mitigated: challenge\r\n"
+    "cf-ray: a4960ddd686b3692-LHR\r\n"
+    "content-type: text/html\r\n"
+)
+
+
+def test_a_cloudflare_challenge_is_told_apart_from_a_cloudflare_block() -> None:
+    # The whole reason the headers are kept. These two are both 403 and they
+    # have opposite answers: a challenge is something a browser gets through,
+    # so it is the reading under which a headless Chrome is worth its traffic;
+    # a block is an address to stop using, and no browser helps with that.
+    challenged = Served(403, CHALLENGED, proxy=None, session="zoopla")
+    with pytest.raises(Refused) as raised:
+        challenged.get(ZOOPLA)
+
+    assert "cf-mitigated=challenge" in str(raised.value)
+    assert "cf-ray=a4960ddd686b3692-LHR" in str(raised.value)
+    # And in the counters, where a week of them can be counted rather than
+    # read one log line at a time.
+    assert any("cf-mitigated=challenge" in one for one in challenged.refusals)
+    challenged.close()
+
+    blocked = Served(403, "HTTP/2 403\r\nserver: cloudflare\r\n", proxy=None)
+    with pytest.raises(Refused) as plain:
+        blocked.get(ZOOPLA)
+
+    assert "cf-mitigated" not in str(plain.value)
+    assert "server=cloudflare" in str(plain.value)
+    blocked.close()
+
+
+def test_a_refusal_names_the_exit_address_it_came_from() -> None:
+    # Without this the counters say a 403 happened and nothing about where,
+    # which is the one fact that decides whether to rotate or to stop.
+    get = Served(403, CHALLENGED, proxy=STICKY, session="zoopla", attempts=3)
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    paid = [one for one in get.refusals if "exit=" in one]
+    assert paid, get.refusals
+    assert all("direct" not in one for one in paid)
+    get.close()
+
+
+def test_a_served_page_carries_no_headers_to_parse() -> None:
+    # 60KB of headers a run, parsed to be thrown away, would be a cost paid on
+    # the path that is working.
+    get = Served(200, CHALLENGED, proxy=None)
+    assert get.get(ZOOPLA).headers == {}
+    get.close()
+
+
+def test_the_refusal_log_is_capped_rather_than_unbounded() -> None:
+    # It ends up in a jsonb column, and twenty pages at five attempts each
+    # would put a hundred lines in one counter.
+    get = Served(403, CHALLENGED, proxy=None, session="zoopla")
+    for page in range(KEPT_REFUSALS + 5):
+        with pytest.raises(Refused):
+            get.get(f"{ZOOPLA}?pn={page}")
+
+    assert len(get.refusals) == KEPT_REFUSALS
+    get.close()
+
+
+# ── the backoff ────────────────────────────────────────────────────────────
+
+
+def test_attempts_are_spaced_rather_than_fired_as_one_burst(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cloudflare scores arrival, so three refused requests 200ms apart read as
+    # one burst and the same three over seven seconds read as a retry. The
+    # whole ladder is bounded: 0.5 doubling to a 4.0 cap.
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    get = Served(403, proxy=PROXY, session="zoopla", attempts=5, jitter=0)
+    get.backoff = 0.5
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    # Two direct attempts then three paid ones, and the wait counts from the
+    # start of each route rather than across both: moving to the proxy is a
+    # different address on a different route, not a retry against the peer
+    # that just refused us, so there is nothing there to back off from.
+    assert slept == [0.5, 0.5, 1.0]
+    assert all(one <= BACKOFF_CAP for one in slept)
+    get.close()
+
+
+def test_a_retry_after_the_portal_asks_for_is_honoured_over_our_own_guess(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    asked = "HTTP/2 429\r\nserver: cloudflare\r\nretry-after: 3\r\n"
+    get = Served(429, asked, proxy=None, session="zoopla", attempts=2, jitter=0)
+    get.backoff = 0.5
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert slept == [3.0], "theirs is a number, ours is a guess"
+    get.close()
+
+
+def test_a_retry_after_longer_than_a_run_should_wait_ends_the_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A systemd oneshot asleep for ten minutes is a timer that has already
+    # fired twice behind it. Coming back next run is the right answer.
+    slept: list[float] = []
+    monkeypatch.setattr(time, "sleep", slept.append)
+    asked = f"HTTP/2 429\r\nretry-after: {RETRY_AFTER_CAP + 600}\r\n"
+    get = Served(429, asked, proxy=None, session="zoopla", attempts=5, jitter=0)
+    get.backoff = 0.5
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert slept == []
+    assert get.requests == 1
+    get.close()

@@ -556,6 +556,73 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
  ORDER BY r.started_at DESC;
 
 
+-- ═════════════════ 3б. Почему отказали: challenge или блок ══════════════
+--
+-- Главный запрос, когда zoopla_london деградирует. Zoopla стоит за Cloudflare,
+-- и 403 от неё бывает двух совершенно разных видов — а лечатся они
+-- противоположно:
+--
+--   cf-mitigated=challenge  Cloudflare отдал интерактивный челлендж. Браузер
+--                           его проходит, curl — нет. ЭТО и есть тот случай,
+--                           когда headless Chrome окупает свой трафик.
+--   нет cf-mitigated вовсе   репутация exit-адреса. Браузер здесь не помогает
+--                           ничем: нужен другой адрес.
+--   retry-after=N            портал сам назвал паузу; до 10 секунд воркер её
+--                           соблюдает, больше — переносит на следующий прогон.
+--
+-- До 12 октября 2026 различить их было нельзя: в логе был только статус.
+-- Теперь каждая отказавшая попытка пишется в `refusal_detail` как строка
+--   «<статус> <exit=порт|direct> <отпечаток> <заголовки>».
+SELECT to_char(r.started_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI') AS run,
+       r.status,
+       (s.counters->>'exit_port')::int                      AS exit_port,
+       (s.counters->>'exit_rotations')::int                 AS rotations,
+       (s.counters->>'probes_skipped')::int                 AS probes_saved,
+       jsonb_array_length(s.counters->'refusal_detail')     AS refusals,
+       s.counters->'refusal_detail'                         AS why
+  FROM job_runs r
+  JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
+ WHERE r.job = 'zoopla_london'
+   AND r.started_at > now() - interval '24 hours'
+   AND s.counters ? 'refusal_detail'
+ ORDER BY r.started_at DESC;
+
+
+-- Та же картина одной цифрой: чего именно больше за сутки. Это и есть ответ
+-- на «нужен ли нам Playwright» — если challenge преобладает, да; если
+-- преобладают блоки без cf-mitigated, браузер не поможет и дело в адресах.
+SELECT date_trunc('hour', r.started_at AT TIME ZONE 'Europe/London') AS hour,
+       count(*) FILTER (WHERE one LIKE '%cf-mitigated=challenge%') AS challenge,
+       count(*) FILTER (WHERE one LIKE '%403%'
+                          AND one NOT LIKE '%cf-mitigated%')       AS blocked,
+       count(*) FILTER (WHERE one LIKE '%429%')                    AS rate_limited,
+       count(*) FILTER (WHERE one LIKE '- %')                      AS no_answer,
+       count(*)                                                     AS total
+  FROM job_runs r
+  JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
+  CROSS JOIN LATERAL jsonb_array_elements_text(s.counters->'refusal_detail') AS one
+ WHERE r.job = 'zoopla_london'
+   AND r.started_at > now() - interval '24 hours'
+ GROUP BY 1 ORDER BY 1 DESC;
+
+
+-- Работает ли вообще sticky-сессия. `exit_port` обязан СТОЯТЬ на месте от
+-- прогона к прогону, пока портал отдаёт: в этом весь смысл. Если он меняется
+-- каждый прогон при rotations = 0 — значит память не доживает до следующего
+-- процесса, то есть сломан StateDirectory, и порталы тут ни при чём.
+SELECT (s.counters->>'exit_port')::int                       AS exit_port,
+       count(*)                                              AS runs,
+       count(*) FILTER (WHERE r.status = 'ok')               AS ok,
+       min(r.started_at AT TIME ZONE 'Europe/London')::time(0) AS first_seen,
+       max(r.started_at AT TIME ZONE 'Europe/London')::time(0) AS last_seen
+  FROM job_runs r
+  JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
+ WHERE r.job = 'zoopla_london'
+   AND r.started_at > now() - interval '24 hours'
+   AND s.counters ? 'exit_port'
+ GROUP BY 1 ORDER BY first_seen;
+
+
 -- ═════════════════ 4. Сводка по машинам и читателям ══════════════════════
 --
 -- Rightmove отдаёт серверу напрямую. Zoopla отвечает адресу сервера 403, а

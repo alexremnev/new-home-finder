@@ -77,15 +77,15 @@ hour later settles it, and nothing below depends on the answer.
 
 Spread the traffic and be able to ask again:
 
-  * The exit is no longer the configured port. A run starts at an offset into
-    the sticky range, so consecutive runs of one reader and concurrent runs of
-    two do not share an address — which takes the per-address request rate
-    from twelve an hour to roughly nothing, and that alone is most of the fix
-    if the reading above is right.
-  * A refusal through the proxy is retried on a different exit, up to `EXITS`
-    of them, and the fingerprint is left alone. Inverting the old ladder —
-    four fingerprints against one address — costs nothing extra: it spent
-    three paid 403s per failing run learning what the first one had said.
+  * The exit is no longer the configured port. It is drawn from the sticky
+    range per *reader*, remembered across runs, and kept for as long as it is
+    served. See `worker.sources.session`, and read the next section before
+    changing it: this was an offset by pid for three days in October, which
+    spread the traffic per *run* instead and was worse than what it replaced.
+  * A refusal through the proxy is retried on a different exit, within the
+    `ATTEMPTS` budget, and the fingerprint is left alone. Inverting the old
+    ladder — four fingerprints against one address — costs nothing extra: it
+    spent three paid 403s per failing run learning what the first one said.
   * So is a request that got no answer at all — a tunnel the proxy would not
     open, a certificate it could not verify, a peer that never replied. Those
     arrive as an exception rather than a status and so went past the rotation
@@ -99,6 +99,50 @@ dropping every handle so the next request opens a new tunnel:
     which is exactly what the right-hand column above shows.
   * the rotating port (823) assigns per connection, so the fresh tunnel is by
     itself the new address. Connection reuse is what used to defeat it.
+
+── what none of the above was about, and what it cost ─────────────────────
+
+Everything above treats a refusal as a question about *where the request came
+from*. Measured on 12 October 2026, after a morning in which `zoopla_london`
+recorded no served run between 10:00 and 12:00, two things turned out to be
+true that nothing above accounts for.
+
+**Zoopla is behind Cloudflare Bot Management, and this module threw its token
+away.** The London search page answers with `server: cloudflare`, a `cf-ray`,
+and four Set-Cookie headers — `__cf_bm`, `_cfuvid`, `ajs_anonymous_id`,
+`_needs_refresh`. `__cf_bm` is the bot-management token and it lives 1800
+seconds. There was no cookie handling anywhere in this module, so every single
+request was a first-ever visit.
+
+How much that matters is measurable rather than arguable. Through one jar file
+and two separate libcurl handles:
+
+    cold, no jar          4 x Set-Cookie
+    warm, jar on disk     1 x Set-Cookie   (a refreshed __cf_bm, nothing else)
+
+Three successive processes sharing a jar kept one `ajs_anonymous_id` and one
+`_cfuvid` throughout. So the jar is the difference between arriving as a
+visitor the site has seen and arriving as one it has not, and a 30-minute
+token against a 5-minute timer means one warm session spans six runs — but
+only if something outlives the process, which on a `Type=oneshot` unit nothing
+did. Hence `session.Session` and `StateDirectory=` in the unit.
+
+**And the impersonation targets had gone stale.** The list was `chrome124,
+safari17_0, chrome123, edge101`: Chrome 124 is April 2024 and Edge 101 is April
+2022, so in October 2026 every request claimed to be a browser two to four
+years old. Cloudflare reads that directly. The installed curl_cffi (0.16.3)
+had chrome150, chrome146, firefox147 and safari2601 available the whole time.
+
+The two compound, which is the part worth keeping hold of: a brand-new
+residential address, with no cookies, claiming to be a two-year-old Chrome, is
+three bad signals arriving together, and the pid offset was *adding* the first
+one every five minutes.
+
+What is NOT established: how much each of the three contributed. From a home
+connection all of chrome124, chrome150 and firefox147 are served 200, so none
+of this can be reproduced off the server — the way to apportion it is the
+counters, and `refusal_detail` is the one that can finally tell a Cloudflare
+challenge from a Cloudflare block. See EVIDENCE.
 
 ── the byte count ────────────────────────────────────────────────────────
 
@@ -136,10 +180,52 @@ from dataclasses import dataclass, field
 
 from curl_cffi import Curl, CurlECode, CurlError, CurlInfo, CurlOpt
 
-# Served on 26 September 2026, in preference order. Rotated on a refusal rather
+# Aliased because `Fetcher.session` is the *name* of one of these and the two
+# reading alike in the same method would be the kind of confusion that gets
+# one of them silently right.
+from worker.sources import session as session_memory
+
+# Which browser to look like, in preference order. Rotated on a refusal rather
 # than hard-coded to one, because a fingerprint that works today is a
 # fingerprint somebody will add to a rule tomorrow.
-IMPERSONATE = ("chrome124", "safari17_0", "chrome123", "edge101")
+#
+# ── why these four and not the four that were here ──────────────────────────
+#
+# The old list was `chrome124, safari17_0, chrome123, edge101`, chosen on
+# 26 September 2026 because those were the ones measured to be served. What it
+# missed is that a fingerprint does not only have to be *accepted* — it has to
+# be *current*, and those were not. Chrome 124 shipped in April 2024 and
+# Edge 101 in April 2022, so by October 2026 the list was claiming to be a
+# browser two to four years old on every request. Cloudflare reads the age of
+# a user agent directly; it is the cheapest signal it has.
+#
+# Checked against the installed curl_cffi on 12 October 2026 — version 0.16.3,
+# whose targets include chrome150, chrome146, chrome145, firefox147 and
+# safari2601 — so nothing here needed a dependency bump, only a list that had
+# stopped being maintained.
+#
+# ── one UA, one TLS fingerprint, one decision ───────────────────────────────
+#
+# It is worth being explicit that this tuple *is* the user-agent rotation, and
+# that there is deliberately no separate User-Agent setting anywhere in this
+# module. `Curl.impersonate(target)` moves the whole coherent set together —
+# measured on chrome150, what goes out is:
+#
+#     user-agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) ...
+#                 Chrome/150.0.0.0 Safari/537.36
+#     sec-ch-ua: "Not;A=Brand";v="8", "Chromium";v="150", "Google Chrome";v="150"
+#     sec-ch-ua-platform: "macOS"        + the full sec-fetch-* set
+#
+# plus the JA3/JA4 TLS fingerprint and the HTTP/2 SETTINGS frame to match.
+# Setting a User-Agent header by hand would move one of those and leave the
+# other eleven where they were, and a UA that disagrees with the TLS handshake
+# is a stronger signal than a UA that is merely old. So the rotation is of the
+# target, never of the header.
+#
+# Two engines rather than four Chromiums, for the same reason the list is
+# rotated at all: if Zoopla adds a rule keyed on Chrome's fingerprint,
+# `firefox147` is the attempt that tells us so.
+IMPERSONATE = ("chrome150", "firefox147", "chrome146", "safari2601")
 
 # Long enough for a slow portal, short enough that a run cannot stall behind
 # one page.
@@ -301,21 +387,92 @@ BROKEN = frozenset(
 # assigns an address per connection, which a fresh tunnel already gets.
 STICKY_PORTS = range(10000, 10501)
 
-# Exit addresses to try for one url before calling it refused.
+# Attempts for one url before calling it refused, both routes together.
 #
-# Three is a judgement and not a calculation, because the thing it is hedging
-# against is not measured: the refusals in the module note all came from one
-# address, so there is no per-exit refusal rate to put a number on, and
-# whatever it is will be lower once a reader is no longer making twelve
-# requests an hour from one house.
+# One budget rather than two, which is the change: the old code allowed
+# `self._order()` fingerprints on the direct route and then `EXITS` exit
+# addresses on the paid one, so the real ceiling was four plus three — seven
+# requests for one page, and nobody reading either constant would have said
+# so. Now the number here is the number of requests, and the split between the
+# routes comes out of it.
 #
-# What is known is the shape of the cost. Each extra exit is one CONNECT, one
-# handshake and one paid 403, on a request already lost — and the old ladder
-# spent four of those on fingerprints, so three is still cheaper than what it
-# replaces. Should the counter in the stage show rotations routinely reaching
-# three and still failing, the answer is not a fourth: it is that the exit is
-# not the variable, and `SCRAPE_IMPERSONATE` is the next thing to move.
-EXITS = 3
+# Five is a judgement, and what it is hedging against is still not measured:
+# the refusals in the module note all came from one address, so there is no
+# per-exit refusal rate to put a number on. What is known is the shape of the
+# cost — each extra attempt is one CONNECT, one TLS handshake and one paid 403
+# on a request already lost. Should `exit_rotations` routinely reach the
+# ceiling and the run still fail, the answer is not a sixth attempt: it is
+# that the exit address is not the variable, and `SCRAPE_IMPERSONATE` is the
+# next thing to move.
+ATTEMPTS = 5
+
+# How many of `ATTEMPTS` may be spent on the free route when a proxy exists.
+#
+# Two, and it is evidence-gathering rather than hope. A 403 from this machine's
+# own address could be a fingerprint rule or an address rule, and one attempt
+# cannot tell them apart; two under different engines can, because a
+# fingerprint rule that catches `chrome150` will not catch `firefox147`. Past
+# two it stops being evidence and starts being three more requests from an
+# address that has already said no twice.
+#
+# With no proxy configured this does not apply and the whole budget goes on the
+# direct route: there is nowhere to save it for.
+DIRECT_PROBES = 2
+
+# Seconds to wait before the first retry, doubling after that up to the cap.
+#
+# The old code rotated instantly. For a connection that never opened that is
+# right — a dead tunnel is dead now — but for a *status* it is the one thing
+# every rate-limit guide agrees on, and the reason is mechanical rather than
+# mystical: Cloudflare scores request arrival, so three refused requests
+# 200ms apart read as one burst, and the same three spread over seven seconds
+# read as somebody retrying.
+#
+# 0.5s doubling to a 4s cap is at most 7.5s across a fully failing ladder of
+# five. Measured against the budgets this has to fit inside: `zoopla_london`
+# reads one or two pages a run against a five-minute timer and systemd's
+# `TimeoutStartSec=600`, and a district sweep is stopped after three refused
+# districts by `sweep.REFUSALS_ALLOWED`, which bounds the whole run's waiting
+# at about twenty seconds. Both are comfortable.
+#
+# Not applied in `head`: that has no ladder to space out — one direct attempt
+# and one through the proxy — and it is the call `openrent` makes hundreds of
+# times in a run, where half a second each would be minutes of a backlog run
+# spent asleep for no evidence at all.
+BACKOFF = 0.5
+BACKOFF_CAP = 4.0
+
+# The longest `Retry-After` worth honouring, in seconds.
+#
+# A portal that asks for a short wait is telling us something useful and it is
+# cheaper to obey than to be refused again. One that asks for ten minutes is
+# telling us to come back in a later run, and sleeping through it would hold a
+# systemd oneshot open past its timer — so past this it is treated as a
+# refusal and the url is left for next time.
+RETRY_AFTER_CAP = 10.0
+
+# Response headers kept from a refusal, lowercased.
+#
+# This is the whole of P1-5: without it a 403 is indistinguishable from a 403,
+# and those are two different problems with two different answers.
+#
+#   * `cf-mitigated: challenge` means Cloudflare served an interactive
+#     challenge rather than a block. A browser would get through it, so that
+#     is the reading under which a headless Chrome is worth its 40x traffic.
+#   * a 403 with no `cf-mitigated` at all is the exit address being scored
+#     badly, and the answer to that is a different address, never a browser.
+#   * `cf-ray` identifies the edge node and the request, which is the only
+#     thing Cloudflare support will accept as a reference.
+#   * `server` says who refused us, so the day Zoopla moves off Cloudflare
+#     this stops silently meaning nothing.
+#   * `retry-after` is read rather than guessed at. See RETRY_AFTER_CAP.
+EVIDENCE = ("cf-mitigated", "cf-ray", "server", "retry-after")
+
+# Refusals described in the stage counters, most recent last. Capped because
+# this ends up in a jsonb column: five attempts a page against twenty pages
+# would otherwise put a hundred lines in one counter, and the first ten are
+# enough to tell a challenge from a block.
+KEPT_REFUSALS = 10
 
 
 def host_of(url: str) -> str:
@@ -408,6 +565,28 @@ def _wire(curl: Curl) -> int:
         return 0
 
 
+def _evidence(raw: bytes) -> dict[str, str]:
+    """The few response headers worth keeping, out of the raw block.
+
+    Parsed here rather than with an HTTP library because there is no HTTP
+    library in this process — the whole point of `curl_cffi` is that libcurl
+    does the protocol — and because what is wanted is four names out of fifty.
+
+    `latin1` rather than utf-8: header bytes are latin1 by RFC 7230 and a
+    `cf-ray` that failed to decode would lose the diagnosis to an exception
+    raised while explaining a refusal. The LAST occurrence of a name wins,
+    which is what matters after a redirect: the headers of the reply that was
+    actually returned come last in the block.
+    """
+
+    found: dict[str, str] = {}
+    for line in raw.decode("latin1").splitlines():
+        name, sep, value = line.partition(":")
+        if sep and name.strip().lower() in EVIDENCE:
+            found[name.strip().lower()] = value.strip()
+    return found
+
+
 def _broke(exc: CurlError) -> str:
     """Why there was no answer, in a sentence. Re-raises anything that is ours.
 
@@ -445,6 +624,42 @@ class Reply:
     wire: int
     #: Which impersonation target was served. Useful when one starts failing.
     impersonated: str
+    #: The few response headers worth keeping. See EVIDENCE. Empty on a reply
+    #: that carried none of them, which is every served page.
+    headers: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def retry_after(self) -> float:
+        """What the portal asked us to wait, in seconds. Zero when it did not.
+
+        Only the numeric form is read. `Retry-After` also allows an HTTP date,
+        which no portal here has ever sent, and parsing one to discover we
+        should wait past `RETRY_AFTER_CAP` anyway would be work for nothing.
+        """
+
+        try:
+            return max(0.0, float(self.headers.get("retry-after", "")))
+        except ValueError:
+            return 0.0
+
+    @property
+    def said(self) -> str:
+        """Just the headers worth quoting, as `name=value` pairs.
+
+        In EVIDENCE's order rather than the wire's, so two refusals from
+        different edges read alike and the eye can run down a column of them.
+        """
+
+        return " ".join(
+            f"{name}={self.headers[name]}" for name in EVIDENCE
+            if name in self.headers
+        )
+
+    def evidence(self, *, exit_port: int | None) -> str:
+        """One line about a refusal, for the stage counters. See EVIDENCE."""
+
+        where = f"exit={exit_port}" if exit_port else "direct"
+        return f"{self.status} {where} {self.impersonated} {self.said}".strip()
 
 
 class Refused(Exception):
@@ -480,12 +695,25 @@ class Fetcher:
     #: what a test wants and nothing in production does.
     jitter: float = JITTER
     targets: tuple[str, ...] = IMPERSONATE
-    #: Exit addresses to try for one url before calling it refused. One turns
-    #: the rotation off without turning the proxy off.
-    exits: int = EXITS
+    #: Attempts for one url before calling it refused, both routes together.
+    #: One turns every ladder off without turning the proxy off.
+    attempts: int = ATTEMPTS
+    #: How many of them may go on the free route when a proxy exists.
+    direct_probes: int = DIRECT_PROBES
     #: Ports to rotate through, one exit address each. Derived from `proxy` in
     #: `__post_init__` when it is left empty, which is every caller but a test.
     ports: tuple[int, ...] = ()
+    #: Which reader this is, for the cross-run memory. One name is one sticky
+    #: exit address and one set of cookie jars, so two readers under one name
+    #: would share an address — which is the thing the pid offset this
+    #: replaces was written to prevent. `sweep.collect` passes the portal key.
+    session: str = "default"
+    #: Seconds to wait before the first retry, doubling after. Zero turns the
+    #: backoff off, which is what a test wants.
+    backoff: float = BACKOFF
+    #: False keeps every cookie in memory for the life of this Fetcher, which
+    #: is what a test wants and what a run with nowhere writable gets anyway.
+    cookies: bool = True
 
     #: Bytes across the wire, all requests. Compressed, as billed.
     wire: int = 0
@@ -499,11 +727,25 @@ class Fetcher:
     #: reader that rotates every run is a pool going bad, which is a different
     #: piece of news from a run that failed.
     rotations: int = 0
+    #: Refused attempts, described. One line each, see `Reply.evidence`.
+    #: `sweep` writes these to the stage counters, and they are the only thing
+    #: that can tell a Cloudflare challenge from a Cloudflare block.
+    refusals: list[str] = field(default_factory=list)
+    #: Direct probes not made because an earlier run had already learned the
+    #: host refuses this address. One saved request each. See `_memory`.
+    probes_skipped: int = 0
     #: The target that last worked, tried first next time.
     _best: str = field(default="", init=False)
-    #: Which of `ports` is in use. Advanced by `_rotate` and left there: an
-    #: exit that was served is the one the rest of the run should keep using.
-    _exit: int = field(default=0, init=False)
+    #: The exit port in use, or None with no sticky range. Chosen by the
+    #: cross-run memory rather than from this process's pid, which is the
+    #: whole of P0-3: an exit that was served is one the *next* run should
+    #: keep using, not one this run should forget.
+    _port: int | None = field(default=None, init=False)
+    #: What survives the process. See worker.sources.session.
+    _memory: session_memory.Session = field(init=False, repr=False)
+    #: Host → the last url on it that was served, sent as `Referer` on the
+    #: next request to the same host. See `_once`.
+    _seen: dict[str, str] = field(default_factory=dict, init=False, repr=False)
     #: Hosts that refused this address, learned during this run. See `get`.
     #: A set rather than a setting: which portals block a datacentre changes
     #: without notice, and a config file that has to be edited when it does is
@@ -518,29 +760,54 @@ class Fetcher:
     #: this is about latency and about not knocking on the door sixty times a
     #: run, not about the bill.
     #:
-    #: Keyed by target because `impersonate` configures the handle itself and
-    #: a reset would undo it. In practice a run uses one: `_best` is sticky.
+    #: Keyed by target *and route*, because both configure the handle and
+    #: neither can be reset per request: `impersonate` sets the fingerprint
+    #: once, and the cookie jar is a file this handle alone may write. See
+    #: `_slot`. In practice a run uses one or two: `_best` is sticky and a
+    #: refused host goes straight to the proxy.
     _handles: dict[str, Curl] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         if not self.ports:
             self.ports = exit_ports(self.proxy)
-        # Where in the range this run starts, and deliberately not the port
-        # that was configured.
+        # ── what replaced the pid offset, and why ──────────────────────────
         #
-        # Three readers scrape through this proxy and two of them are Zoopla.
-        # Started from one configured port they would share one sticky session
-        # and therefore one address — so a single burned exit takes all three
-        # out at once, and the whole day's traffic arrives at the portal from
-        # one house. Offsetting by pid makes them independent for free: it
-        # differs between concurrent processes and between runs, and needs no
-        # RNG and no state.
-        if self.ports:
-            self._exit = os.getpid() % len(self.ports)
+        # This used to be `os.getpid() % len(self.ports)`. The reasoning was
+        # sound as far as it went: one configured sticky port meant every
+        # proxied request this server ever made went out from one address, so
+        # the load had to be spread. What it got wrong was the axis. The pid
+        # of a `Type=oneshot` unit is arbitrary, so spreading by pid spread it
+        # *per run* — a fresh residential address every five minutes, with no
+        # cookies and no history, which is the single worst thing to present to
+        # a bot score. Measured on 12 October 2026: Zoopla answers a cold
+        # request with four Set-Cookie headers and a warm one with one.
+        #
+        # So the spread moved from per-run to per-reader. The memory is named,
+        # one file per reader, which keeps the three readers on three
+        # addresses — the property the offset existed for — while letting each
+        # one hold its own address across runs for as long as it is served.
+        self._memory = session_memory.Session.load(self.session)
+        self._port = self._memory.pick(self.ports)
+        # Hosts an earlier run found refuse this machine's own address. Seeded
+        # rather than re-learned: the probe that learns it is a request whose
+        # answer has been the same since September. A host pinned to the direct
+        # route is excluded — there is nowhere to escalate it to, so skipping
+        # its probe would mean never reading it at all.
+        self.blocked |= {
+            one for one in self._memory.blocked
+            if not self.never_proxy(f"https://{one}/")
+        }
+        self._memory.prune_jars()
 
     @classmethod
-    def from_env(cls) -> Fetcher:
-        """Configured from the environment. No proxy set means no proxy used."""
+    def from_env(cls, *, session: str = "default") -> Fetcher:
+        """Configured from the environment. No proxy set means no proxy used.
+
+        `session` names the cross-run memory and comes from the caller rather
+        than the environment: it is a property of which reader is running, not
+        of how the box is configured, and getting it from `SCRAPE_SESSION`
+        would mean every reader on one box sharing one exit address.
+        """
 
         raw = (os.environ.get("SCRAPE_PROXY") or "").strip()
         targets = tuple(
@@ -553,14 +820,34 @@ class Fetcher:
             for one in (os.environ.get("SCRAPE_DIRECT_HOSTS") or "").split(",")
             if one.strip()
         )
-        exits = (os.environ.get("SCRAPE_EXITS") or "").strip()
+        # `SCRAPE_EXITS` is read as a fallback and not documented any more.
+        # It named the paid route's ladder; `SCRAPE_ATTEMPTS` names the whole
+        # budget, which is a smaller number for the same behaviour. Honoured
+        # so that a box with the old variable set does not silently change
+        # behaviour on deploy — but it is the total now, which is the point.
+        budget = (
+            os.environ.get("SCRAPE_ATTEMPTS") or os.environ.get("SCRAPE_EXITS") or ""
+        ).strip()
         return cls(
             proxy=raw or None,
             targets=targets or IMPERSONATE,
             direct_hosts=direct,
-            exits=int(exits) if exits.isdigit() else EXITS,
+            attempts=int(budget) if budget.isdigit() and int(budget) else ATTEMPTS,
             jitter=_seconds(os.environ.get("SCRAPE_JITTER"), JITTER),
+            session=session,
         )
+
+    @property
+    def exit_port(self) -> int | None:
+        """Which exit address the run is on, for the stage counters.
+
+        Read-only and public where `_port` is neither: `sweep` has to be able
+        to report it — two runs in a row on one port is the mechanism working
+        and a new port every run is it failing — but nothing outside this
+        module may choose it. That is `session.Session`'s job.
+        """
+
+        return self._port
 
     def never_proxy(self, url: str) -> bool:
         """Hosts that go direct whatever happens. See `direct_hosts`."""
@@ -575,12 +862,99 @@ class Fetcher:
             one for one in self.targets if one != self._best
         ]
 
+    def _ladder(self, room: int, through_proxy: bool, *, escalates: bool) -> list[str]:
+        """What to try on this route, within what is left of the budget.
+
+        The two routes vary different things, and they always have — what is
+        new is that they now share one budget rather than having two.
+
+        Through the proxy, the exit address: by then the fingerprint has been
+        cleared on the direct route, and the measured evidence is that a
+        refused exit stays refused while a different one serves the identical
+        request minutes later.
+
+        Direct, the fingerprint: rotating it is free, and a 403 from this
+        address could be either rule, so the cheap suspect goes first. Capped
+        at `direct_probes` when there is a paid route to save the budget for —
+        here it is evidence, there it is the page.
+        """
+
+        if through_proxy:
+            return [self._best or self.targets[0]] * room
+        cap = min(room, max(1, self.direct_probes)) if escalates else room
+        return self._order()[:cap]
+
+    def _backoff(self, nth: int, asked: float) -> None:
+        """Wait before asking again. See BACKOFF and RETRY_AFTER_CAP.
+
+        `asked` is what the portal's own `Retry-After` named, and it wins when
+        it is longer: a wait we chose is a guess and a wait they named is not.
+        """
+
+        grown = (
+            min(self.backoff * 2 ** (nth - 1), BACKOFF_CAP) if self.backoff > 0 else 0.0
+        )
+        delay = max(grown, min(asked, RETRY_AFTER_CAP))
+        if delay > 0:
+            time.sleep(delay)
+
+    def _note(self, said: str) -> None:
+        """Keep a line about one refused attempt. See KEPT_REFUSALS.
+
+        The *first* few rather than the last few. A run that fails is usually
+        explained by how it started failing — the first refusal names the exit
+        address and the fingerprint that were in play before any rotation
+        muddied them — and the tenth is the ninth again.
+        """
+
+        if len(self.refusals) < KEPT_REFUSALS:
+            self.refusals.append(said)
+
+    def _served(self, host: str, url: str, *, through_proxy: bool) -> None:
+        """Record a page that actually arrived.
+
+        Two things follow from a 2xx and nothing follows from anything else.
+
+        The referer chain: the next request to this host carries this url, the
+        way a browser carries the page a link was on. Only a page that *was*
+        served, because a browser has no referer for a page it never saw.
+
+        And, on the direct route, that this host has stopped refusing us —
+        forgotten in the cross-run memory too, so the next run goes back to
+        reading it for free rather than paying the proxy out of habit.
+        """
+
+        self._seen[host] = url
+        if not through_proxy and host in self.blocked:
+            self.blocked.discard(host)
+            self._memory.forget(host)
+            self._memory.save()
+
     def _proxy_now(self) -> str:
         """The proxy url to use, on the exit address currently in play."""
 
-        if not self.proxy or not self.ports:
+        if not self.proxy or self._port is None:
             return self.proxy or ""
-        return _with_port(self.proxy, self.ports[self._exit % len(self.ports)])
+        return _with_port(self.proxy, self._port)
+
+    def _slot(self, target: str, through_proxy: bool) -> str:
+        """Which handle serves this target on the route in play.
+
+        Target and address both, because a handle carries a cookie jar and a
+        jar belongs to exactly one of each — see `session.Session.jar` for why
+        a cookie minted on one exit under one user agent must not be presented
+        on another. One slot is one jar file, so no two handles can write the
+        same file and lose each other's cookies when they close.
+        """
+
+        return f"{target}@{self._address(through_proxy)}"
+
+    def _address(self, through_proxy: bool) -> str:
+        """What the request will go out from, named for a filename."""
+
+        if not through_proxy:
+            return "direct"
+        return str(self._port) if self._port is not None else "proxy"
 
     def _rotate(self) -> None:
         """Give up on this exit address and move to another one.
@@ -606,7 +980,17 @@ class Fetcher:
         """
 
         self.rotations += 1
-        self._exit += 1
+        # Through the memory rather than `self._exit += 1`, and the difference
+        # is not cosmetic: the old walk advanced an index, so on a 501-port
+        # range it could — and over a day would — come back round to an
+        # address it had already been refused by. `burn` puts the abandoned
+        # port on cooldown for an hour and draws one that is not on it.
+        self._port = self._memory.burn(self.ports)
+        # Written out now rather than at the end of the run, because the thing
+        # that most wants to know this exit is bad is the *next* run, and a
+        # run that is rotating is a run that may be about to be killed by its
+        # own timeout.
+        self._memory.save()
         self.close()
 
     def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
@@ -657,9 +1041,14 @@ class Fetcher:
         if self.never_proxy(url) or not self.proxy:
             routes = [False]
         elif host in self.blocked:
-            # Learned earlier this run. Skipping the probe saves one refused
-            # request per district.
+            # Learned this run — or by an earlier one, and seeded in
+            # `__post_init__`. Skipping the probe saves one refused request
+            # per district, and on Zoopla, whose answer to this address has
+            # not changed since September, it also saves the first one of the
+            # run: that is the request the old code paid for every five
+            # minutes to be told what it already knew. See `BLOCK_FOR`.
             routes = [True]
+            self.probes_skipped += 1
         else:
             routes = [False, True]
 
@@ -671,27 +1060,45 @@ class Fetcher:
         broke = ""
         tried = 0
         paid = False
+        #: The headers the last refusal carried, for the sentence at the
+        #: bottom. See EVIDENCE.
+        said = ""
+        #: What the portal asked us to wait, if it asked. See RETRY_AFTER_CAP.
+        wait = 0.0
+        #: Attempts made, across both routes. One budget, see ATTEMPTS.
+        spent = 0
         for through_proxy in routes:
             paid = through_proxy
-            # One fingerprint against several addresses on the paid route, and
-            # several fingerprints against one address on the free one.
-            attempts = (
-                [self._best or self.targets[0]] * max(1, self.exits)
-                if through_proxy
-                else self._order()
-            )
+            room = self.attempts - spent
+            if room <= 0:
+                # The free route used the lot. Only reachable with no proxy
+                # configured — `direct_probes` leaves room when there is one —
+                # but said here rather than relied upon.
+                break
+            attempts = self._ladder(room, through_proxy, escalates=len(routes) > 1)
             for nth, target in enumerate(attempts):
-                # Between attempts rather than after the last one, so a run
-                # that is about to give up does not pay for a tunnel it will
-                # never use. Only on the paid route: on the direct one it is
-                # the fingerprint that `attempts` is varying, and the address
-                # is the one thing there that cannot be changed.
-                if nth and through_proxy:
-                    self._rotate()
+                if nth:
+                    # Two different things, and only the first is route-bound.
+                    #
+                    # The new exit address, between attempts rather than after
+                    # the last one, so a run about to give up does not pay for
+                    # a tunnel it will never use — and only on the paid route,
+                    # because on the direct one it is the fingerprint that
+                    # `attempts` varies and the address is the one thing there
+                    # that cannot be changed.
+                    #
+                    # The wait, on both routes. It is about how the requests
+                    # arrive rather than about where from, and a burst of
+                    # fingerprints off one address is as readable as a burst of
+                    # addresses. See BACKOFF.
+                    if through_proxy:
+                        self._rotate()
+                    self._backoff(nth, wait)
                 # Counted before the attempt, not after it: an attempt that
                 # raises is still an attempt, and the sentence at the bottom
                 # of this method is the only account of it anybody gets.
                 tried = nth + 1
+                spent += 1
                 try:
                     reply = self._once(url, target, accept, through_proxy)
                 except CurlError as exc:
@@ -700,6 +1107,8 @@ class Fetcher:
                     # which still raise through this as our own bug.
                     broke = _broke(exc)
                     last = 0
+                    wait = 0.0
+                    self._note(f"- {self._address(through_proxy)} {target} {broke}")
                     # On the paid route the next attempt is a new exit address,
                     # which is exactly what a tunnel that would not open calls
                     # for. On the free route the loop varies the fingerprint
@@ -712,8 +1121,20 @@ class Fetcher:
                 broke = ""
                 if 200 <= reply.status < 300:
                     self._best = target
+                    self._served(host, url, through_proxy=through_proxy)
                     return reply
                 last = reply.status
+                said = reply.said
+                self._note(
+                    reply.evidence(exit_port=self._port if through_proxy else None)
+                )
+                wait = reply.retry_after
+                if wait > RETRY_AFTER_CAP:
+                    # They named a wait longer than this run should be held
+                    # open for. Obeying it is the next run's job: a systemd
+                    # oneshot asleep for ten minutes is a timer that has
+                    # already fired twice behind it.
+                    break
                 # Only a refusal is worth another try. A 404 is an answer and a
                 # 500 is their problem — four handshakes against either is four
                 # times the traffic for the same result.
@@ -737,6 +1158,14 @@ class Fetcher:
                 # portal objects to the address rather than to the request,
                 # and that is exactly the case somebody needs told about.
                 self.blocked.add(host)
+                # Remembered past this run, but only for a host there is
+                # somewhere else to ask. A reader pinned to the direct route,
+                # or a box with no proxy at all, has nowhere to escalate to —
+                # so skipping its probe next run would not save a request, it
+                # would mean never reading that portal again. See BLOCK_FOR.
+                if self.proxy and not self.never_proxy(url):
+                    self._memory.remember(host)
+                    self._memory.save()
                 if len(routes) > 1:
                     continue
             break
@@ -750,6 +1179,21 @@ class Fetcher:
         # A 500 on the direct probe stops there — it is their fault and not
         # worth paying to hear twice — and the old wording read the end of
         # `routes` and so blamed a proxy the request never went near.
+        # ── the exit this run is about to be remembered on ──────────────────
+        #
+        # Rotation happens *between* attempts, so the address the last attempt
+        # used is never cooled down by the loop — and on the paid route that
+        # address is the one the memory is still holding as current. Left
+        # alone, the next run would inherit precisely the exit that had just
+        # refused the one before it, which is the opposite of the point.
+        #
+        # Only for a refusal, and the distinction is the same one `ROTATE`
+        # draws everywhere else in this module: a 404 or a 500 came back
+        # *through* that exit, so it is working and there is nothing to give
+        # up on. Burning it over somebody else's bad gateway would throw away
+        # a warm session to no purpose.
+        if paid and (broke or last in ROTATE):
+            self._rotate()
         if paid:
             where = "the proxy"
             over = "exit address" if tried == 1 else "exit addresses"
@@ -766,6 +1210,12 @@ class Fetcher:
             raise Refused(f"{url} never answered — {broke}, from {where}{spread}")
         raise Refused(
             f"{url} answered {last} under {tried} {over} tried, from {where}"
+            # What the refusal itself said, which is the difference between a
+            # Cloudflare challenge and a Cloudflare block — and so between
+            # "a browser would get through this" and "ask from somewhere
+            # else". Without it `job_events` carried the status and nothing
+            # about the cause. See EVIDENCE.
+            + (f" — {said}" if said else "")
         )
 
     def head(self, url: str) -> tuple[int, str | None]:
@@ -812,9 +1262,16 @@ class Fetcher:
         if status in BLOCKED:
             # Remembered for the rest of the run, exactly as `get` does, so the
             # next few hundred lookups go straight through the proxy instead of
-            # each paying for its own refusal first.
+            # each paying for its own refusal first — and now past the run too,
+            # so the *first* lookup of the next run does not pay for it either.
+            # On `openrent` that is one saved 405 per run rather than per
+            # district: the search page is served and only the lookups are
+            # refused, so this is the one host whose block is learned here and
+            # nowhere else.
             self.blocked.add(host_of(url))
             if escalate:
+                self._memory.remember(host_of(url))
+                self._memory.save()
                 return self._head_try(url, through_proxy=True)
         return status, where
 
@@ -835,6 +1292,8 @@ class Fetcher:
         # route named in the refusal below is the route actually taken.
         if not through_proxy and self.proxy and not self.never_proxy(url):
             through_proxy = host_of(url) in self.blocked
+            if through_proxy:
+                self.probes_skipped += 1
         try:
             return self._head_once(url, through_proxy=through_proxy)
         except CurlError as exc:
@@ -859,7 +1318,7 @@ class Fetcher:
         body = io.BytesIO()
         headers = io.BytesIO()
         target = self._best or self.targets[0]
-        curl = self._handle(target)
+        slot, curl = self._handle(target, through_proxy=through_proxy)
 
         curl.setopt(CurlOpt.URL, url.encode())
         curl.setopt(CurlOpt.WRITEDATA, body)
@@ -880,7 +1339,7 @@ class Fetcher:
         except Exception:
             # Metered before the handle is thrown away: see `_once`.
             self._spent(_wire(curl), through_proxy)
-            self._handles.pop(target, None)
+            self._handles.pop(slot, None)
             curl.close()
             raise
         finally:
@@ -921,20 +1380,71 @@ class Fetcher:
             self.proxied += 1
             self.proxy_wire += wire
 
-    def _handle(self, target: str) -> Curl:
-        handle = self._handles.get(target)
+    def _handle(self, target: str, *, through_proxy: bool) -> tuple[str, Curl]:
+        """The handle for one target on one address, built if need be.
+
+        Returns the slot as well as the handle, because the caller needs to be
+        able to drop exactly this one when a transfer leaves it in an unknown
+        state, and a target alone no longer identifies it.
+
+        ── the three options that are set here and nowhere else ────────────
+        #
+        Everything else in this module is set on every request, on purpose and
+        for a reason given at `_once`. These three cannot be:
+
+          * `impersonate` configures the handle itself, and re-applying it per
+            request would be work for nothing.
+          * `COOKIEFILE` is **not idempotent**. libcurl keeps a *list* of
+            files to read cookies from and each setopt appends to it, so
+            saying it before every request would have the handle re-reading
+            the same jar on every transfer and, worse, re-reading a jar the
+            same handle had already written.
+          * `COOKIEJAR` names where the cookies are flushed, which libcurl
+            does on `curl_easy_cleanup` — so it has to be set before the
+            first transfer and left alone until `close`.
+
+        That is safe here only because a slot is a target *and* an address:
+        the handle never changes either, so neither does its jar. See `_slot`.
+        """
+
+        slot = self._slot(target, through_proxy)
+        handle = self._handles.get(slot)
         if handle is None:
             handle = Curl()
             handle.impersonate(target)
-            self._handles[target] = handle
-        return handle
+            if self.cookies:
+                jar = self._memory.jar(self._address(through_proxy), target)
+                if jar is None:
+                    # Nowhere writable, so the cookies live and die with this
+                    # process. An empty COOKIEFILE still starts the engine, so
+                    # a sweep of twenty districts is one session rather than
+                    # twenty — just not one that outlives the run.
+                    handle.setopt(CurlOpt.COOKIEFILE, b"")
+                else:
+                    where = str(jar).encode()
+                    handle.setopt(CurlOpt.COOKIEFILE, where)
+                    handle.setopt(CurlOpt.COOKIEJAR, where)
+            self._handles[slot] = handle
+        return slot, handle
 
     def close(self) -> None:
-        """Let go of every connection. Safe to call twice."""
+        """Let go of every connection. Safe to call twice.
+
+        Closing a handle is also what writes its cookie jar — libcurl flushes
+        on cleanup — so this is not only about connections any more. Every
+        path that drops a handle therefore has to go through `close()` or
+        `curl.close()` and not merely forget it, or the run's cookies go with
+        it. `__exit__` and `sweep.collect`'s `finally` are what guarantee it.
+        """
 
         for handle in self._handles.values():
             handle.close()
         self._handles.clear()
+        # The last thing a run has to say about its exit address and the hosts
+        # that refused it. `_rotate` already saves as it goes; this catches a
+        # run that drew a fresh port and was served on it, which is the case
+        # the next run most wants to inherit.
+        self._memory.save()
 
     def __enter__(self) -> Fetcher:
         return self
@@ -958,13 +1468,14 @@ class Fetcher:
     ) -> Reply:
         self._pause()
         body = io.BytesIO()
-        # Set even though nothing reads it here. A previous `head()` on this
-        # handle left the header callback installed, and curl_cffi drops the
-        # reference that kept its target alive at the end of every perform —
-        # so not setting it means firing that callback into freed memory. See
-        # CALLBACK_TARGETS.
+        # Read now, where it used to be set and ignored. A previous `head()`
+        # on this handle left the header callback installed, and curl_cffi
+        # drops the reference that kept its target alive at the end of every
+        # perform — so not setting it means firing that callback into freed
+        # memory. See CALLBACK_TARGETS. What it carries is now worth having:
+        # see EVIDENCE for why a 403's headers are the whole of the diagnosis.
         headers = io.BytesIO()
-        curl = self._handle(target)
+        slot, curl = self._handle(target, through_proxy=through_proxy)
 
         # Every option is set on every request, none left to carry over. A
         # reused handle remembers what it was last told, and the one that
@@ -984,6 +1495,25 @@ class Fetcher:
         curl.setopt(
             CurlOpt.PROXY, self._proxy_now().encode() if through_proxy else b""
         )
+        # ── the referer, and why it is not a caller's argument ─────────────
+        #
+        # The last page this Fetcher was served on this host. A browser
+        # paginating a search carries the previous page here and a browser
+        # opening a listing carries the search it was on; we carried nothing
+        # at all, on every request, which is a thing no navigation does.
+        #
+        # Held here rather than passed in because it is a property of the
+        # session, not of the call: every reader's page loop and every
+        # `postcode_for` would otherwise have to thread it through, four
+        # readers' worth of argument for one header. Same host only — a
+        # cross-origin referer is a different decision and the only
+        # cross-origin fetches here are images, which go to a CDN.
+        #
+        # Set on every request including the empty case, because a reused
+        # handle remembers it: without the `else` branch the first page of the
+        # next district would quote the last page of the previous one.
+        came_from = self._seen.get(host_of(url), "")
+        curl.setopt(CurlOpt.REFERER, came_from.encode() if came_from else b"")
 
         try:
             curl.perform()
@@ -1001,7 +1531,11 @@ class Fetcher:
             # an unknown state, and the next request on it would fail for a
             # reason that has nothing to do with the next request. Drop it; the
             # following call builds a fresh one.
-            self._handles.pop(target, None)
+            #
+            # `curl.close()` and not merely a pop, because closing is what
+            # flushes the cookie jar — a handle dropped without it loses
+            # whatever the portal had issued to that session.
+            self._handles.pop(slot, None)
             curl.close()
             raise
 
@@ -1011,11 +1545,16 @@ class Fetcher:
             body=body.getvalue().decode("utf-8", errors="replace"),
             wire=wire,
             impersonated=target,
+            # Only on a reply worth explaining. A served page's headers are
+            # nobody's business and putting them on every Reply would mean
+            # parsing 60KB of them a run to throw them all away.
+            headers={} if 200 <= status < 300 else _evidence(headers.getvalue()),
         )
 
 
 __all__ = [
-    "BLOCKED", "BROKEN", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "JITTER",
-    "ROTATE", "STICKY_PORTS", "TIMEOUT",
+    "ATTEMPTS", "BACKOFF", "BACKOFF_CAP", "BLOCKED", "BROKEN",
+    "CALLBACK_TARGETS", "DIRECT_PROBES", "EVIDENCE", "IMPERSONATE", "JITTER",
+    "KEPT_REFUSALS", "RETRY_AFTER_CAP", "ROTATE", "STICKY_PORTS", "TIMEOUT",
     "Fetcher", "Refused", "Reply", "exit_ports", "host_of",
 ]

@@ -28,6 +28,30 @@ band, is in `systemd/london-home-finder-rightmove.timer`.
 Each run's individual requests are spaced too, by `SCRAPE_JITTER` — see
 `.env.example`. The timers blur the start; that blurs the shape.
 
+## What the scrapers keep in /var/lib
+
+`StateDirectory=london-home-finder` in the unit, so systemd creates
+`/var/lib/london-home-finder` and passes it in as `$STATE_DIRECTORY`. Two things
+live there, both of them about not arriving at Cloudflare as a stranger every
+five minutes:
+
+    exit-<reader>.json    which exit address this reader last used and which
+                          ones refused it, so a served address is kept rather
+                          than redrawn on the next run
+    cookies/*.txt         a cookie jar per exit address and browser. Zoopla's
+                          `__cf_bm` lives 30 minutes against a 5-minute timer,
+                          so one warm session should span about six runs
+
+The unit is `ProtectSystem=strict`, `ProtectHome=true` and `PrivateTmp=true`, so
+this is the only writable path the readers have — and `/tmp` in particular is
+wiped between invocations, which is why the store cannot live there.
+
+Nothing in it is a secret and nothing in it cannot be rebuilt by running again,
+so it is not backed up. Deleting it costs the next run its warm session and
+nothing else. If `exit_port` in the scrape counters changes on every run while
+`exit_rotations` stays at zero, this directory is not surviving the process —
+that is a deployment fault and not a portal blocking us.
+
 ## What runs where, and why
 
 The web app — form, admin console, Telegram webhook, Stripe webhook — stays on

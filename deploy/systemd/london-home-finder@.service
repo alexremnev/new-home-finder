@@ -18,3 +18,22 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/opt/london-home-finder/reports
+
+# /var/lib/london-home-finder, created and chowned to `finder` by systemd, and
+# passed in as $STATE_DIRECTORY — which is what `worker.sources.session` reads.
+#
+# This is load-bearing and it is the only writable path the scrapers have.
+# Everything above conspires against them otherwise: ProtectSystem=strict
+# makes the filesystem read-only, ProtectHome=true hides the cache directory
+# that is the fallback off this box, and PrivateTmp=true gives each invocation
+# its own /tmp — so a cross-run store under /tmp would be wiped between every
+# pair of runs it was meant to bridge.
+#
+# What lives here is a cookie jar per exit address and a note of which exit
+# address was last served. Both are the difference between arriving at
+# Cloudflare as a returning visitor and arriving as a new one every five
+# minutes: measured on 12 October 2026, Zoopla answers a cold request with
+# four Set-Cookie headers and a warm one with one. Nothing here is a secret
+# and nothing here cannot be rebuilt by running again, so it is not backed up.
+StateDirectory=london-home-finder
+StateDirectoryMode=0700

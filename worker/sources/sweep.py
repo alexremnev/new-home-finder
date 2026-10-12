@@ -553,7 +553,10 @@ def collect(
 ) -> Sweep:
     """Read every subscribed district on one portal and store what is new."""
 
-    fetcher = get or Fetcher.from_env()
+    # Named for the portal, which is what keeps the three readers on three
+    # exit addresses now that each one holds its own across runs. See
+    # `worker.sources.session` for why that replaced an offset by pid.
+    fetcher = get or Fetcher.from_env(session=portal.key)
     _pin_direct(portal, fetcher)
     # Ours to close if we made it; the caller's to keep if they passed one.
     mine = get is None
@@ -931,6 +934,25 @@ def _collect(
         # change. Without this counter the two look identical from outside.
         if fetcher.rotations:
             stage.set("exit_rotations", fetcher.rotations)
+        # Which exit address the run actually went out from. The reason this is
+        # worth a counter rather than a log line: the whole point of holding one
+        # across runs is that a *series* of runs can be read off, and "the
+        # address changed between these two runs" is a question only a column
+        # can answer. Absent with no proxy configured.
+        if fetcher.exit_port is not None:
+            stage.set("exit_port", fetcher.exit_port)
+        # Direct probes an earlier run's memory saved us. One request each,
+        # and on `openrent` one per *run* rather than one per lookup. A figure
+        # that drops to zero means the memory stopped surviving the process,
+        # which is a broken state directory and nothing to do with the portals.
+        if fetcher.probes_skipped:
+            stage.set("probes_skipped", fetcher.probes_skipped)
+        # What the refusals themselves said. This is the only place a
+        # Cloudflare challenge can be told apart from a Cloudflare block, and
+        # they have opposite answers — a challenge is something a browser gets
+        # through, a block is an address to stop using. See `fetch.EVIDENCE`.
+        if fetcher.refusals:
+            stage.set("refusal_detail", fetcher.refusals)
         if fetcher.blocked:
             # Worth saying out loud even when the proxy then carried the run:
             # this is the portal telling us it does not want this address, and
