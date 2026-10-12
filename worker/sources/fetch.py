@@ -86,6 +86,10 @@ Spread the traffic and be able to ask again:
     of them, and the fingerprint is left alone. Inverting the old ladder —
     four fingerprints against one address — costs nothing extra: it spent
     three paid 403s per failing run learning what the first one had said.
+  * So is a request that got no answer at all — a tunnel the proxy would not
+    open, a certificate it could not verify, a peer that never replied. Those
+    arrive as an exception rather than a status and so went past the rotation
+    entirely, taking the whole run with them. See BROKEN.
 
 How a different exit is asked for depends on the port, and both are handled by
 dropping every handle so the next request opens a new tunnel:
@@ -130,7 +134,7 @@ import random
 import time
 from dataclasses import dataclass, field
 
-from curl_cffi import Curl, CurlInfo, CurlOpt
+from curl_cffi import Curl, CurlECode, CurlError, CurlInfo, CurlOpt
 
 # Served on 26 September 2026, in preference order. Rotated on a refusal rather
 # than hard-coded to one, because a fingerprint that works today is a
@@ -239,6 +243,53 @@ CALLBACK_TARGETS = ("WRITEDATA", "HEADERDATA")
 # somewhere else would spend traffic to receive it twice.
 BLOCKED = (401, 403, 405, 429)
 
+# ── when there is no answer at all ─────────────────────────────────────────
+#
+# Everything above is a *status*: the portal replied, and the reply is the
+# evidence. These are the other outcome — libcurl could not finish the
+# exchange, so there is no status to read and `perform()` raises instead.
+#
+# Three of them, measured on `zoopla_london` on 11 October 2026:
+#
+#     curl: (60) SSL certificate ... unable to get local issuer certificate
+#     curl: (7)  CONNECT tunnel failed, response 502
+#     curl: (28) Connection timed out after 15002 milliseconds
+#
+# Every one is a statement about one exit address and about nothing else: a
+# tunnel the proxy would not open, a certificate presented by whatever
+# answered inside it, a peer that never replied at all. That is the same kind
+# of news as a 403 through the proxy, and it has the same answer — ask a
+# different address.
+#
+# It was not being asked. `CurlError` is neither `Refused` nor `OSError`, so
+# it went past the rotation in `get`, past every `except (Refused, OSError)`
+# at the call sites, and out through `run.stage` as "scrape failed" — which
+# ended the whole run on its first district with two exits unused and the
+# other nineteen districts unread. One bad address cost a run.
+#
+# Listed rather than caught wholesale, because the two kinds must not be
+# confused: a malformed url or a bad option is OUR bug, and a bug that fails
+# loudly on the first run is worth far more than one folded away into "the
+# portal refused us". Anything not named here still raises.
+BROKEN = frozenset(
+    {
+        CurlECode.COULDNT_RESOLVE_PROXY,     # 5
+        CurlECode.COULDNT_RESOLVE_HOST,      # 6
+        CurlECode.COULDNT_CONNECT,           # 7  — a refused CONNECT, too
+        CurlECode.HTTP2,                     # 16
+        CurlECode.PARTIAL_FILE,              # 18
+        CurlECode.OPERATION_TIMEDOUT,        # 28
+        CurlECode.SSL_CONNECT_ERROR,         # 35
+        CurlECode.GOT_NOTHING,               # 52
+        CurlECode.SEND_ERROR,                # 55
+        CurlECode.RECV_ERROR,                # 56
+        CurlECode.PEER_FAILED_VERIFICATION,  # 60 — the exit's chain, not ours
+        CurlECode.HTTP2_STREAM,              # 92
+        CurlECode.HTTP3,                     # 95
+        CurlECode.PROXY,                     # 97
+    }
+)
+
 # DataImpulse's sticky range, from their dashboard's "Get proxy" panel. One
 # port is one session is one exit address — measured on 9 October 2026, and
 # measured to be stable: two calls to port 10000 from different processes got
@@ -331,6 +382,59 @@ def _number(raw: object) -> int:
     return int(raw) if isinstance(raw, (int, float)) else 0
 
 
+def _wire(curl: Curl) -> int:
+    """Bytes across the wire for the transfer just attempted.
+
+    The transfer, not the decompressed body — see the module note. Body,
+    response headers and request headers, all three, because a proxy bills
+    every byte through the tunnel and does not care which part of the exchange
+    they belong to. The response headers were once missing and they are not
+    small: measured 6.6KB against a 72.7KB body on a Zoopla search page, nine
+    per cent, every request.
+
+    Zero is a possible honest answer on a transfer that failed before any of
+    those existed, and reading the meter must never replace the error that is
+    on its way up: `getinfo` on a handle whose `perform` raised is not
+    documented to work, so a refusal to answer here is taken as nothing spent.
+    """
+
+    try:
+        return (
+            _number(curl.getinfo(CurlInfo.SIZE_DOWNLOAD_T))
+            + _number(curl.getinfo(CurlInfo.HEADER_SIZE))
+            + _number(curl.getinfo(CurlInfo.REQUEST_SIZE))
+        )
+    except Exception:
+        return 0
+
+
+def _broke(exc: CurlError) -> str:
+    """Why there was no answer, in a sentence. Re-raises anything that is ours.
+
+    One place decides which libcurl errors are worth another address, so `get`
+    and `head` cannot drift apart about it. See BROKEN for the list and for
+    why the rest are left to fail loudly.
+
+    curl_cffi's message is three sentences and the last two are a link to the
+    error table plus an instruction to go and read it. The first carries the
+    code and the detail, and that is the part worth putting in `job_events`:
+
+        Failed to perform, curl: (60) SSL certificate OpenSSL verify result:
+        unable to get local issuer certificate (20). See https://curl.se/...
+        first for more details.
+
+    becomes `curl: (60) SSL certificate OpenSSL verify result: unable to get
+    local issuer certificate (20)` — which reads as a clause in the middle of
+    the sentence the caller is building, hence no full stop.
+    """
+
+    if exc.code not in BROKEN:
+        raise exc
+    said = str(exc).split("See https://", 1)[0].strip()
+    said = said.removeprefix("Failed to perform,").strip().rstrip(".")
+    return said or f"curl: ({int(exc.code)})"
+
+
 @dataclass
 class Reply:
     """What came back, and what it cost."""
@@ -344,7 +448,17 @@ class Reply:
 
 
 class Refused(Exception):
-    """The portal would not serve this, under any fingerprint we have."""
+    """We could not get this page, and no further attempt here would help.
+
+    Two causes, deliberately one exception. Either the portal answered and
+    the answer was a refusal, or nothing answered at all — a tunnel that
+    would not open, a handshake that failed, a peer that never replied.
+
+    One type because every call site wants the same thing from both: count it,
+    say so, leave the district incomplete, and come back next run. Splitting
+    them would mean a second `except` clause at six places, all of which
+    already exist and none of which would do anything different.
+    """
 
 
 @dataclass
@@ -549,7 +663,12 @@ class Fetcher:
         else:
             routes = [False, True]
 
+        # What the last attempt came back with: a status, or — when nothing
+        # came back at all — libcurl's reason for that. Two variables rather
+        # than one, because `last in BLOCKED` below is a question about a
+        # status, and a string there would quietly answer no.
         last = 0
+        broke = ""
         tried = 0
         paid = False
         for through_proxy in routes:
@@ -569,8 +688,28 @@ class Fetcher:
                 # is the one thing there that cannot be changed.
                 if nth and through_proxy:
                     self._rotate()
-                reply = self._once(url, target, accept, through_proxy)
+                # Counted before the attempt, not after it: an attempt that
+                # raises is still an attempt, and the sentence at the bottom
+                # of this method is the only account of it anybody gets.
                 tried = nth + 1
+                try:
+                    reply = self._once(url, target, accept, through_proxy)
+                except CurlError as exc:
+                    # No status to judge — the exchange never completed. See
+                    # BROKEN for which of these earn another address, and for
+                    # which still raise through this as our own bug.
+                    broke = _broke(exc)
+                    last = 0
+                    # On the paid route the next attempt is a new exit address,
+                    # which is exactly what a tunnel that would not open calls
+                    # for. On the free route the loop varies the fingerprint
+                    # instead, and a connection that never opened is no
+                    # evidence about a fingerprint — so stop here and let the
+                    # escalation below do the work.
+                    if not through_proxy:
+                        break
+                    continue
+                broke = ""
                 if 200 <= reply.status < 300:
                     self._best = target
                     return reply
@@ -580,6 +719,18 @@ class Fetcher:
                 # times the traffic for the same result.
                 if reply.status not in ROTATE:
                     break
+            if not through_proxy and broke and len(routes) > 1:
+                # A portal that null-routes this address looks exactly like a
+                # moment of bad network from here, and the proxy is the only
+                # other place to ask — so ask.
+                #
+                # Deliberately NOT recorded in `blocked`, which is the one
+                # difference from the refusal below. That memory sends the
+                # rest of the run straight to paid traffic, and a timeout is
+                # not evidence enough to spend money on nineteen more
+                # districts; a refusal is, because a portal that says 403 to
+                # this address says it every time.
+                continue
             if not through_proxy and last in BLOCKED:
                 # Recorded whether or not there is anywhere to escalate to.
                 # With no proxy configured this is the only evidence that the
@@ -605,6 +756,14 @@ class Fetcher:
         else:
             where = "this address"
             over = "fingerprint" if tried == 1 else "fingerprints"
+        if broke:
+            # Says what happened rather than what was counted. A connection
+            # that never opened is no evidence about a fingerprint, so the
+            # free route does not pretend a ladder was climbed; the paid one
+            # names how many addresses it got through, because there the
+            # ladder is addresses and it really was climbed.
+            spread = f" over {tried} exit addresses" if paid and tried > 1 else ""
+            raise Refused(f"{url} never answered — {broke}, from {where}{spread}")
         raise Refused(
             f"{url} answered {last} under {tried} {over} tried, from {where}"
         )
@@ -633,26 +792,72 @@ class Fetcher:
         lookups are refused. So every lookup came back 405, forever, with no
         proxy attempt — which is most of why that reader stored 134 listings
         in a fortnight and announced none of them.
+
+        Raises `Refused` when neither route answered, including when the
+        reason was a connection that never opened rather than a status. See
+        `_head_try`.
         """
 
-        status, where = self._head_once(url, through_proxy=False)
+        escalate = bool(self.proxy) and not self.never_proxy(url)
+        try:
+            status, where = self._head_try(url, through_proxy=False)
+        except Refused:
+            # Nothing answered. The other route is the only other place to
+            # ask, and it is the same move a refusal gets below — one url,
+            # two routes, which is all this method ever spends. Not recorded
+            # in `blocked` for the same reason `get` does not record it.
+            if not escalate:
+                raise
+            return self._head_try(url, through_proxy=True)
         if status in BLOCKED:
             # Remembered for the rest of the run, exactly as `get` does, so the
             # next few hundred lookups go straight through the proxy instead of
             # each paying for its own refusal first.
             self.blocked.add(host_of(url))
-            if self.proxy and not self.never_proxy(url):
-                return self._head_once(url, through_proxy=True)
+            if escalate:
+                return self._head_try(url, through_proxy=True)
         return status, where
+
+    def _head_try(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
+        """`_head_once`, with a connection that broke arriving as `Refused`.
+
+        Every caller of `head` already handles `Refused`: `openrent` counts it
+        as `slug_unreachable`, leaves the district incomplete and asks again
+        next run, which is the right answer to a lookup that could not be
+        made. None of them handles `CurlError`, so a timed-out tunnel ended
+        the run instead of the lookup — and this is the reader that makes
+        hundreds of these calls, so it is the one with the most to lose. See
+        BROKEN.
+        """
+
+        # A host already known to refuse this address skips the direct probe
+        # altogether. Decided here rather than inside `_head_once` so that the
+        # route named in the refusal below is the route actually taken.
+        if not through_proxy and self.proxy and not self.never_proxy(url):
+            through_proxy = host_of(url) in self.blocked
+        try:
+            return self._head_once(url, through_proxy=through_proxy)
+        except CurlError as exc:
+            # Re-raises anything that is our own bug rather than the network's.
+            broke = _broke(exc)
+            if through_proxy:
+                # Give up on this exit for the rest of the run. Free, because
+                # the handle holding that dead tunnel has just been dropped
+                # anyway — and without it the next few hundred lookups would
+                # each break on the same address, which is how one bad exit
+                # turns a run's whole slug budget into nothing. `get` gets
+                # this from the rotation inside its own attempt loop; a
+                # lookup has no loop to put it in, so it moves on the way out.
+                self._rotate()
+            where = "the proxy" if through_proxy else "this address"
+            raise Refused(
+                f"{url} never answered — {broke}, from {where}"
+            ) from exc
 
     def _head_once(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
         self._pause()
         body = io.BytesIO()
         headers = io.BytesIO()
-        # A host already known to refuse this address skips the direct probe
-        # altogether — `head` passes True and this does as it is told.
-        if not through_proxy and self.proxy and not self.never_proxy(url):
-            through_proxy = host_of(url) in self.blocked
         target = self._best or self.targets[0]
         curl = self._handle(target)
 
@@ -671,18 +876,19 @@ class Fetcher:
         try:
             curl.perform()
             status = _number(curl.getinfo(CurlInfo.RESPONSE_CODE))
-            wire = _number(curl.getinfo(CurlInfo.HEADER_SIZE)) + _number(
-                curl.getinfo(CurlInfo.REQUEST_SIZE)
-            )
+            wire = _wire(curl)
         except Exception:
+            # Metered before the handle is thrown away: see `_once`.
+            self._spent(_wire(curl), through_proxy)
             self._handles.pop(target, None)
             curl.close()
             raise
         finally:
             # A reused handle remembers these, and a bodiless request that
             # stops following redirects is not what the next `get` wants.
-            # `_once` sets them too, belt and braces, because a `head()` that
-            # raised never reaches this block.
+            # `_once` sets them too, belt and braces, because on the raising
+            # path this is a no-op: the handle above it has already been
+            # closed, and curl_cffi's `setopt` silently ignores a closed one.
             #
             # HEADERDATA is deliberately NOT reset to a fresh buffer here. That
             # is what the first version did, and it was the bug: the throwaway
@@ -693,17 +899,27 @@ class Fetcher:
             curl.setopt(CurlOpt.NOBODY, 0)
             curl.setopt(CurlOpt.FOLLOWLOCATION, 1)
 
-        self.requests += 1
-        self.wire += wire
-        if through_proxy:
-            self.proxied += 1
-            self.proxy_wire += wire
+        self._spent(wire, through_proxy)
 
         where = None
         for line in headers.getvalue().decode("latin1").splitlines():
             if line.lower().startswith("location:"):
                 where = line.split(":", 1)[1].strip()
         return status, where
+
+    def _spent(self, wire: int, through_proxy: bool) -> None:
+        """Add one request to the meters, whether or not it was served.
+
+        Every attempt, including the refused and the broken ones: the stage
+        reports `requests` and `bytes` as what this run cost, and a request
+        that failed through the proxy was still paid for.
+        """
+
+        self.requests += 1
+        self.wire += wire
+        if through_proxy:
+            self.proxied += 1
+            self.proxy_wire += wire
 
     def _handle(self, target: str) -> Curl:
         handle = self._handles.get(target)
@@ -772,19 +988,15 @@ class Fetcher:
         try:
             curl.perform()
             status = _number(curl.getinfo(CurlInfo.RESPONSE_CODE))
-            # The transfer, not the decompressed body. See the module note.
-            # Body, response headers, request headers — all three, because a
-            # proxy bills every byte through the tunnel and does not care
-            # which part of the exchange they belong to. The response headers
-            # were missing and they are not small: measured 6.6KB against a
-            # 72.7KB body on a Zoopla search page, nine per cent, every
-            # request. See the module note on what is still not counted.
-            wire = (
-                _number(curl.getinfo(CurlInfo.SIZE_DOWNLOAD_T))
-                + _number(curl.getinfo(CurlInfo.HEADER_SIZE))
-                + _number(curl.getinfo(CurlInfo.REQUEST_SIZE))
-            )
+            wire = _wire(curl)
         except Exception:
+            # Metered before it is thrown away. A tunnel the proxy refused and
+            # a handshake that timed out both cost its clock and some of its
+            # traffic, and `stage.set("requests", …)` reading zero after three
+            # such attempts tells the wrong story about the run — which was
+            # the whole reason yesterday's failures looked like no attempt at
+            # all. What libcurl can still account for is taken and no more.
+            self._spent(_wire(curl), through_proxy)
             # A handle that failed mid-transfer may be holding a connection in
             # an unknown state, and the next request on it would fail for a
             # reason that has nothing to do with the next request. Drop it; the
@@ -793,11 +1005,7 @@ class Fetcher:
             curl.close()
             raise
 
-        self.requests += 1
-        self.wire += wire
-        if through_proxy:
-            self.proxied += 1
-            self.proxy_wire += wire
+        self._spent(wire, through_proxy)
         return Reply(
             status=status,
             body=body.getvalue().decode("utf-8", errors="replace"),
@@ -807,7 +1015,7 @@ class Fetcher:
 
 
 __all__ = [
-    "BLOCKED", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "JITTER", "ROTATE",
-    "STICKY_PORTS", "TIMEOUT",
+    "BLOCKED", "BROKEN", "CALLBACK_TARGETS", "EXITS", "IMPERSONATE", "JITTER",
+    "ROTATE", "STICKY_PORTS", "TIMEOUT",
     "Fetcher", "Refused", "Reply", "exit_ports", "host_of",
 ]
