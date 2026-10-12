@@ -37,7 +37,14 @@ five minutes:
 
     exit-<reader>.json    which exit address this reader last used and which
                           ones refused it, so a served address is kept rather
-                          than redrawn on the next run
+                          than redrawn on the next run. Also which hosts
+                          refuse this machine's own address
+    exit-<reader>-fallback.json
+                          the same for the second proxy provider, and only
+                          present once `SCRAPE_PROXY_FALLBACK` is set. Two
+                          files because a port number names a different
+                          address on each vendor, so one cooldown list would
+                          be wrong about both
     cookies/*.txt         a cookie jar per exit address and browser. Zoopla's
                           `__cf_bm` lives 30 minutes against a 5-minute timer,
                           so one warm session should span about six runs

@@ -144,6 +144,26 @@ of this can be reproduced off the server — the way to apportion it is the
 counters, and `refusal_detail` is the one that can finally tell a Cloudflare
 challenge from a Cloudflare block. See EVIDENCE.
 
+── when the pool itself is the problem ─────────────────────────────────────
+
+Everything above varies something about *our* request: the fingerprint, the
+cookies, which of one vendor's exits carries it. All of it assumes some
+address in that vendor's pool is being served, and that assumption is the last
+one left to fail — a residential pool is somebody else's inventory, shared
+with whoever else is renting it, and it can be scored badly as a pool.
+
+So there is a second provider, reached only once the first has spent its whole
+budget: `PRIMARY` and `FALLBACK`, three attempts on the second, its own sticky
+exit, its own cooldown list, its own cookie jars and its own line on the bill.
+See `Pool` for why none of those can be shared, and FALLBACK_ATTEMPTS for why
+the budget is additional rather than divided.
+
+It is off until `SCRAPE_PROXY_FALLBACK` names a url, and off means absent: no
+pool is built, no second state file is read, and the route lists below are the
+length they were. That is deliberate — the route was written before there was
+an account to point it at, so the untested path had to be the one that does
+nothing.
+
 ── the byte count ────────────────────────────────────────────────────────
 
 Residential proxies bill by traffic, so "how much did we download" has to be
@@ -474,6 +494,45 @@ EVIDENCE = ("cf-mitigated", "cf-ray", "server", "retry-after")
 # enough to tell a challenge from a block.
 KEPT_REFUSALS = 10
 
+# ── the three places a request can go out from ─────────────────────────────
+#
+# Names rather than a boolean, which is what these replaced. `through_proxy`
+# could say "not the proxy" and "the proxy" and had nowhere to put a second
+# one — and a second one is the whole point of this: when every exit in one
+# provider's pool has refused us, the next thing to vary is not the address,
+# it is whose addresses they are.
+#
+# They are strings because they are also filenames: a cookie jar is keyed per
+# route, and `__cf_bm` minted through one vendor's peer must never be presented
+# through another's. See `session.Session.jar`.
+DIRECT = "direct"
+PRIMARY = "primary"
+FALLBACK = "fallback"
+
+# Attempts the fallback provider gets, on top of `ATTEMPTS`.
+#
+# ── why on top rather than out of it ───────────────────────────────────────
+#
+# `ATTEMPTS` is a budget against one pool: five requests spent learning that
+# this machine's address and three of one vendor's exits will not serve us. By
+# the time it is exhausted, what has been established is that *that vendor* is
+# not working right now — and a budget the fallback had to share would be
+# empty exactly when the fallback became worth having.
+#
+# So the worst case for one url is `ATTEMPTS + FALLBACK_ATTEMPTS`, eight
+# requests, and that is stated plainly because it is more than the five the
+# budget above advertises. It is reachable only when the direct address, three
+# primary exits and three fallback exits all refuse the same page, which is a
+# run that was going to fail anyway — and the eighth request is the one that
+# might stop it failing. Set `SCRAPE_FALLBACK_ATTEMPTS=0` to turn the whole
+# route off without unsetting its url.
+#
+# Three because that is what a second pool is for. One attempt makes the
+# fallback a coin toss on a single exit, and the measured evidence this module
+# was built on is that exits vary: a refused one stays refused while a
+# different one serves the identical request minutes later.
+FALLBACK_ATTEMPTS = 3
+
 
 def host_of(url: str) -> str:
     """The hostname out of a url, lowercased and without its port."""
@@ -587,6 +646,19 @@ def _evidence(raw: bytes) -> dict[str, str]:
     return found
 
 
+def _named(via: str) -> str:
+    """A route, as it reads in the middle of a sentence in `job_events`.
+
+    One place so that `get` and `head` cannot drift apart about what to call
+    the second provider — the sentence they build is the whole of what a later
+    investigation has to go on.
+    """
+
+    if via == DIRECT:
+        return "this address"
+    return "the proxy" if via == PRIMARY else "the fallback proxy"
+
+
 def _broke(exc: CurlError) -> str:
     """Why there was no answer, in a sentence. Re-raises anything that is ours.
 
@@ -662,6 +734,61 @@ class Reply:
         return f"{self.status} {where} {self.impersonated} {self.said}".strip()
 
 
+@dataclass
+class Pool:
+    """One residential proxy, and this reader's memory of its exit addresses.
+
+    There are at most two of these — a primary and a fallback — and they exist
+    because the pools are not interchangeable in any respect that matters:
+
+      * a port number means a different address on each vendor, so one
+        cooldown list covering both would retire addresses that were never
+        refused and keep offering ones that were;
+      * a cookie is minted against the peer that asked for it, so a jar has to
+        belong to a vendor as well as to an exit and a browser;
+      * and the bill is separate. `proxy_bytes` is checked against an invoice,
+        and a figure mixing two vendors cannot be checked against either.
+
+    So each one carries its own `Session` file, its own current exit and its
+    own counters, and the only thing they share is the reader they belong to.
+    """
+
+    #: `PRIMARY` or `FALLBACK`. Names the route in the counters, in the cookie
+    #: jar filenames and in the sentence that reaches `job_events`.
+    name: str
+    #: The proxy url, with whatever port was configured. Never empty: a pool
+    #: with no url is not built at all.
+    proxy: str
+    #: Attempts this pool gets for one url. Zero means the pool is configured
+    #: but switched off, which is a thing somebody debugging wants to be able
+    #: to do without editing `SCRAPE_PROXY_FALLBACK` out and losing it.
+    attempts: int
+    #: One exit address each. Derived from `proxy` by `exit_ports`.
+    ports: tuple[int, ...] = ()
+    #: Which of `ports` is in play, remembered across runs by `memory`.
+    port: int | None = None
+    #: Requests sent through this pool, and what they weighed. Per pool
+    #: because two vendors send two invoices.
+    requests: int = 0
+    wire: int = 0
+    #: Exit addresses this pool gave up on during this run.
+    rotations: int = 0
+    #: This pool's sticky exit and cooldown list, across runs.
+    memory: session_memory.Session | None = None
+
+    def proxy_now(self) -> str:
+        """The proxy url on the exit address currently in play."""
+
+        if self.port is None:
+            return self.proxy
+        return _with_port(self.proxy, self.port)
+
+    def address(self) -> str:
+        """What the request will go out from, named for a filename."""
+
+        return f"{self.name}-{self.port}" if self.port is not None else self.name
+
+
 class Refused(Exception):
     """We could not get this page, and no further attempt here would help.
 
@@ -684,8 +811,20 @@ class Fetcher:
     can go straight into the stage counters.
     """
 
-    #: Where to send requests. None is straight from this machine.
+    #: Where to send requests when this machine's own address is refused.
+    #: None is straight from this machine and nowhere else.
     proxy: str | None = None
+    #: A second residential provider, tried only once `proxy`'s whole budget
+    #: has been spent. None — which is the default and what an unset
+    #: `SCRAPE_PROXY_FALLBACK` gives — means there is no such route and
+    #: nothing anywhere behaves differently.
+    #:
+    #: Two vendors rather than more exits from one, because by the time
+    #: `ATTEMPTS` is gone the thing that has been established is about the
+    #: vendor: a pool whose addresses are all scored badly is a pool, and
+    #: asking it a fourth time is asking the same question again. See
+    #: FALLBACK_ATTEMPTS.
+    fallback: str | None = None
     #: Never through the proxy, whatever `proxy` says. Images live on a CDN
     #: that serves anybody, and routing them through paid residential traffic
     #: is the most expensive way to fetch the cheapest thing.
@@ -700,9 +839,14 @@ class Fetcher:
     attempts: int = ATTEMPTS
     #: How many of them may go on the free route when a proxy exists.
     direct_probes: int = DIRECT_PROBES
+    #: Attempts the fallback provider gets, on top of `attempts`. Zero turns
+    #: the route off while leaving its url configured.
+    fallback_attempts: int = FALLBACK_ATTEMPTS
     #: Ports to rotate through, one exit address each. Derived from `proxy` in
     #: `__post_init__` when it is left empty, which is every caller but a test.
     ports: tuple[int, ...] = ()
+    #: The same for `fallback`, derived from it the same way.
+    fallback_ports: tuple[int, ...] = ()
     #: Which reader this is, for the cross-run memory. One name is one sticky
     #: exit address and one set of cookie jars, so two readers under one name
     #: would share an address — which is the thing the pid offset this
@@ -717,15 +861,20 @@ class Fetcher:
 
     #: Bytes across the wire, all requests. Compressed, as billed.
     wire: int = 0
-    #: The billable subset: bytes that actually went through the proxy. The
-    #: difference is what the CDN exemption saves, in the units DataImpulse
-    #: charges in.
+    #: The billable subset: bytes that actually went through the *primary*
+    #: proxy. The difference from `wire` is what the CDN exemption saves, in
+    #: the units DataImpulse charges in.
+    #:
+    #: Deliberately not the sum across both providers. This figure exists to
+    #: be checked against an invoice, and one invoice comes from one vendor —
+    #: a number mixing them could be reconciled against neither. The fallback's
+    #: traffic is reported beside it, never folded into it.
     proxy_wire: int = 0
     requests: int = 0
     proxied: int = 0
-    #: Exit addresses given up on this run. Goes into the stage counters: a
-    #: reader that rotates every run is a pool going bad, which is a different
-    #: piece of news from a run that failed.
+    #: Exit addresses given up on this run, across both pools. Goes into the
+    #: stage counters: a reader that rotates every run is a pool going bad,
+    #: which is a different piece of news from a run that failed.
     rotations: int = 0
     #: Refused attempts, described. One line each, see `Reply.evidence`.
     #: `sweep` writes these to the stage counters, and they are the only thing
@@ -736,12 +885,19 @@ class Fetcher:
     probes_skipped: int = 0
     #: The target that last worked, tried first next time.
     _best: str = field(default="", init=False)
-    #: The exit port in use, or None with no sticky range. Chosen by the
-    #: cross-run memory rather than from this process's pid, which is the
-    #: whole of P0-3: an exit that was served is one the *next* run should
-    #: keep using, not one this run should forget.
-    _port: int | None = field(default=None, init=False)
-    #: What survives the process. See worker.sources.session.
+    #: The paid routes in the order they are escalated to, built from `proxy`
+    #: and `fallback` in `__post_init__`. Empty with neither configured, which
+    #: is when nothing but the direct route exists.
+    #:
+    #: Each holds its own exit address, chosen by its own cross-run memory
+    #: rather than from this process's pid: an exit that was served is one the
+    #: *next* run should keep using, not one this run should forget.
+    _pools: tuple[Pool, ...] = field(default=(), init=False)
+    #: What survives the process, for the reader as a whole. Owns `blocked` —
+    #: which hosts refuse *this machine's* address, a fact about the box and
+    #: not about any vendor — and the direct route's cookie jar. Each pool
+    #: carries a second file of its own for its exits. See
+    #: worker.sources.session.
     _memory: session_memory.Session = field(init=False, repr=False)
     #: Host → the last url on it that was served, sent as `Referer` on the
     #: next request to the same host. See `_once`.
@@ -770,6 +926,8 @@ class Fetcher:
     def __post_init__(self) -> None:
         if not self.ports:
             self.ports = exit_ports(self.proxy)
+        if not self.fallback_ports:
+            self.fallback_ports = exit_ports(self.fallback)
         # ── what replaced the pid offset, and why ──────────────────────────
         #
         # This used to be `os.getpid() % len(self.ports)`. The reasoning was
@@ -787,7 +945,35 @@ class Fetcher:
         # addresses — the property the offset existed for — while letting each
         # one hold its own address across runs for as long as it is served.
         self._memory = session_memory.Session.load(self.session)
-        self._port = self._memory.pick(self.ports)
+        # One pool per configured provider, in escalation order, each with its
+        # own memory file. Built here rather than looked up per request so that
+        # "is there anywhere else to ask" is one question with one answer, and
+        # so that an unset `fallback` costs nothing anywhere: no file is read,
+        # no pool exists, and every route list below is the length it was.
+        #
+        # A pool with no url is not built at all, which is what makes adding
+        # `SCRAPE_PROXY_FALLBACK` to the environment sufficient to switch the
+        # whole route on with no other change.
+        pools = []
+        for name, url, ports, budget in (
+            (PRIMARY, self.proxy, self.ports, self.attempts),
+            (FALLBACK, self.fallback, self.fallback_ports, self.fallback_attempts),
+        ):
+            if not url or budget <= 0:
+                continue
+            pool = Pool(name=name, proxy=url, attempts=budget, ports=ports)
+            # The reader's own file holds `blocked` and the direct jar; this
+            # one holds nothing but this vendor's exits. Separate because a
+            # port number names a different address on each vendor, so one
+            # cooldown list would be wrong about both.
+            pool.memory = (
+                self._memory
+                if name == PRIMARY
+                else session_memory.Session.load(f"{self.session}-{name}")
+            )
+            pool.port = pool.memory.pick(ports)
+            pools.append(pool)
+        self._pools = tuple(pools)
         # Hosts an earlier run found refuse this machine's own address. Seeded
         # rather than re-learned: the probe that learns it is a request whose
         # answer has been the same since September. A host pinned to the direct
@@ -828,26 +1014,79 @@ class Fetcher:
         budget = (
             os.environ.get("SCRAPE_ATTEMPTS") or os.environ.get("SCRAPE_EXITS") or ""
         ).strip()
+        # The second provider. Empty is the normal case and means the route
+        # does not exist — no file, no pool, no behaviour change anywhere.
+        # Filling it in is the whole of switching it on.
+        second = (os.environ.get("SCRAPE_PROXY_FALLBACK") or "").strip()
+        # Read separately from the url so the route can be switched off
+        # without losing the url, which is what somebody bisecting a bad
+        # afternoon wants. `0` is meaningful here and so cannot double as
+        # "unset" — hence `isdigit` rather than a falsy check.
+        spare = (os.environ.get("SCRAPE_FALLBACK_ATTEMPTS") or "").strip()
         return cls(
             proxy=raw or None,
+            fallback=second or None,
             targets=targets or IMPERSONATE,
             direct_hosts=direct,
             attempts=int(budget) if budget.isdigit() and int(budget) else ATTEMPTS,
+            fallback_attempts=(
+                int(spare) if spare.isdigit() else FALLBACK_ATTEMPTS
+            ),
             jitter=_seconds(os.environ.get("SCRAPE_JITTER"), JITTER),
             session=session,
         )
 
+    def _pool(self, via: str) -> Pool | None:
+        """The pool a route name refers to, or None for the direct route."""
+
+        for one in self._pools:
+            if one.name == via:
+                return one
+        return None
+
     @property
     def exit_port(self) -> int | None:
-        """Which exit address the run is on, for the stage counters.
+        """Which primary exit address the run is on, for the stage counters.
 
-        Read-only and public where `_port` is neither: `sweep` has to be able
-        to report it — two runs in a row on one port is the mechanism working
-        and a new port every run is it failing — but nothing outside this
-        module may choose it. That is `session.Session`'s job.
+        Read-only and public where the pool's own field is neither: `sweep`
+        has to be able to report it — two runs in a row on one port is the
+        mechanism working and a new port every run is it failing — but nothing
+        outside this module may choose it. That is `session.Session`'s job.
+
+        The primary specifically, so a week of these can be read as one
+        series. The fallback's is reported beside it and only when the
+        fallback was actually reached, which is the news.
         """
 
-        return self._port
+        pool = self._pool(PRIMARY)
+        return pool.port if pool else None
+
+    @property
+    def fallback_port(self) -> int | None:
+        """The same for the second provider, or None when there is none."""
+
+        pool = self._pool(FALLBACK)
+        return pool.port if pool else None
+
+    @property
+    def fallback_requests(self) -> int:
+        """Requests that went through the second provider.
+
+        Non-zero is the thing worth alerting on: it means the primary pool
+        spent its whole budget and still did not get the page. A reader that
+        reaches here occasionally has one bad exit; a reader that reaches here
+        every run has a vendor that has stopped working.
+        """
+
+        pool = self._pool(FALLBACK)
+        return pool.requests if pool else 0
+
+    @property
+    def fallback_wire(self) -> int:
+        """Bytes through the second provider, for that vendor's own invoice."""
+
+        pool = self._pool(FALLBACK)
+        return pool.wire if pool else 0
 
     def never_proxy(self, url: str) -> bool:
         """Hosts that go direct whatever happens. See `direct_hosts`."""
@@ -862,16 +1101,17 @@ class Fetcher:
             one for one in self.targets if one != self._best
         ]
 
-    def _ladder(self, room: int, through_proxy: bool, *, escalates: bool) -> list[str]:
-        """What to try on this route, within what is left of the budget.
+    def _ladder(self, room: int, via: str, *, escalates: bool) -> list[str]:
+        """What to try on this route, within what is left of its budget.
 
-        The two routes vary different things, and they always have — what is
-        new is that they now share one budget rather than having two.
+        The routes vary different things, and they always have.
 
-        Through the proxy, the exit address: by then the fingerprint has been
+        Through a proxy, the exit address: by then the fingerprint has been
         cleared on the direct route, and the measured evidence is that a
         refused exit stays refused while a different one serves the identical
-        request minutes later.
+        request minutes later. Both pools work this way — the fallback is not
+        a different mechanism, only a different pool of addresses, which is
+        why it needs no logic of its own.
 
         Direct, the fingerprint: rotating it is free, and a 403 from this
         address could be either rule, so the cheap suspect goes first. Capped
@@ -879,7 +1119,7 @@ class Fetcher:
         here it is evidence, there it is the page.
         """
 
-        if through_proxy:
+        if via != DIRECT:
             return [self._best or self.targets[0]] * room
         cap = min(room, max(1, self.direct_probes)) if escalates else room
         return self._order()[:cap]
@@ -910,7 +1150,7 @@ class Fetcher:
         if len(self.refusals) < KEPT_REFUSALS:
             self.refusals.append(said)
 
-    def _served(self, host: str, url: str, *, through_proxy: bool) -> None:
+    def _served(self, host: str, url: str, *, via: str) -> None:
         """Record a page that actually arrived.
 
         Two things follow from a 2xx and nothing follows from anything else.
@@ -925,19 +1165,18 @@ class Fetcher:
         """
 
         self._seen[host] = url
-        if not through_proxy and host in self.blocked:
+        if via == DIRECT and host in self.blocked:
             self.blocked.discard(host)
             self._memory.forget(host)
             self._memory.save()
 
-    def _proxy_now(self) -> str:
+    def _proxy_now(self, via: str) -> str:
         """The proxy url to use, on the exit address currently in play."""
 
-        if not self.proxy or self._port is None:
-            return self.proxy or ""
-        return _with_port(self.proxy, self._port)
+        pool = self._pool(via)
+        return pool.proxy_now() if pool else ""
 
-    def _slot(self, target: str, through_proxy: bool) -> str:
+    def _slot(self, target: str, via: str) -> str:
         """Which handle serves this target on the route in play.
 
         Target and address both, because a handle carries a cookie jar and a
@@ -945,19 +1184,23 @@ class Fetcher:
         a cookie minted on one exit under one user agent must not be presented
         on another. One slot is one jar file, so no two handles can write the
         same file and lose each other's cookies when they close.
+
+        The address names the vendor as well as the port, because the two
+        pools number their exits independently: `primary-10001` and
+        `fallback-10001` are two different houses, and a jar shared between
+        them would be a cookie presented from the wrong one.
         """
 
-        return f"{target}@{self._address(through_proxy)}"
+        return f"{target}@{self._address(via)}"
 
-    def _address(self, through_proxy: bool) -> str:
+    def _address(self, via: str) -> str:
         """What the request will go out from, named for a filename."""
 
-        if not through_proxy:
-            return "direct"
-        return str(self._port) if self._port is not None else "proxy"
+        pool = self._pool(via)
+        return pool.address() if pool else DIRECT
 
-    def _rotate(self) -> None:
-        """Give up on this exit address and move to another one.
+    def _rotate(self, via: str) -> None:
+        """Give up on this pool's exit address and move to another of its own.
 
         Every handle is dropped, which is what actually gets a new address: a
         handle holds its tunnel, the tunnel holds the session, and the session
@@ -979,18 +1222,29 @@ class Fetcher:
         it would have to make again is a free one.
         """
 
+        pool = self._pool(via)
+        if pool is None or pool.memory is None:
+            # The direct route, which has one address and cannot change it.
+            # Reached only through a caller that should not have asked, so
+            # doing nothing beats inventing a rotation that did not happen.
+            return
         self.rotations += 1
-        # Through the memory rather than `self._exit += 1`, and the difference
-        # is not cosmetic: the old walk advanced an index, so on a 501-port
-        # range it could — and over a day would — come back round to an
-        # address it had already been refused by. `burn` puts the abandoned
+        pool.rotations += 1
+        # Through the memory rather than an index along the range, and the
+        # difference is not cosmetic: the old walk advanced an index, so on a
+        # 501-port range it could — and over a day would — come back round to
+        # an address it had already been refused by. `burn` puts the abandoned
         # port on cooldown for an hour and draws one that is not on it.
-        self._port = self._memory.burn(self.ports)
+        #
+        # Against this pool's own cooldown list, never the other's: a port
+        # number names a different address on each vendor, so burning 10001 on
+        # one says nothing at all about 10001 on the other.
+        pool.port = pool.memory.burn(pool.ports)
         # Written out now rather than at the end of the run, because the thing
         # that most wants to know this exit is bad is the *next* run, and a
         # run that is rotating is a run that may be about to be killed by its
         # own timeout.
-        self._memory.save()
+        pool.memory.save()
         self.close()
 
     def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
@@ -1038,8 +1292,11 @@ class Fetcher:
         """
 
         host = host_of(url)
-        if self.never_proxy(url) or not self.proxy:
-            routes = [False]
+        paid_routes = [one.name for one in self._pools]
+        if self.never_proxy(url) or not paid_routes:
+            # A CDN image, or a box with no provider configured at all. Either
+            # way this address is the only one there is.
+            routes = [DIRECT]
         elif host in self.blocked:
             # Learned this run — or by an earlier one, and seeded in
             # `__post_init__`. Skipping the probe saves one refused request
@@ -1047,10 +1304,10 @@ class Fetcher:
             # not changed since September, it also saves the first one of the
             # run: that is the request the old code paid for every five
             # minutes to be told what it already knew. See `BLOCK_FOR`.
-            routes = [True]
+            routes = paid_routes
             self.probes_skipped += 1
         else:
-            routes = [False, True]
+            routes = [DIRECT, *paid_routes]
 
         # What the last attempt came back with: a status, or — when nothing
         # came back at all — libcurl's reason for that. Two variables rather
@@ -1059,48 +1316,57 @@ class Fetcher:
         last = 0
         broke = ""
         tried = 0
-        paid = False
+        paid = ""
         #: The headers the last refusal carried, for the sentence at the
         #: bottom. See EVIDENCE.
         said = ""
         #: What the portal asked us to wait, if it asked. See RETRY_AFTER_CAP.
         wait = 0.0
-        #: Attempts made, across both routes. One budget, see ATTEMPTS.
+        #: Attempts made on the direct route and the primary pool, which share
+        #: one budget. The fallback keeps its own — see FALLBACK_ATTEMPTS — so
+        #: it is deliberately not counted here.
         spent = 0
-        for through_proxy in routes:
-            paid = through_proxy
-            room = self.attempts - spent
+        for via in routes:
+            paid = "" if via == DIRECT else via
+            # The fallback gets its own budget, because by here the five above
+            # are gone and what they established is about the *other* vendor.
+            room = (
+                self.fallback_attempts
+                if via == FALLBACK
+                else self.attempts - spent
+            )
             if room <= 0:
                 # The free route used the lot. Only reachable with no proxy
                 # configured — `direct_probes` leaves room when there is one —
                 # but said here rather than relied upon.
                 break
-            attempts = self._ladder(room, through_proxy, escalates=len(routes) > 1)
+            attempts = self._ladder(room, via, escalates=len(routes) > 1)
             for nth, target in enumerate(attempts):
                 if nth:
                     # Two different things, and only the first is route-bound.
                     #
                     # The new exit address, between attempts rather than after
                     # the last one, so a run about to give up does not pay for
-                    # a tunnel it will never use — and only on the paid route,
+                    # a tunnel it will never use — and only on a paid route,
                     # because on the direct one it is the fingerprint that
                     # `attempts` varies and the address is the one thing there
                     # that cannot be changed.
                     #
-                    # The wait, on both routes. It is about how the requests
+                    # The wait, on every route. It is about how the requests
                     # arrive rather than about where from, and a burst of
                     # fingerprints off one address is as readable as a burst of
                     # addresses. See BACKOFF.
-                    if through_proxy:
-                        self._rotate()
+                    if via != DIRECT:
+                        self._rotate(via)
                     self._backoff(nth, wait)
                 # Counted before the attempt, not after it: an attempt that
                 # raises is still an attempt, and the sentence at the bottom
                 # of this method is the only account of it anybody gets.
                 tried = nth + 1
-                spent += 1
+                if via != FALLBACK:
+                    spent += 1
                 try:
-                    reply = self._once(url, target, accept, through_proxy)
+                    reply = self._once(url, target, accept, via)
                 except CurlError as exc:
                     # No status to judge — the exchange never completed. See
                     # BROKEN for which of these earn another address, and for
@@ -1108,26 +1374,25 @@ class Fetcher:
                     broke = _broke(exc)
                     last = 0
                     wait = 0.0
-                    self._note(f"- {self._address(through_proxy)} {target} {broke}")
-                    # On the paid route the next attempt is a new exit address,
+                    self._note(f"- {self._address(via)} {target} {broke}")
+                    # On a paid route the next attempt is a new exit address,
                     # which is exactly what a tunnel that would not open calls
                     # for. On the free route the loop varies the fingerprint
                     # instead, and a connection that never opened is no
                     # evidence about a fingerprint — so stop here and let the
                     # escalation below do the work.
-                    if not through_proxy:
+                    if via == DIRECT:
                         break
                     continue
                 broke = ""
                 if 200 <= reply.status < 300:
                     self._best = target
-                    self._served(host, url, through_proxy=through_proxy)
+                    self._served(host, url, via=via)
                     return reply
                 last = reply.status
                 said = reply.said
-                self._note(
-                    reply.evidence(exit_port=self._port if through_proxy else None)
-                )
+                pool = self._pool(via)
+                self._note(reply.evidence(exit_port=pool.port if pool else None))
                 wait = reply.retry_after
                 if wait > RETRY_AFTER_CAP:
                     # They named a wait longer than this run should be held
@@ -1140,34 +1405,63 @@ class Fetcher:
                 # times the traffic for the same result.
                 if reply.status not in ROTATE:
                     break
-            if not through_proxy and broke and len(routes) > 1:
-                # A portal that null-routes this address looks exactly like a
-                # moment of bad network from here, and the proxy is the only
-                # other place to ask — so ask.
-                #
-                # Deliberately NOT recorded in `blocked`, which is the one
-                # difference from the refusal below. That memory sends the
-                # rest of the run straight to paid traffic, and a timeout is
-                # not evidence enough to spend money on nineteen more
-                # districts; a refusal is, because a portal that says 403 to
-                # this address says it every time.
-                continue
-            if not through_proxy and last in BLOCKED:
-                # Recorded whether or not there is anywhere to escalate to.
-                # With no proxy configured this is the only evidence that the
-                # portal objects to the address rather than to the request,
-                # and that is exactly the case somebody needs told about.
-                self.blocked.add(host)
-                # Remembered past this run, but only for a host there is
-                # somewhere else to ask. A reader pinned to the direct route,
-                # or a box with no proxy at all, has nowhere to escalate to —
-                # so skipping its probe next run would not save a request, it
-                # would mean never reading that portal again. See BLOCK_FOR.
-                if self.proxy and not self.never_proxy(url):
-                    self._memory.remember(host)
-                    self._memory.save()
-                if len(routes) > 1:
+            if via == DIRECT:
+                if broke and len(routes) > 1:
+                    # A portal that null-routes this address looks exactly
+                    # like a moment of bad network from here, and a proxy is
+                    # the only other place to ask — so ask.
+                    #
+                    # Deliberately NOT recorded in `blocked`, which is the one
+                    # difference from the refusal below. That memory sends the
+                    # rest of the run straight to paid traffic, and a timeout
+                    # is not evidence enough to spend money on nineteen more
+                    # districts; a refusal is, because a portal that says 403
+                    # to this address says it every time.
                     continue
+                if last in BLOCKED:
+                    # Recorded whether or not there is anywhere to escalate
+                    # to. With no proxy configured this is the only evidence
+                    # that the portal objects to the address rather than to
+                    # the request, and that is exactly the case somebody needs
+                    # told about.
+                    self.blocked.add(host)
+                    # Remembered past this run, but only for a host there is
+                    # somewhere else to ask. A reader pinned to the direct
+                    # route, or a box with no provider at all, has nowhere to
+                    # escalate to — so skipping its probe next run would not
+                    # save a request, it would mean never reading that portal
+                    # again. See BLOCK_FOR.
+                    if self._pools and not self.never_proxy(url):
+                        self._memory.remember(host)
+                        self._memory.save()
+                    if len(routes) > 1:
+                        continue
+                break
+
+            # ── leaving a paid pool that did not serve the page ─────────────
+            #
+            # The exit it finished on is burned *here*, at the moment the pool
+            # is left, and this is the only place that does it. Rotation
+            # otherwise happens between attempts, so the address the last
+            # attempt used would never be cooled down — and it is the one the
+            # memory is still holding as current, so the next run would
+            # inherit precisely the exit that had just refused this one.
+            #
+            # Only for a refusal, and the distinction is the same one `ROTATE`
+            # draws everywhere else in this module: a 404 or a 500 came back
+            # *through* that exit, so it is working and there is nothing to
+            # give up on. Burning it over somebody else's bad gateway would
+            # throw away a warm session to no purpose — and it is also the
+            # answer no other provider would change, which is why the same
+            # condition decides whether to escalate at all.
+            if broke or last in ROTATE:
+                self._rotate(via)
+                # On to the next provider if there is one. This is the whole
+                # of the fallback: a pool whose every exit refused us has said
+                # something about the pool, and the next thing to vary is
+                # whose addresses they are. With no fallback configured there
+                # is no next route and the loop ends here by itself.
+                continue
             break
 
         # Named for what was actually varied, because this sentence is what
@@ -1179,26 +1473,10 @@ class Fetcher:
         # A 500 on the direct probe stops there — it is their fault and not
         # worth paying to hear twice — and the old wording read the end of
         # `routes` and so blamed a proxy the request never went near.
-        # ── the exit this run is about to be remembered on ──────────────────
-        #
-        # Rotation happens *between* attempts, so the address the last attempt
-        # used is never cooled down by the loop — and on the paid route that
-        # address is the one the memory is still holding as current. Left
-        # alone, the next run would inherit precisely the exit that had just
-        # refused the one before it, which is the opposite of the point.
-        #
-        # Only for a refusal, and the distinction is the same one `ROTATE`
-        # draws everywhere else in this module: a 404 or a 500 came back
-        # *through* that exit, so it is working and there is nothing to give
-        # up on. Burning it over somebody else's bad gateway would throw away
-        # a warm session to no purpose.
-        if paid and (broke or last in ROTATE):
-            self._rotate()
+        where = _named(paid or DIRECT)
         if paid:
-            where = "the proxy"
             over = "exit address" if tried == 1 else "exit addresses"
         else:
-            where = "this address"
             over = "fingerprint" if tried == 1 else "fingerprints"
         if broke:
             # Says what happened rather than what was counted. A connection
@@ -1243,22 +1521,42 @@ class Fetcher:
         proxy attempt — which is most of why that reader stored 134 listings
         in a fortnight and announced none of them.
 
-        Raises `Refused` when neither route answered, including when the
-        reason was a connection that never opened rather than a status. See
-        `_head_try`.
+        Raises `Refused` when no route answered, including when the reason was
+        a connection that never opened rather than a status. See `_head_try`.
+
+        ── one attempt per provider, and no ladder on any of them ────────────
+
+        `get` spends up to `ATTEMPTS` on a page; this spends one request per
+        route, and the asymmetry is deliberate. `openrent` makes hundreds of
+        these in a run against `SLUG_BUDGET`, so a ladder here would multiply
+        the whole budget rather than one page — and a redirect is cheap enough
+        that losing one to a bad exit costs a listing's slug, not a district.
+        The fallback is included on the same terms: one more request, only
+        when the primary refused as well.
         """
 
-        escalate = bool(self.proxy) and not self.never_proxy(url)
+        routes = (
+            [] if self.never_proxy(url) else [one.name for one in self._pools]
+        )
+        if routes and host_of(url) in self.blocked:
+            # Known to refuse this address, this run or an earlier one. Decided
+            # here rather than inside `_head_try` so that the probe is skipped
+            # *once*: the switch used to live there, which meant a host already
+            # blocked got one paid lookup from the direct call and then another
+            # from the escalation below — the first provider asked twice for
+            # one url. On `openrent`, which makes hundreds of these a run,
+            # that was hundreds of duplicate paid requests.
+            self.probes_skipped += 1
+            return self._head_paid(url, routes)
         try:
-            status, where = self._head_try(url, through_proxy=False)
+            status, where = self._head_try(url, via=DIRECT)
         except Refused:
-            # Nothing answered. The other route is the only other place to
-            # ask, and it is the same move a refusal gets below — one url,
-            # two routes, which is all this method ever spends. Not recorded
-            # in `blocked` for the same reason `get` does not record it.
-            if not escalate:
+            # Nothing answered. A proxy is the only other place to ask, and it
+            # is the same move a refusal gets below. Not recorded in `blocked`
+            # for the same reason `get` does not record it.
+            if not routes:
                 raise
-            return self._head_try(url, through_proxy=True)
+            return self._head_paid(url, routes)
         if status in BLOCKED:
             # Remembered for the rest of the run, exactly as `get` does, so the
             # next few hundred lookups go straight through the proxy instead of
@@ -1269,13 +1567,42 @@ class Fetcher:
             # refused, so this is the one host whose block is learned here and
             # nowhere else.
             self.blocked.add(host_of(url))
-            if escalate:
+            if routes:
                 self._memory.remember(host_of(url))
                 self._memory.save()
-                return self._head_try(url, through_proxy=True)
+                return self._head_paid(url, routes)
         return status, where
 
-    def _head_try(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
+    def _head_paid(self, url: str, routes: list[str]) -> tuple[int, str | None]:
+        """One lookup through each provider in turn, until one answers.
+
+        "Answers" means anything but a refusal: a 301 is the answer this call
+        exists for, and a 404 is an answer too. Only a `BLOCKED` status or a
+        connection that never opened is worth asking the next provider about,
+        which is the same rule `get` escalates on.
+
+        The last provider's refusal is the one that propagates, because it is
+        the one that ends the attempt — and `_head_try` has already named the
+        route in it.
+        """
+
+        for nth, via in enumerate(routes):
+            last = nth == len(routes) - 1
+            try:
+                status, where = self._head_try(url, via=via)
+            except Refused:
+                if last:
+                    raise
+                continue
+            if status in BLOCKED and not last:
+                continue
+            return status, where
+        # Unreachable: `routes` is non-empty at every call site, so the loop
+        # either returns or raises on its final pass. Here so that the type is
+        # honest rather than inferred from a promise.
+        raise Refused(f"{url} had no route to try")
+
+    def _head_try(self, url: str, *, via: str) -> tuple[int, str | None]:
         """`_head_once`, with a connection that broke arriving as `Refused`.
 
         Every caller of `head` already handles `Refused`: `openrent` counts it
@@ -1287,19 +1614,12 @@ class Fetcher:
         BROKEN.
         """
 
-        # A host already known to refuse this address skips the direct probe
-        # altogether. Decided here rather than inside `_head_once` so that the
-        # route named in the refusal below is the route actually taken.
-        if not through_proxy and self.proxy and not self.never_proxy(url):
-            through_proxy = host_of(url) in self.blocked
-            if through_proxy:
-                self.probes_skipped += 1
         try:
-            return self._head_once(url, through_proxy=through_proxy)
+            return self._head_once(url, via=via)
         except CurlError as exc:
             # Re-raises anything that is our own bug rather than the network's.
             broke = _broke(exc)
-            if through_proxy:
+            if via != DIRECT:
                 # Give up on this exit for the rest of the run. Free, because
                 # the handle holding that dead tunnel has just been dropped
                 # anyway — and without it the next few hundred lookups would
@@ -1307,18 +1627,18 @@ class Fetcher:
                 # turns a run's whole slug budget into nothing. `get` gets
                 # this from the rotation inside its own attempt loop; a
                 # lookup has no loop to put it in, so it moves on the way out.
-                self._rotate()
-            where = "the proxy" if through_proxy else "this address"
+                self._rotate(via)
+            where = _named(via)
             raise Refused(
                 f"{url} never answered — {broke}, from {where}"
             ) from exc
 
-    def _head_once(self, url: str, *, through_proxy: bool) -> tuple[int, str | None]:
+    def _head_once(self, url: str, *, via: str) -> tuple[int, str | None]:
         self._pause()
         body = io.BytesIO()
         headers = io.BytesIO()
         target = self._best or self.targets[0]
-        slot, curl = self._handle(target, through_proxy=through_proxy)
+        slot, curl = self._handle(target, via=via)
 
         curl.setopt(CurlOpt.URL, url.encode())
         curl.setopt(CurlOpt.WRITEDATA, body)
@@ -1328,9 +1648,7 @@ class Fetcher:
         # following it would fetch the very page this call exists to avoid.
         curl.setopt(CurlOpt.FOLLOWLOCATION, 0)
         curl.setopt(CurlOpt.TIMEOUT_MS, int(self.timeout * 1000))
-        curl.setopt(
-            CurlOpt.PROXY, self._proxy_now().encode() if through_proxy else b""
-        )
+        curl.setopt(CurlOpt.PROXY, self._proxy_now(via).encode())
 
         try:
             curl.perform()
@@ -1338,7 +1656,7 @@ class Fetcher:
             wire = _wire(curl)
         except Exception:
             # Metered before the handle is thrown away: see `_once`.
-            self._spent(_wire(curl), through_proxy)
+            self._spent(_wire(curl), via)
             self._handles.pop(slot, None)
             curl.close()
             raise
@@ -1358,7 +1676,7 @@ class Fetcher:
             curl.setopt(CurlOpt.NOBODY, 0)
             curl.setopt(CurlOpt.FOLLOWLOCATION, 1)
 
-        self._spent(wire, through_proxy)
+        self._spent(wire, via)
 
         where = None
         for line in headers.getvalue().decode("latin1").splitlines():
@@ -1366,21 +1684,31 @@ class Fetcher:
                 where = line.split(":", 1)[1].strip()
         return status, where
 
-    def _spent(self, wire: int, through_proxy: bool) -> None:
+    def _spent(self, wire: int, via: str) -> None:
         """Add one request to the meters, whether or not it was served.
 
         Every attempt, including the refused and the broken ones: the stage
         reports `requests` and `bytes` as what this run cost, and a request
-        that failed through the proxy was still paid for.
+        that failed through a proxy was still paid for.
+
+        Metered per pool as well as in total, because two providers send two
+        invoices and a figure that mixed them could be reconciled against
+        neither. `proxy_wire` stays the primary's alone for that reason — see
+        the field's own note.
         """
 
         self.requests += 1
         self.wire += wire
-        if through_proxy:
+        pool = self._pool(via)
+        if pool is None:
+            return
+        pool.requests += 1
+        pool.wire += wire
+        if pool.name == PRIMARY:
             self.proxied += 1
             self.proxy_wire += wire
 
-    def _handle(self, target: str, *, through_proxy: bool) -> tuple[str, Curl]:
+    def _handle(self, target: str, *, via: str) -> tuple[str, Curl]:
         """The handle for one target on one address, built if need be.
 
         Returns the slot as well as the handle, because the caller needs to be
@@ -1407,13 +1735,18 @@ class Fetcher:
         the handle never changes either, so neither does its jar. See `_slot`.
         """
 
-        slot = self._slot(target, through_proxy)
+        slot = self._slot(target, via)
         handle = self._handles.get(slot)
         if handle is None:
             handle = Curl()
             handle.impersonate(target)
             if self.cookies:
-                jar = self._memory.jar(self._address(through_proxy), target)
+                # From the reader's own memory, not the pool's, so that every
+                # jar for one reader lands in one directory and `prune_jars`
+                # sweeps all of them. The vendor and the exit are already in
+                # the address — see `Pool.address` — so the paths stay
+                # distinct per pool without the file having to move.
+                jar = self._memory.jar(self._address(via), target)
                 if jar is None:
                     # Nowhere writable, so the cookies live and die with this
                     # process. An empty COOKIEFILE still starts the engine, so
@@ -1440,11 +1773,19 @@ class Fetcher:
         for handle in self._handles.values():
             handle.close()
         self._handles.clear()
-        # The last thing a run has to say about its exit address and the hosts
-        # that refused it. `_rotate` already saves as it goes; this catches a
-        # run that drew a fresh port and was served on it, which is the case
-        # the next run most wants to inherit.
+        # The last thing a run has to say about its exit addresses and the
+        # hosts that refused it. `_rotate` already saves as it goes; this
+        # catches a run that drew a fresh port and was served on it, which is
+        # the case the next run most wants to inherit.
+        #
+        # Every pool, not only the reader's own file: the fallback keeps a
+        # second one, and a run that was rescued by the fallback has learned
+        # the single most valuable thing there is to pass on — which of that
+        # vendor's addresses worked.
         self._memory.save()
+        for pool in self._pools:
+            if pool.memory is not None and pool.memory is not self._memory:
+                pool.memory.save()
 
     def __enter__(self) -> Fetcher:
         return self
@@ -1464,7 +1805,7 @@ class Fetcher:
             time.sleep(random.uniform(0, self.jitter))
 
     def _once(
-        self, url: str, target: str, accept: str, through_proxy: bool
+        self, url: str, target: str, accept: str, via: str
     ) -> Reply:
         self._pause()
         body = io.BytesIO()
@@ -1475,7 +1816,7 @@ class Fetcher:
         # memory. See CALLBACK_TARGETS. What it carries is now worth having:
         # see EVIDENCE for why a 403's headers are the whole of the diagnosis.
         headers = io.BytesIO()
-        slot, curl = self._handle(target, through_proxy=through_proxy)
+        slot, curl = self._handle(target, via=via)
 
         # Every option is set on every request, none left to carry over. A
         # reused handle remembers what it was last told, and the one that
@@ -1492,9 +1833,7 @@ class Fetcher:
         # it: a `head()` that raised part-way leaves the handle bodiless, and
         # every page after it would come back empty with no error at all.
         curl.setopt(CurlOpt.NOBODY, 0)
-        curl.setopt(
-            CurlOpt.PROXY, self._proxy_now().encode() if through_proxy else b""
-        )
+        curl.setopt(CurlOpt.PROXY, self._proxy_now(via).encode())
         # ── the referer, and why it is not a caller's argument ─────────────
         #
         # The last page this Fetcher was served on this host. A browser
@@ -1526,7 +1865,7 @@ class Fetcher:
             # such attempts tells the wrong story about the run — which was
             # the whole reason yesterday's failures looked like no attempt at
             # all. What libcurl can still account for is taken and no more.
-            self._spent(_wire(curl), through_proxy)
+            self._spent(_wire(curl), via)
             # A handle that failed mid-transfer may be holding a connection in
             # an unknown state, and the next request on it would fail for a
             # reason that has nothing to do with the next request. Drop it; the
@@ -1539,7 +1878,7 @@ class Fetcher:
             curl.close()
             raise
 
-        self._spent(wire, through_proxy)
+        self._spent(wire, via)
         return Reply(
             status=status,
             body=body.getvalue().decode("utf-8", errors="replace"),
@@ -1554,7 +1893,8 @@ class Fetcher:
 
 __all__ = [
     "ATTEMPTS", "BACKOFF", "BACKOFF_CAP", "BLOCKED", "BROKEN",
-    "CALLBACK_TARGETS", "DIRECT_PROBES", "EVIDENCE", "IMPERSONATE", "JITTER",
-    "KEPT_REFUSALS", "RETRY_AFTER_CAP", "ROTATE", "STICKY_PORTS", "TIMEOUT",
-    "Fetcher", "Refused", "Reply", "exit_ports", "host_of",
+    "CALLBACK_TARGETS", "DIRECT", "DIRECT_PROBES", "EVIDENCE", "FALLBACK",
+    "FALLBACK_ATTEMPTS", "IMPERSONATE", "JITTER", "KEPT_REFUSALS", "PRIMARY",
+    "RETRY_AFTER_CAP", "ROTATE", "STICKY_PORTS", "TIMEOUT",
+    "Fetcher", "Pool", "Refused", "Reply", "exit_ports", "host_of",
 ]

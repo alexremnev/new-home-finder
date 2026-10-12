@@ -630,6 +630,8 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
 SELECT to_char(r.started_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI') AS run,
        r.status,
        (s.counters->>'exit_port')::int                      AS exit_port,
+       (s.counters->>'fallback_exit_port')::int             AS fb_port,
+       (s.counters->>'fallback_requests')::int              AS fb_reqs,
        (s.counters->>'exit_rotations')::int                 AS rotations,
        (s.counters->>'probes_skipped')::int                 AS probes_saved,
        jsonb_array_length(s.counters->'refusal_detail')     AS refusals,
@@ -658,6 +660,33 @@ SELECT date_trunc('hour', r.started_at AT TIME ZONE 'Europe/London') AS hour,
  WHERE r.job = 'zoopla_london'
    AND r.started_at > now() - interval '24 hours'
  GROUP BY 1 ORDER BY 1 DESC;
+
+
+-- Доходило ли до второго провайдера, и во что он обошёлся.
+--
+-- `fallback_requests` появляется в счётчиках ТОЛЬКО когда первый пул истратил
+-- весь свой бюджет и всё равно не взял страницу. Раз в неделю — один плохой
+-- exit; каждый прогон — у вендора что-то сломалось, и это разговор с
+-- вендором, а не правка кода. Трафик считается отдельно: `proxy_bytes` — это
+-- счёт DataImpulse, `fallback_bytes` — счёт Smart Proxy, и смешивать их
+-- нельзя, иначе ни один из двух счетов не сверить.
+--
+-- Пусто во всех строках = `SCRAPE_PROXY_FALLBACK` не заполнен, маршрута нет.
+SELECT date_trunc('day', r.started_at AT TIME ZONE 'Europe/London') AS day,
+       r.job,
+       count(*)                                                      AS runs,
+       count(*) FILTER (WHERE s.counters ? 'fallback_requests')       AS fell_back,
+       count(*) FILTER (WHERE s.counters ? 'fallback_requests'
+                          AND r.status = 'ok')                        AS rescued,
+       sum((s.counters->>'fallback_requests')::int)                   AS reqs,
+       pg_size_pretty(sum((s.counters->>'proxy_bytes')::bigint))       AS primary_bill,
+       pg_size_pretty(coalesce(sum((s.counters->>'fallback_bytes')::bigint), 0))
+                                                                      AS second_bill
+  FROM job_runs r
+  JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
+ WHERE r.started_at > now() - interval '7 days'
+   AND r.job IN ('rightmove', 'zoopla_london', 'spareroom', 'openrent')
+ GROUP BY 1, 2 ORDER BY 1 DESC, 2;
 
 
 -- Работает ли вообще sticky-сессия. `exit_port` обязан СТОЯТЬ на месте от

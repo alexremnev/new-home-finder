@@ -23,8 +23,12 @@ from worker.sources import session
 from worker.sources.fetch import (
     BACKOFF_CAP,
     BLOCKED,
+    DIRECT,
+    FALLBACK,
+    FALLBACK_ATTEMPTS,
     JITTER,
     KEPT_REFUSALS,
+    PRIMARY,
     RETRY_AFTER_CAP,
     ROTATE,
     STICKY_PORTS,
@@ -42,27 +46,35 @@ PROXY = "http://user:pass@gw.dataimpulse.com:823"
 @dataclass
 class Attempt:
     target: str
-    through_proxy: bool
+    #: Which route carried it: `DIRECT`, `PRIMARY` or `FALLBACK`.
+    via: str
+
+    @property
+    def through_proxy(self) -> bool:
+        """Whether it was paid for at all, which is what most tests ask."""
+
+        return self.via != DIRECT
 
 
 class Fake(Fetcher):
     """A Fetcher whose single request is scripted rather than performed."""
 
-    def __init__(self, answers: dict[bool, int], **kw: object) -> None:
+    def __init__(self, answers: dict[object, int], **kw: object) -> None:
         kw.setdefault("backoff", 0)
         super().__init__(**kw)  # type: ignore[arg-type]
-        # status to answer with, per route: True = through the proxy.
+        #: Status to answer with. Keyed either by route name — `PRIMARY`,
+        #: `FALLBACK` — for a test that cares which provider answered, or by
+        #: the older "was it paid for" boolean, which is what most of these
+        #: ask and what keeps them readable.
         self.answers = answers
         self.tried: list[Attempt] = []
 
     def _once(  # type: ignore[override]
-        self, url: str, target: str, accept: str, through_proxy: bool
+        self, url: str, target: str, accept: str, via: str
     ) -> Reply:
-        self.tried.append(Attempt(target, through_proxy))
-        status = self.answers.get(through_proxy, 200)
-        self.requests += 1
-        if through_proxy:
-            self.proxied += 1
+        self.tried.append(Attempt(target, via))
+        status = self.answers.get(via, self.answers.get(via != DIRECT, 200))
+        self._spent(1000, via)
         return Reply(status=status, body="ok", wire=1000, impersonated=target)
 
 
@@ -287,13 +299,12 @@ class Rotating(Fetcher):
         self.exits_tried: list[str] = []
 
     def _once(  # type: ignore[override]
-        self, url: str, target: str, accept: str, through_proxy: bool
+        self, url: str, target: str, accept: str, via: str
     ) -> Reply:
-        self.requests += 1
-        if not through_proxy:
+        self._spent(1, via)
+        if via == DIRECT:
             return Reply(status=403, body="", wire=1, impersonated=target)
-        self.proxied += 1
-        self.exits_tried.append(self._proxy_now())
+        self.exits_tried.append(self._proxy_now(via))
         status = 200 if len(self.exits_tried) >= self.serves_on else 403
         return Reply(status=status, body="ok", wire=1, impersonated=target)
 
@@ -378,8 +389,8 @@ def test_two_readers_through_one_proxy_do_not_share_one_exit() -> None:
     two = Fetcher(proxy=STICKY, session="openrent")
 
     assert one.exit_port != two.exit_port
-    assert one._proxy_now() != two._proxy_now()
-    assert one._proxy_now() != STICKY or len(STICKY_PORTS) == 1
+    assert one._proxy_now(PRIMARY) != two._proxy_now(PRIMARY)
+    assert one._proxy_now(PRIMARY) != STICKY or len(STICKY_PORTS) == 1
 
 
 def test_the_exit_that_worked_is_kept_for_the_next_run() -> None:
@@ -532,18 +543,21 @@ class Breaking(Fetcher):
         self.serves_on = serves_on
         self.exits_tried: list[str] = []
         self.routes: list[bool] = []
+        #: The same sequence named rather than reduced to a boolean, for the
+        #: tests that care which of the two providers was reached.
+        self.vias: list[str] = []
 
     def _once(  # type: ignore[override]
-        self, url: str, target: str, accept: str, through_proxy: bool
+        self, url: str, target: str, accept: str, via: str
     ) -> Reply:
-        self.requests += 1
-        self.routes.append(through_proxy)
-        if not through_proxy:
+        self._spent(1, via)
+        self.routes.append(via != DIRECT)
+        self.vias.append(via)
+        if via == DIRECT:
             if self.direct_breaks:
                 raise broke(self.code)
             return Reply(status=403, body="", wire=1, impersonated=target)
-        self.proxied += 1
-        self.exits_tried.append(self._proxy_now())
+        self.exits_tried.append(self._proxy_now(via))
         if len(self.exits_tried) < self.serves_on:
             raise broke(self.code)
         return Reply(status=200, body="ok", wire=1, impersonated=target)
@@ -677,12 +691,16 @@ class BreakingHead(Fetcher):
         self.code = code
         self.breaks_through_proxy = breaks_through_proxy
         self.routes: list[bool] = []
+        #: The same sequence named rather than reduced to a boolean, for the
+        #: tests that care which of the two providers was reached.
+        self.vias: list[str] = []
 
     def _head_once(  # type: ignore[override]
-        self, url: str, *, through_proxy: bool
+        self, url: str, *, via: str
     ) -> tuple[int, str | None]:
-        self.routes.append(through_proxy)
-        if through_proxy and not self.breaks_through_proxy:
+        self.routes.append(via != DIRECT)
+        self.vias.append(via)
+        if via != DIRECT and not self.breaks_through_proxy:
             return 301, "/property-to-rent/london/2-bed-flat-e14/123"
         raise broke(self.code)
 
@@ -718,11 +736,11 @@ def test_an_exit_that_broke_a_lookup_is_not_used_for_the_next_one() -> None:
     # which is a whole slug budget spent on nothing. The rotation is free: the
     # handle holding that dead tunnel has already been dropped.
     get = BreakingHead(7, breaks_through_proxy=True, proxy=STICKY)
-    first = get._proxy_now()
+    first = get._proxy_now(PRIMARY)
     with pytest.raises(Refused):
         get.head(SHORT)
 
-    assert get._proxy_now() != first
+    assert get._proxy_now(PRIMARY) != first
     assert get.rotations >= 1
 
 
@@ -762,20 +780,18 @@ class Served(Fetcher):
         self.raw = headers
         self.sent: list[dict[str, object]] = []
 
-    def _once(self, url: str, target: str, accept: str, through_proxy: bool) -> Reply:
+    def _once(self, url: str, target: str, accept: str, via: str) -> Reply:
         # Build the handle exactly as the real path does, then record what it
         # was told rather than performing it.
         # The handle is built for its side effects and not to be performed on:
         # building it is what opens the cookie jar, which is the part of this
         # path the tests below are about.
-        slot, _ = self._handle(target, through_proxy=through_proxy)
+        slot, _ = self._handle(target, via=via)
         came_from = self._seen.get(host_of(url), "")
         self.sent.append(
             {"url": url, "slot": slot, "referer": came_from, "target": target}
         )
-        self.requests += 1
-        if through_proxy:
-            self.proxied += 1
+        self._spent(1, via)
         return Reply(
             status=self.status,
             body="ok",
@@ -819,7 +835,11 @@ def test_one_handle_per_target_and_route_so_no_two_share_a_jar() -> None:
 
     slots = [str(one["slot"]) for one in get.sent]
     assert any(one.endswith("@direct") for one in slots)
-    assert any(one.endswith("@823") for one in slots)
+    # The vendor is named as well as the port, because the two pools number
+    # their exits independently: `primary-823` and `fallback-823` are two
+    # different houses, and a jar shared between them would present a cookie
+    # from the wrong one.
+    assert any(one.endswith(f"@{PRIMARY}-823") for one in slots)
     # One slot is one jar file. The claim is the mapping: two slots never land
     # on the same path, so the last handle closed cannot discard what another
     # one had been given.
@@ -984,3 +1004,320 @@ def test_a_retry_after_longer_than_a_run_should_wait_ends_the_attempt(
     assert slept == []
     assert get.requests == 1
     get.close()
+
+
+# ── the second provider ────────────────────────────────────────────────────
+#
+# One pool of residential addresses can go bad as a pool: the measured
+# evidence this module is built on is that a refused exit stays refused while
+# a different one serves the same request minutes later, but that only helps
+# while *some* exit is being served. When `ATTEMPTS` is gone the thing that has
+# been established is about the vendor, and the next thing to vary is whose
+# addresses they are rather than which of theirs.
+#
+# It is off until a url is configured, and these pin that as hard as they pin
+# the escalation itself: an unset fallback must cost nothing anywhere.
+
+SMART = "http://user:pass@gate.smartproxy.net:10000"
+SMART_ONE = "http://user:pass@gate.smartproxy.net:7000"
+
+
+class Tiered(Fetcher):
+    """A Fetcher that records which route each attempt went out on.
+
+    Answers are keyed by route name, so a test can say "the primary refuses
+    everything and the fallback serves" — which is the whole situation this
+    exists for and the one thing `Fake` cannot express about two proxies.
+    """
+
+    def __init__(self, answers: dict[str, int], **kw: object) -> None:
+        kw.setdefault("backoff", 0)
+        kw.setdefault("jitter", 0)
+        super().__init__(**kw)  # type: ignore[arg-type]
+        self.answers = answers
+        #: (route, the proxy url it actually used) per attempt.
+        self.seen: list[tuple[str, str]] = []
+
+    def _once(  # type: ignore[override]
+        self, url: str, target: str, accept: str, via: str
+    ) -> Reply:
+        self._spent(1, via)
+        self.seen.append((via, self._proxy_now(via)))
+        return Reply(
+            status=self.answers.get(via, 200), body="ok", wire=1, impersonated=target
+        )
+
+    def routes_used(self) -> list[str]:
+        return [one for one, _ in self.seen]
+
+    def ports_on(self, via: str) -> list[str]:
+        return [url.rpartition(":")[2] for one, url in self.seen if one == via]
+
+
+def test_an_unset_fallback_changes_nothing_at_all() -> None:
+    # The default, and the property that makes this safe to deploy before the
+    # url exists: no pool is built, no second memory file is read, and the
+    # route list is exactly the length it was.
+    get = Tiered({DIRECT: 403, PRIMARY: 403}, proxy=STICKY, session="zoopla")
+    with pytest.raises(Refused) as raised:
+        get.get(ZOOPLA)
+
+    assert get.fallback is None
+    assert [one.name for one in get._pools] == [PRIMARY]
+    assert FALLBACK not in get.routes_used()
+    assert get.fallback_requests == 0
+    assert get.fallback_port is None
+    assert "fallback" not in str(raised.value)
+    get.close()
+
+
+def test_filling_in_the_url_is_the_whole_of_switching_it_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Nothing else to set, nothing to migrate, no code change. This is the
+    # requirement the route was built to: the variable goes in and the next run
+    # has a second provider.
+    monkeypatch.setenv("SCRAPE_PROXY", STICKY)
+    monkeypatch.delenv("SCRAPE_PROXY_FALLBACK", raising=False)
+    assert Fetcher.from_env(session="zoopla").fallback is None
+
+    monkeypatch.setenv("SCRAPE_PROXY_FALLBACK", SMART)
+    built = Fetcher.from_env(session="zoopla")
+    assert built.fallback == SMART
+    assert [one.name for one in built._pools] == [PRIMARY, FALLBACK]
+    # And it got the sticky range off its own url, not the primary's.
+    assert built.fallback_ports == tuple(STICKY_PORTS)
+    assert built.fallback_attempts == FALLBACK_ATTEMPTS
+    built.close()
+
+
+def test_the_fallback_is_reached_only_once_the_primary_is_exhausted() -> None:
+    # The order matters: the fallback is a second vendor's bill, so it is not
+    # tried until the first has had its whole budget.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    assert get.get(ZOOPLA).status == 200
+
+    assert get.routes_used() == [
+        DIRECT, DIRECT, PRIMARY, PRIMARY, PRIMARY, FALLBACK
+    ]
+    # Two direct probes and three primary exits — the budget of five — then
+    # the fallback, which is where the page actually came from.
+    assert len(get.ports_on(PRIMARY)) == 3
+    assert get.fallback_requests == 1
+    get.close()
+
+
+def test_the_fallback_gets_three_attempts_of_its_own() -> None:
+    # Not a share of `ATTEMPTS`, which is empty by the time it is reached —
+    # a budget the fallback had to share would be gone exactly when the
+    # fallback became worth having. See FALLBACK_ATTEMPTS.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 403},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    with pytest.raises(Refused) as raised:
+        get.get(ZOOPLA)
+
+    assert len(get.ports_on(FALLBACK)) == FALLBACK_ATTEMPTS == 3
+    assert len(get.seen) == 2 + 3 + 3, "the stated worst case for one url"
+    # And the sentence says which provider ran out, because "the proxy
+    # refused us" would now be ambiguous between two of them.
+    assert "the fallback proxy" in str(raised.value)
+    get.close()
+
+
+def test_the_fallback_can_be_switched_off_without_losing_its_url() -> None:
+    # What somebody bisecting a bad afternoon wants: stop paying the second
+    # vendor without having to find the url again afterwards.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, fallback_attempts=0, session="zoopla",
+    )
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert get.fallback == SMART, "still configured"
+    assert [one.name for one in get._pools] == [PRIMARY]
+    assert get.fallback_requests == 0
+    get.close()
+
+
+def test_each_pool_rotates_its_own_exits_and_never_the_others() -> None:
+    # A port number names a different address on each vendor, so 10001 on one
+    # says nothing whatever about 10001 on the other. Two pools, two cooldown
+    # lists, two sticky exits.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 403},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    primary, second = get._pools
+    assert primary.memory is not second.memory
+    assert len(set(get.ports_on(PRIMARY))) == 3
+    assert len(set(get.ports_on(FALLBACK))) == 3
+    # Each pool's own burned ports went on its own list, and neither list
+    # mentions the other's.
+    assert primary.memory is not None and second.memory is not None
+    burned_first = {str(one) for one in primary.memory.cooldown}
+    burned_second = {str(one) for one in second.memory.cooldown}
+    assert burned_first >= set(get.ports_on(PRIMARY))
+    assert burned_second >= set(get.ports_on(FALLBACK))
+    get.close()
+
+
+def test_the_two_pools_keep_separate_memory_files(
+    isolated_state: pathlib.Path,
+) -> None:
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    get.get(ZOOPLA)
+    get.close()
+
+    assert (isolated_state / "exit-zoopla.json").is_file()
+    assert (isolated_state / "exit-zoopla-fallback.json").is_file()
+
+
+def test_the_fallbacks_exit_is_remembered_across_runs_like_the_primarys() -> None:
+    # The sticky session is the point of all of this, and it is no less the
+    # point for the second provider: an address that was served is the one the
+    # next run should keep using.
+    first = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    first.get(ZOOPLA)
+    served = first.fallback_port
+    first.close()
+
+    second = Tiered({DIRECT: 200}, proxy=STICKY, fallback=SMART, session="zoopla")
+    assert second.fallback_port == served
+    second.close()
+
+
+def test_the_fallbacks_traffic_is_metered_apart_from_the_primarys() -> None:
+    # Two vendors send two invoices. `proxy_bytes` is reconciled against
+    # DataImpulse's, so a figure mixing them could be checked against neither.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    get.get(ZOOPLA)
+
+    assert get.proxied == 3 and get.proxy_wire == 3
+    assert get.fallback_requests == 1 and get.fallback_wire == 1
+    # The run's total still counts every byte, including the direct probes.
+    assert get.requests == 6 and get.wire == 6
+    get.close()
+
+
+@pytest.mark.parametrize("status", [404, 500])
+def test_an_answer_is_never_taken_to_a_second_vendor(status: int) -> None:
+    # A 404 is an answer and a 500 is their problem. Asking a different
+    # provider would spend a second vendor's traffic to hear it again.
+    get = Tiered(
+        {DIRECT: status, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert get.routes_used() == [DIRECT]
+    assert get.fallback_requests == 0
+    get.close()
+
+
+def test_a_cdn_picture_reaches_neither_provider() -> None:
+    # The rule that was true of one proxy has to stay true of two: a preview
+    # image is an already-resized CDN variant served to anybody, and paying
+    # two vendors to fetch the cheapest thing is worse than paying one.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 200, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+        direct_hosts=("media.rightmove.co.uk",),
+    )
+    with pytest.raises(Refused):
+        get.get(IMAGE)
+
+    # Every attempt on this address, varying only the fingerprint: with no
+    # route to save the budget for, the direct ladder gets the whole of it.
+    assert set(get.routes_used()) == {DIRECT}
+    assert get.proxied == 0 and get.fallback_requests == 0
+    get.close()
+
+
+def test_a_blocked_host_skips_the_probe_and_still_reaches_both_providers() -> None:
+    # The saved direct probe must not cost the escalation: a host known to
+    # refuse this address goes straight to the primary and on to the fallback
+    # from there.
+    get = Tiered(
+        {PRIMARY: 403, FALLBACK: 200},
+        proxy=STICKY, fallback=SMART, session="zoopla",
+    )
+    get.blocked.add(host_of(ZOOPLA))
+    assert get.get(ZOOPLA).status == 200
+
+    assert get.routes_used() == [PRIMARY, PRIMARY, PRIMARY, PRIMARY, PRIMARY, FALLBACK]
+    assert get.probes_skipped == 1
+    get.close()
+
+
+def test_a_single_exit_fallback_is_asked_three_times_on_its_one_address() -> None:
+    # Their rotating port assigns an address per connection, so the fresh
+    # tunnel is itself the new address and the port must not be moved — the
+    # same rule as the primary's port 823.
+    get = Tiered(
+        {DIRECT: 403, PRIMARY: 403, FALLBACK: 403},
+        proxy=STICKY, fallback=SMART_ONE, session="zoopla",
+    )
+    with pytest.raises(Refused):
+        get.get(ZOOPLA)
+
+    assert get.ports_on(FALLBACK) == ["7000", "7000", "7000"]
+    get.close()
+
+
+def test_only_the_configured_provider_is_used_when_the_primary_is_unset() -> None:
+    # A box with only the second url filled in should work rather than
+    # silently refuse to use it.
+    get = Tiered({DIRECT: 403, FALLBACK: 200}, fallback=SMART, session="zoopla")
+
+    assert [one.name for one in get._pools] == [FALLBACK]
+    assert get.get(ZOOPLA).status == 200
+    # Two direct probes, because there is somewhere to save the budget for,
+    # and then the only provider configured.
+    assert get.routes_used() == [DIRECT, DIRECT, FALLBACK]
+    get.close()
+
+
+def test_a_lookup_reaches_the_fallback_when_the_primary_refuses_too() -> None:
+    # `head` spends one request per route rather than a ladder — `openrent`
+    # makes hundreds of these against SLUG_BUDGET — so the fallback is one
+    # more request, and only once the primary has refused as well.
+    get = BreakingHead(7, breaks_through_proxy=True, proxy=STICKY, fallback=SMART)
+    with pytest.raises(Refused) as raised:
+        get.head(SHORT)
+
+    assert get.vias == [DIRECT, PRIMARY, FALLBACK]
+    assert "the fallback proxy" in str(raised.value)
+
+
+def test_a_known_blocked_host_costs_one_lookup_per_provider_and_no_more() -> None:
+    # The duplicate this closed: the switch to a paid route used to live
+    # inside `_head_try`, so a host already in `blocked` got one lookup from
+    # the direct call and then another from the escalation — the first
+    # provider asked twice for one url. `openrent` makes hundreds of these a
+    # run, so it was hundreds of duplicate paid requests.
+    get = BreakingHead(7, breaks_through_proxy=True, proxy=STICKY, fallback=SMART)
+    get.blocked.add(host_of(SHORT))
+    with pytest.raises(Refused):
+        get.head(SHORT)
+
+    assert get.vias == [PRIMARY, FALLBACK], "one each, and no direct probe"
+    assert get.probes_skipped == 1

@@ -588,7 +588,11 @@ def _collect(
 ) -> Sweep:
 
     with run.stage("scrape", source_key=portal.key) as stage:
-        stage.set("proxied", bool(fetcher.proxy))
+        # "Was there anywhere to escalate to", which is what this counter has
+        # always meant — so either provider counts. A box with only
+        # `SCRAPE_PROXY_FALLBACK` filled in does have a paid route, and
+        # reading `proxy` alone would report it as having none.
+        stage.set("proxied", bool(fetcher.proxy or fetcher.fallback))
         if dry_run:
             stage.set("suppressed", True)
             return Sweep()
@@ -941,6 +945,26 @@ def _collect(
         # can answer. Absent with no proxy configured.
         if fetcher.exit_port is not None:
             stage.set("exit_port", fetcher.exit_port)
+        # The second provider, and only when it was actually reached. Its
+        # presence is the news: it means the primary pool spent its whole
+        # budget and still did not get the page, which once in a while is one
+        # bad exit and every run is a vendor that has stopped working.
+        #
+        # Reported separately from `proxy_bytes` rather than added to it,
+        # because that figure is checked against DataImpulse's invoice and a
+        # number mixing two vendors could be reconciled against neither.
+        if fetcher.fallback_requests:
+            stage.set("fallback_requests", fetcher.fallback_requests)
+            stage.set("fallback_bytes", fetcher.fallback_wire)
+            if fetcher.fallback_port is not None:
+                stage.set("fallback_exit_port", fetcher.fallback_port)
+            stage.log(
+                "warn",
+                f"{portal.key} fell back to the second proxy provider after "
+                f"the primary pool refused every exit it was given; "
+                f"{fetcher.fallback_requests} request(s) and "
+                f"{fetcher.fallback_wire} bytes went through it",
+            )
         # Direct probes an earlier run's memory saved us. One request each,
         # and on `openrent` one per *run* rather than one per lookup. A figure
         # that drops to zero means the memory stopped surviving the process,
