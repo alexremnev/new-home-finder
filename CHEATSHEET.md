@@ -352,7 +352,7 @@ SELECT kind, billed_as, count(*), sum(cost_micros) / 1e6 AS dollars
 SELECT wa_service_micros, wa_template_micros FROM plan_settings;
 UPDATE plan_settings SET wa_template_micros = <цена в миллионных доллара>;
 
--- кто близко к своим 900
+-- кто близко к своему лимиту (у недельного плана 200, у месячного 900)
 SELECT user_id, messages_used, message_allowance, plan_until
   FROM user_entitlement
  WHERE message_allowance IS NOT NULL
@@ -967,7 +967,7 @@ uv run pytest -q
 
 Миграции по порядку, через Supabase → SQL Editor: `db/migrations/0001_init.sql`,
 `0002_rightmove.sql`, `0003_rls.sql`, и так до последней — на сегодня
-`0058_lapsed_share.sql`. Затем:
+`0064_whatsapp_week.sql`. Затем:
 
 ```bash
 uv run python scripts/seed_locations.py --enable SE16,SE8,E14
@@ -1084,12 +1084,36 @@ Dashboard → Product catalogue → **+ Add product**:
 у нас теперь проверка формы, которая скажет это словами.
 
 ```sql
+-- Telegram
 UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'week';
 UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'month';
+-- WhatsApp (цена своя, потому что Meta берёт деньги за каждое сообщение)
+UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'wa_week';
+UPDATE plans SET stripe_price_id = 'price_…' WHERE key = 'wa_month';
 ```
 
 Без этого страница честно скажет «not set up for card payment yet» — не отдаст
 ошибку Stripe, которая винит покупателя.
+
+### Что продаётся сейчас
+
+Четыре плана, по два на мессенджер. Таблица — источник правды, поэтому смотреть
+её, а не этот список:
+
+```sql
+SELECT key, display_name, channel, duration_days,
+       price_pence / 100.0 AS "£", message_allowance,
+       stripe_price_id IS NOT NULL AS "есть test id",
+       stripe_price_id_live IS NOT NULL AS "есть live id"
+  FROM plans WHERE enabled AND price_pence > 0 ORDER BY channel, price_pence;
+```
+
+На сегодня: Telegram — £4.99 неделя и £9.99 месяц, сообщения не считаются;
+WhatsApp — £6.99 неделя на 200 сообщений (миграция 0064) и £19.99 месяц на 900
+(0039 и 0063). Лимит сообщений есть только на WhatsApp: там каждое сообщение
+оплачивается Мете, и он заканчивает оплаченный период так же, как кончившиеся
+дни. Добавить план — это строка в `plans` плюс Price в обоих аккаунтах Stripe;
+ни воркер, ни сайт плана по имени не знают.
 
 ### Две ловушки
 

@@ -12,6 +12,14 @@ export type Plan = {
   max_districts: number;
   duration_days: number | null;
   price_pence: number;
+  /**
+   * WhatsApp messages included in one period, or null for unmetered — which
+   * is every Telegram plan, where delivery is free and there is nothing to
+   * meter. Read rather than written into the copy, and read per plan rather
+   * than per channel: WhatsApp is sold by the week and by the month now, and
+   * the two include different numbers.
+   */
+  message_allowance: number | null;
 
   // The id for whichever Stripe account is in use. Both are read from the row
   // and `priced` picks one, so nothing downstream has to know about modes.
@@ -47,8 +55,8 @@ export type Account = {
   // channel connected yet, which cannot reach a paid page anyway.
   channel: Channel | null;
   // Whether the plan is live, answered by `user_entitlement` rather than here.
-  // A WhatsApp month ends at thirty days OR at nine hundred messages, so the
-  // date alone stopped being the answer — see 0057 and 0063.
+  // A WhatsApp period ends on its days OR on its messages — whichever runs
+  // out first — so the date alone stopped being the answer. See 0057 and 0063.
   live: boolean;
   message_allowance: number | null;
   messages_used: number;
@@ -84,7 +92,7 @@ export function trialDaysOn(plan: SignupPlan, channel: Channel): number | null {
 export async function paidPlans(channel?: Channel): Promise<Plan[]> {
   const rows = await query<PlanRow>(
     `SELECT key, display_name, max_districts, duration_days, price_pence,
-            stripe_price_id, stripe_price_id_live
+            message_allowance, stripe_price_id, stripe_price_id_live
        FROM plans
       WHERE enabled AND price_pence > 0
         AND ($1::text IS NULL OR channel IS NULL OR channel = $1)
@@ -94,7 +102,21 @@ export async function paidPlans(channel?: Channel): Promise<Plan[]> {
   return rows.map(priced);
 }
 
-export type Price = { pence: number; unit: string };
+export type Price = {
+  pence: number;
+  unit: string;
+  /**
+   * Messages included at this price, or null when there is no limit.
+   *
+   * Beside the price rather than beside the channel, which is where it used
+   * to be: `channelAllowance` returned the largest of a channel's plans on
+   * the reasoning that the card speaks for the best of the offer. That held
+   * while WhatsApp had one plan. With a week at two hundred and a month at
+   * nine hundred, the largest is a number that belongs to one of the two
+   * prices the card is showing, and nothing said which.
+   */
+  allowance: number | null;
+};
 
 // "week" reads better than "7 days" and is what the price is actually thought
 // of as. Anything that is not a round period falls back to saying the days.
@@ -116,31 +138,8 @@ export async function channelPrices(channel: Channel): Promise<Price[]> {
   return plans.map((plan) => ({
     pence: plan.price_pence,
     unit: unitOf(plan.duration_days),
+    allowance: plan.message_allowance,
   }));
-}
-
-/**
- * How many alerts a messenger's paid plan includes, or null when it includes
- * as many as there are.
- *
- * Read from `plans.message_allowance` and never written into the copy, for
- * the reason `lapsedShare` gives below: the number is a product decision that
- * lives in the table, and a card repeating it is a card that will one day
- * promise nine hundred to somebody whose plan says something else.
- *
- * The largest of a channel's plans, where there is more than one — the card
- * speaks for the offer, and the offer is the best of them.
- */
-export async function channelAllowance(channel: Channel): Promise<number | null> {
-  const rows = await query<{ allowance: number | null }>(
-    `SELECT max(message_allowance) AS allowance
-       FROM plans
-      WHERE enabled AND price_pence > 0
-        AND ($1::text IS NULL OR channel IS NULL OR channel = $1)`,
-    [channel],
-  ).catch(() => []);
-  const allowance = rows[0]?.allowance;
-  return allowance === undefined || allowance === null ? null : Number(allowance);
 }
 
 /**
@@ -533,7 +532,7 @@ export async function returningFor(
 export async function paidPlan(key: string): Promise<Plan | null> {
   const rows = await query<PlanRow>(
     `SELECT key, display_name, max_districts, duration_days, price_pence,
-            stripe_price_id, stripe_price_id_live
+            message_allowance, stripe_price_id, stripe_price_id_live
        FROM plans WHERE key = $1 AND enabled AND price_pence > 0`,
     [key],
   );

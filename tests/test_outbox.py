@@ -487,7 +487,7 @@ def test_a_spent_allowance_is_two_lines_and_a_button() -> None:
     text = notice_for("wa_month", None, "spent", 0, "https://pay.test/x", allowance=900)
 
     assert text.splitlines() == [
-        "🔔 You have had all 900 alerts included in this month, so alerts have stopped.",
+        "🔔 You have had all 900 alerts included in your plan, so alerts have stopped.",
         "Your filter is kept — paying turns the alerts back on with nothing to "
         "set up again.",
     ]

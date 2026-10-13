@@ -2,7 +2,7 @@ import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import {
-  channelAllowance, channelPrices, districtNames, enabledDistricts, returningFor,
+  channelPrices, districtNames, enabledDistricts, returningFor,
   signupPlan, trialDaysOn,
 } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
@@ -29,25 +29,26 @@ export default async function Page({
 
   const names = await districtNames().catch(() => ({}));
 
-  // What each card says. Both numbers come from `plans`, so the page cannot
+  // What each card says. Every number comes from `plans`, so the page cannot
   // offer a trial the bot will not grant or a price checkout will not charge.
-  const [telegramPrices, whatsappPrices, telegramAllowance, whatsappAllowance] =
-    await Promise.all([
-      channelPrices("telegram"),
-      channelPrices("whatsapp"),
-      channelAllowance("telegram"),
-      channelAllowance("whatsapp"),
-    ]);
+  //
+  // One query per messenger, not two: the messages a plan includes travel with
+  // the price they are included at. Both channels are sold by the week and by
+  // the month, and the two periods include different numbers of messages — so
+  // a single figure per channel could only ever belong to one of the prices
+  // beside it.
+  const [telegramPrices, whatsappPrices] = await Promise.all([
+    channelPrices("telegram"),
+    channelPrices("whatsapp"),
+  ]);
   const offers = {
     telegram: {
       trialDays: plan ? trialDaysOn(plan, "telegram") : null,
       prices: telegramPrices,
-      allowance: telegramAllowance,
     },
     whatsapp: {
       trialDays: plan ? trialDaysOn(plan, "whatsapp") : null,
       prices: whatsappPrices,
-      allowance: whatsappAllowance,
     },
   };
 

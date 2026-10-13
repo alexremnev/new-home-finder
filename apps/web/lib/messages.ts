@@ -274,7 +274,16 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   }
   for (const plan of plans) {
     const span = plan.duration_days ? `${plan.duration_days} days` : "no time limit";
-    lines.push(`${plan.display_name} — ${price(plan.price_pence)} for ${span}`);
+    // What it includes, where it is metered. Only WhatsApp is, and the week
+    // and the month do not include the same number — so a price list that
+    // gave only the money and the days would be asking somebody to choose
+    // between £6.99 and £19.99 on the length alone.
+    const included = plan.message_allowance
+      ? `, ${plan.message_allowance} alerts`
+      : "";
+    lines.push(
+      `${plan.display_name} — ${price(plan.price_pence)} for ${span}${included}`,
+    );
   }
   return lines.join("\n");
 }

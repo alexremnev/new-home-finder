@@ -89,10 +89,13 @@ export async function POST(request: Request): Promise<NextResponse> {
 
       await run(
         // The days stack — paying with a week left gives a week plus a month
-        // — but the allowance does not: `plan_from` moves to now, so this is a
-        // fresh nine hundred. That is what buying another month means, and the
-        // alternative would be an allowance measured over a period that keeps
-        // growing. See 0057.
+        // — but the allowance does not: `plan_from` moves to now, so what they
+        // have is the new plan's own allowance, whole. That is what buying
+        // another period means, and the alternative would be an allowance
+        // measured over a period that keeps growing. The figure is whatever
+        // the plan bought says — a WhatsApp week includes two hundred messages
+        // and a month nine hundred — and nothing here needs to know which.
+        // See 0057 and 0064.
         `UPDATE users
             SET plan = $1,
                 plan_from = now(),

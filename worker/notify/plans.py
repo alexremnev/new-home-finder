@@ -97,7 +97,7 @@ def expiry_notice(plan: str, share: int | None = None, link: str | None = None) 
 def spent_notice(
     allowance: int | None, share: int | None = None, link: str | None = None
 ) -> str:
-    """A month that ended on its allowance rather than on its calendar.
+    """A period that ended on its allowance rather than on its calendar.
 
     Deliberately the same shape as `expiry_notice`: what happened, what it
     means, and the one tap that undoes it. The period has ended — that is the
@@ -113,17 +113,23 @@ def spent_notice(
     Three lines and no commands. Unused days and unused alerts do not carry
     over, which was said here and is now not: it answers a question nobody has
     yet asked at the moment they are deciding whether to pay again.
+
+    "In your plan" and not "in this month". WhatsApp is sold by the week as
+    well as by the month — 0064 — and the two include different numbers, so
+    the period cannot be named without being told which one this is. The
+    number says the rest: somebody who bought two hundred reads "all 200" and
+    knows what ran out.
     """
 
     how_many = f"all {allowance}" if allowance else "all"
     if not share or share >= 100:
         opening = (
-            f"You have had {how_many} alerts included in this month, so alerts "
+            f"You have had {how_many} alerts included in your plan, so alerts "
             "have stopped."
         )
     else:
         opening = (
-            f"You have had {how_many} alerts included in this month. You now "
+            f"You have had {how_many} alerts included in your plan. You now "
             f"receive {share}% of what matches your filter."
         )
 

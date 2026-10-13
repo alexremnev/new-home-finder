@@ -76,6 +76,17 @@ export default async function UpgradePage({
                     ? `${plan.duration_days} days from today`
                     : "No end date"}
                 </li>
+                {/* What it includes, where there is a limit — which on
+                    WhatsApp there is, and a different one per period: the
+                    week includes two hundred messages and the month nine
+                    hundred. Without this the two cards differ only by price
+                    and length, and the month reads as four times the money
+                    for four times the days. Omitted rather than written as
+                    "unlimited" on a plan with no limit: the Telegram cards
+                    have never claimed one and the absence is not news. */}
+                {plan.message_allowance !== null && (
+                  <li>{plan.message_allowance} alerts included</li>
+                )}
               </ul>
               <a
                 className="cta"

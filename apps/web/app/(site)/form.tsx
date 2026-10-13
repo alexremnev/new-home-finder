@@ -66,17 +66,19 @@ type Props = {
 export type Offer = {
   trialDays: number | null;
   /**
-   * Alerts included in a paid period, or null for as many as there are.
+   * Every price this messenger is sold at, cheapest first, and what each one
+   * includes. Both channels have two — a week and a month — so the band is a
+   * list rather than a single figure.
    *
-   * From `plans.message_allowance`, so the card cannot promise a number the
-   * delivery rules do not honour — which it did while this was a string typed
-   * into the list below.
+   * `allowance` is the messages included at that price, from
+   * `plans.message_allowance`, or null where there is no limit. Null on every
+   * Telegram plan, because delivery there is free and there is nothing to
+   * meter. Read and never typed into the copy, so the card cannot promise a
+   * number the delivery rules do not honour — which it did while it was a
+   * string in the list below, and did again while it was one figure per
+   * channel standing for two plans that include different amounts.
    */
-  allowance: number | null;
-  // Every price this messenger is sold at, cheapest first. Telegram has two —
-  // a week and a month — and WhatsApp one, so the band is a list rather than a
-  // single figure.
-  prices: { pence: number; unit: string }[];
+  prices: { pence: number; unit: string; allowance: number | null }[];
 };
 
 type Channel = "telegram" | "whatsapp";
@@ -905,7 +907,11 @@ function Choice({
   ready: boolean;
   flag?: string;
 }) {
-  const { trialDays, prices, allowance } = offer;
+  const { trialDays, prices } = offer;
+  // What is metered, said per period, because a week and a month do not
+  // include the same number. Nothing metered at all is "unlimited", which is
+  // every Telegram plan.
+  const metered = prices.filter((price) => price.allowance !== null);
 
   return (
     <div className={flag ? "offer offer-best" : "offer"}>
@@ -941,12 +947,17 @@ function Choice({
           <Tick /> Real-time alerts
         </li>
         {/* Metered or not, said either way. "Unlimited" is worth a line of its
-            own next to a messenger that is not. */}
+            own next to a messenger that is not — and where it is metered, each
+            period says its own figure: the WhatsApp week includes two hundred
+            messages and the month nine hundred, and one number standing for
+            both would be wrong about one of them. */}
         <li>
           <Tick />{" "}
-          {allowance === null
+          {metered.length === 0
             ? "Unlimited alerts"
-            : `${allowance} alerts per month`}
+            : metered
+                .map((price) => `${price.allowance} alerts a ${price.unit}`)
+                .join(", ")}
         </li>
       </ul>
 
