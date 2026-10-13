@@ -1334,6 +1334,134 @@ def test_yesterdays_messages_do_not_count_against_today(
     assert held_reasons(conn) == [None]
 
 
+def wa_alert_queued_while_live(
+    conn: Any, run: Run, *, plan: str = "trial", plan_hours: int = 1
+) -> int:
+    """One WhatsApp listing alert, queued while the plan was still running.
+
+    WhatsApp only, so the account has one primary channel and the entitlement
+    is the one its own messenger is priced at.
+
+    The window is open and stays open for every test below, because that is
+    the case that was wrong: new matches stop being queued the moment a plan
+    ends — `queue_matches` reads the same share — and the backlog behind a
+    shut window went out in full as soon as anything reopened it.
+    """
+
+    user_id = make_user(conn, address="", plan=plan, plan_hours=plan_hours)
+    conn.execute("UPDATE channels SET enabled = true WHERE key = 'whatsapp'")
+    conn.execute(
+        "INSERT INTO user_channels (user_id, channel, address, verified_at, "
+        "last_inbound_at) VALUES (%s, 'whatsapp', '447700900123', now(), now())",
+        (user_id,),
+    )
+    make_subscription(conn, user_id)
+    outbox.queue_matches(
+        conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")]
+    )
+    # Nothing is holding it yet: the plan is live and the window is open.
+    assert held_reasons(conn) == [None]
+    return user_id
+
+
+def ended(conn: Any, user_id: int) -> None:
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
+        (user_id,),
+    )
+
+
+def test_a_finished_whatsapp_trial_holds_the_backlog_an_open_window_would_release(
+    conn: Any, run: Run
+) -> None:
+    # The hole 0065 closes. Alerts queue up behind a shut window during the
+    # trial, the trial ends, the person taps "Keep searching" — and a day of
+    # listings went out to somebody with no plan, billed to us, each one
+    # footed with "you are currently receiving only 0% of available
+    # properties".
+    user_id = wa_alert_queued_while_live(conn, run)
+    ended(conn, user_id)
+
+    assert held_reasons(conn) == ["plan ended"]
+    assert store.claim_queued(conn, limit=10, max_attempts=3) == []
+    # Held, not claimed: claiming spends one of five attempts on a message
+    # that is not being sent, and renewing must not find it out of them.
+    assert int(notification(conn)["attempts"]) == 0
+
+
+def test_a_finished_whatsapp_subscription_is_no_different_from_a_trial(
+    conn: Any, run: Run
+) -> None:
+    # The rule is about the plan being over, not about which plan it was. A
+    # month that ran out is a month somebody has stopped paying for.
+    user_id = wa_alert_queued_while_live(conn, run, plan="wa_month", plan_hours=1)
+    ended(conn, user_id)
+
+    assert held_reasons(conn) == ["plan ended"]
+
+
+def test_a_spent_whatsapp_allowance_holds_the_backlog_with_days_still_left(
+    conn: Any, run: Run
+) -> None:
+    # The other half of `live`, and the half a date cannot explain: the period
+    # ended on its messages with three weeks still on the calendar. Written
+    # straight into the ledger, which is what the view counts — see 0063.
+    #
+    # The same nine hundred messages trip the daily cap as well, so this also
+    # pins the order: the plan is the reason, and the cap — which is only ever
+    # "not until tomorrow" — is not.
+    user_id = wa_alert_queued_while_live(conn, run, plan="wa_month", plan_hours=20 * 24)
+    allowance = conn.execute(
+        "SELECT message_allowance FROM plans WHERE key = 'wa_month'"
+    ).fetchone()["message_allowance"]
+    conn.execute(
+        "INSERT INTO wa_messages (user_id, kind) "
+        "SELECT %s, 'listing' FROM generate_series(1, %s)",
+        (user_id, allowance),
+    )
+
+    assert held_reasons(conn) == ["plan ended"]
+
+
+def test_paying_again_releases_what_the_ended_plan_was_holding(
+    conn: Any, run: Run
+) -> None:
+    # Held rather than skipped, for this: somebody who renews inside the
+    # two-day backlog window gets the listings they paid to see. What is not
+    # renewed is cleared by `drop_stale_whatsapp` on the same two days.
+    user_id = wa_alert_queued_while_live(conn, run)
+    ended(conn, user_id)
+    assert held_reasons(conn) == ["plan ended"]
+
+    conn.execute(
+        "UPDATE users SET plan = 'wa_month', plan_from = now(), "
+        "plan_until = now() + interval '30 days' WHERE id = %s",
+        (user_id,),
+    )
+
+    assert held_reasons(conn) == [None]
+    assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
+
+
+def test_a_lapsed_telegram_plan_keeps_receiving_its_share(
+    conn: Any, run: Run
+) -> None:
+    # Untouched, deliberately. A fifth of the matches costs nothing to deliver
+    # on Telegram and is the best argument for the other four; what says so in
+    # the message is the share, which puts the limited-access line at its foot.
+    user_id = make_user(conn, plan="trial", plan_hours=1)
+    make_subscription(conn, user_id)
+    outbox.queue_matches(
+        conn, run, source_key="openrent", listing_ids=[make_listing(conn, "1")]
+    )
+    ended(conn, user_id)
+
+    assert held_reasons(conn) == [None]
+    claimed = store.claim_queued(conn, limit=10, max_attempts=3)
+    assert len(claimed) == 1
+    assert outbox.withheld_share(claimed[0]) == 20
+
+
 def test_nothing_holds_a_telegram_message(conn: Any, run: Run) -> None:
     # Which is what keeps `Oldest queued` honest: it ages the rows with no
     # reason, and for Telegram there is never one.
