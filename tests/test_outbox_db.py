@@ -700,16 +700,17 @@ def test_a_spent_allowance_brings_the_daily_cap_back(conn: Any) -> None:
     assert exempt is not None and exempt["exempt"] is False
 
 
-def test_a_finished_telegram_plan_still_gets_a_fifth(conn: Any) -> None:
+def test_a_finished_telegram_plan_still_gets_a_share(conn: Any) -> None:
     # The free tier is the best argument for the paid one, and on Telegram it
-    # costs nothing to make — so the fallback stays where 0046 put it.
+    # costs nothing to make — so the fallback stays, at the tenth 0069 put it
+    # back to.
     user_id = make_user(conn, plan="paid", plan_days=None, plan_hours=None)
     conn.execute(
         "UPDATE users SET plan_until = now() - interval '1 day' WHERE id = %s",
         (user_id,),
     )
 
-    assert entitlement(conn, user_id)["delivery_share"] == 20
+    assert entitlement(conn, user_id)["delivery_share"] == 10
 
 
 def test_a_live_trial_is_told_what_it_will_fall_back_to(conn: Any) -> None:
@@ -724,14 +725,14 @@ def test_a_live_trial_is_told_what_it_will_fall_back_to(conn: Any) -> None:
 
     assert one["live"] is True
     assert one["delivery_share"] == 100
-    assert one["lapsed_share"] == 20
+    assert one["lapsed_share"] == 10
 
     conn.execute(
         "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s", (user_id,)
     )
     notices = store.claim_plan_notices(conn)
     assert [row["stage"] for row in notices] == ["hour"]
-    assert int(notices[0]["lapsed_share"]) == 20
+    assert int(notices[0]["lapsed_share"]) == 10
 
 
 def test_a_live_whatsapp_month_falls_back_to_nothing(conn: Any) -> None:
@@ -1573,9 +1574,10 @@ def test_paying_again_releases_what_the_ended_plan_was_holding(
 def test_a_lapsed_telegram_plan_keeps_receiving_its_share(
     conn: Any, run: Run
 ) -> None:
-    # Untouched, deliberately. A fifth of the matches costs nothing to deliver
-    # on Telegram and is the best argument for the other four; what says so in
-    # the message is the share, which puts the limited-access line at its foot.
+    # Untouched, deliberately. The lapsed tier's share of the matches costs
+    # nothing to deliver on Telegram and is the best argument for paying; what
+    # says so in the message is the share, which puts the limited-access line
+    # at its foot.
     user_id = make_user(conn, plan="trial", plan_hours=1)
     make_subscription(conn, user_id)
     outbox.queue_matches(
@@ -1586,7 +1588,7 @@ def test_a_lapsed_telegram_plan_keeps_receiving_its_share(
     assert held_reasons(conn) == [None]
     claimed = store.claim_queued(conn, limit=10, max_attempts=3)
     assert len(claimed) == 1
-    assert outbox.withheld_share(claimed[0]) == 20
+    assert outbox.withheld_share(claimed[0]) == 10
 
 
 def test_nothing_holds_a_telegram_message(conn: Any, run: Run) -> None:

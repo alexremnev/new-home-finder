@@ -526,8 +526,8 @@ def test_the_only_warning_before_the_end_is_the_hour_one() -> None:
 def test_a_trial_about_to_end_says_what_it_falls_back_to() -> None:
 
     # Not "the alerts stop": on Telegram a finished plan drops to the lapsed
-    # tier, which 0046 put at a fifth of the listings precisely because a fifth
-    # is the best argument for the other four. Telling people the alerts stop
+    # tier, which carries a share of the listings precisely because that share
+    # is the best argument for paying. Telling people the alerts stop
     # was the opposite of the thing meant to bring them back — and it came from
     # reading the share in force now (a live trial's hundred per cent) as the
     # share that follows. See 0058.

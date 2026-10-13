@@ -975,9 +975,10 @@ def claim_plan_notices(
                    -- What the alerts fall back to, so the notice can say so
                    -- rather than guessing. Read from the entitlement view and
                    -- not from the lapsed plan directly: the fallback depends on
-                   -- the channel — a fifth of the listings on Telegram, nothing
-                   -- on WhatsApp — and a notice promising a share that is not
-                   -- delivered is worse than one that promises nothing.
+                   -- the channel — the lapsed tier's share of the listings on
+                   -- Telegram, nothing on WhatsApp — and a notice promising a
+                   -- share that is not delivered is worse than one that
+                   -- promises nothing.
                    --
                    -- `lapsed_share`, not `delivery_share`: three of these four
                    -- stages fire while the plan is still running, and the share

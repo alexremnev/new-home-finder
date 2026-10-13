@@ -150,7 +150,7 @@ export async function channelPrices(channel: Channel): Promise<Price[]> {
  * one day be wrong.
  *
  * It is nought on WhatsApp, and the channel is therefore not optional. The
- * fifth of the listings a finished plan keeps receiving costs nothing on
+ * share of the listings a finished plan keeps receiving costs nothing on
  * Telegram and is a standing bill on a channel Meta charges per message for,
  * so 0057 stops it there — and a page promising a share that is not delivered
  * is exactly the drift that view exists to prevent.
