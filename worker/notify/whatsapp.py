@@ -50,6 +50,13 @@ WINDOW = timedelta(hours=24)
 # of a fixed shape.
 ABSENT = "—"
 
+# The template categories Meta prices separately, and therefore the only values
+# `WA_NOTICE_CATEGORY` may take. Anything else is a typo in a settings file, and
+# a typo that reached the ledger would be a row the invoice cannot be matched
+# against — so it falls back to the reviewed category rather than being written
+# down as given. See 0066.
+RATES = ("utility", "marketing")
+
 def _plain(line: Line) -> str:
 
     body = f"*{line.text}*" if line.bold else line.text
@@ -329,6 +336,7 @@ class WhatsAppNotifier:
         sender: Sender | None = None,
         version: str = VERSION,
         notice_template: str | None = None,
+        notice_category: str = "marketing",
     ) -> None:
         self.phone_id = phone_id
         self.token = token
@@ -339,6 +347,15 @@ class WhatsAppNotifier:
         self.sender = sender or _post
         self.version = version
         self.notice_template = notice_template
+        # Which rate the notice template is billed at. Meta reviewed it as
+        # marketing — a body that sells, with a button that takes payment —
+        # which is why that is the default rather than the `utility` it was
+        # submitted as. Still a setting and not a constant: the category is
+        # Meta's to change, and it re-classifies after approval. See 0066 for
+        # where to read the current answer, and `_post` for what this is used
+        # for — nothing is sent differently, only priced differently.
+        asked = (notice_category or "").strip().lower()
+        self.notice_category = asked if asked in RATES else "marketing"
 
     @classmethod
     def from_env(cls) -> WhatsAppNotifier:
@@ -352,6 +369,7 @@ class WhatsAppNotifier:
             (os.environ.get("WA_TEMPLATE_IMAGE") or "").strip().lower()
             in ("1", "true", "yes"),
             notice_template=os.environ.get("WA_NOTICE_TEMPLATE") or None,
+            notice_category=os.environ.get("WA_NOTICE_CATEGORY") or "marketing",
         )
 
     def supports(self, kind: AlertKind) -> bool:
@@ -448,12 +466,38 @@ class WhatsAppNotifier:
                 "text": {"preview_url": alert.kind == "listing", "body": body},
             }
 
-        if alert.kind == "expired" and self.notice_template and alert.params:
-            # The one notice that has to arrive. Somebody whose access just
-            # changed has, by definition, not written in for a day — which is
-            # exactly when the free-form path is shut. The template says what
-            # happened and asks them to reply; replying reopens the window, and
-            # everything after that is free text again.
+        if alert.kind == "expired" and self.notice_template and alert.billable_template:
+            # The one notice worth paying to deliver. Somebody whose plan just
+            # ended has, by definition, not written in for a day — which is
+            # exactly when the free-form path is shut — and what they are owed
+            # is the sentence saying the alerts stopped and the one tap that
+            # turns them back on.
+            #
+            # `billable_template` and not merely "there is a template": this is
+            # a marketing message at three times the price of one inside the
+            # window, and the outbox sets the flag only for a plan somebody
+            # paid for. See the contract.
+            #
+            # The button is a fixed url and one variable, the same shape the
+            # listing template's button has — and a declared variable is not
+            # optional: a template whose button takes `{{1}}` and is sent
+            # without it is refused with 132000, so a missing token is a send
+            # that cannot be made rather than a notice with no button on it.
+            #
+            # Retryable, because it is a fact about this attempt and not about
+            # the person: `upgrade_token` issues one on every drain.
+            if not alert.checkout_token:
+                return SendResult(
+                    ok=False,
+                    error="the notice template needs a checkout token",
+                    retryable=True,
+                )
+
+            # Only the button. The template declares no variables in its body
+            # — one wording covers a period that ended on its days and one
+            # that ended on its allowance, so there was nothing left for a
+            # variable to say — and a component the template does not declare
+            # is 132000 on every send, the same way round.
             return {
                 "messaging_product": "whatsapp",
                 "to": number,
@@ -463,10 +507,11 @@ class WhatsAppNotifier:
                     "language": {"code": self.language},
                     "components": [
                         {
-                            "type": "body",
+                            "type": "button",
+                            "sub_type": "url",
+                            "index": "0",
                             "parameters": [
-                                {"type": "text", "text": one_line(value)}
-                                for value in alert.params
+                                {"type": "text", "text": one_line(alert.checkout_token)}
                             ],
                         }
                     ],
@@ -474,12 +519,26 @@ class WhatsAppNotifier:
             }
 
         if alert.kind != "listing" or alert.listing is None:
-            # Nothing else has an approved shape, and inventing one here would
-            # be a message WhatsApp refuses. Retryable: the person may write in,
-            # and then the free-form path opens.
+            # Nothing else has a shape that may be sent here, and inventing one
+            # would be a message WhatsApp refuses. Retryable: the person may
+            # write in, and then the free-form path opens.
+            #
+            # Three reasons, said apart, because only one of them is a fault.
+            # An ended trial is "not worth buying a marketing message for" —
+            # see `billable_template` — and reading that in the log as "has no
+            # template" would send the next person looking for a template that
+            # is sitting there approved. The other way round is worse: a
+            # notice that should have been bought and was not, because nobody
+            # set WA_NOTICE_TEMPLATE, must not read as a decision.
+            if alert.kind != "expired":
+                why = "has no template"
+            elif not alert.billable_template:
+                why = "is not worth the template"
+            else:
+                why = "would be sent but WA_NOTICE_TEMPLATE is not set"
             return SendResult(
                 ok=False,
-                error=f"outside the 24h window and {alert.kind} has no template",
+                error=f"outside the 24h window and {alert.kind} {why}",
                 retryable=True,
             )
         if not self.template:
@@ -575,11 +634,28 @@ class WhatsAppNotifier:
         # `last_inbound`, so that the ledger records what was sent and not
         # what a second look at the clock would have sent.
         result = _interpret(response)
-        return result.model_copy(
-            update={
-                "billed_as": "utility" if payload.get("type") == "template" else "service"
-            }
-        )
+        return result.model_copy(update={"billed_as": self._rate(payload)})
+
+    def _rate(self, payload: dict[str, Any]) -> str:
+        """Which of Meta's rates the payload that went out is charged at.
+
+        Free-form is a service message. A template is priced by its category,
+        and there are two of them with two categories — the listing template
+        is a utility one, the plan notice carries a payment button and is
+        therefore a marketing one. So the name of the template decides, which
+        is the only thing in the payload that distinguishes them.
+
+        The notice's category is a setting rather than a constant for the
+        reason 0066 gives: Meta classifies templates itself and re-classifies
+        them, so what was submitted is not what will be billed.
+        """
+
+        if payload.get("type") != "template":
+            return "service"
+        name = str((payload.get("template") or {}).get("name") or "")
+        if self.notice_template and name == self.notice_template:
+            return self.notice_category
+        return "utility"
 
 # Graph reports everything as an `error` object with a numeric code.
 #

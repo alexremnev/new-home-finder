@@ -80,11 +80,28 @@ class Alert(BaseModel):
     listing: ListingView | None = None
     text: str | None = None
     actions: list[Action] = Field(default_factory=list)
-    # The same facts as `text`, separated, for a channel that may only send an
-    # approved template. WhatsApp outside its 24-hour window is the only one:
-    # it cannot send prose at all, and a notice that nobody receives is the
-    # worst of the three outcomes.
-    params: list[str] = Field(default_factory=list)
+    # Whether this alert may be sent as the paid template when the only other
+    # option is not sending it at all. WhatsApp outside its 24-hour window is
+    # the only channel that asks: it cannot send prose there, and the template
+    # that can is a marketing one at three times the price of a message inside
+    # the window.
+    #
+    # So it is not "may a template be used", it is "is this one worth buying".
+    # Off by default, and set by the outbox for exactly one case — a paid plan
+    # that has ended. A trial that ends outside the window is told nothing:
+    # somebody who never paid, and has not written in for a day, is not worth
+    # six cents of a marketing message, and the warning before the end has
+    # already gone out inside the window. See `claim_plan_notices`.
+    billable_template: bool = False
+    # The upgrade token, for a template whose button is a fixed url and one
+    # variable. `actions` carries the whole link for every channel that can
+    # write one out; a template button is given the suffix alone, so the two
+    # cannot be the same field.
+    #
+    # The token and not the url: what the template declares is
+    # `.../upgrade?t={{1}}`, and a parameter containing the host as well would
+    # produce a link with the host in it twice.
+    checkout_token: str | None = None
 
 class SendResult(BaseModel):
     ok: bool
@@ -96,15 +113,18 @@ class SendResult(BaseModel):
     cost_micros: int = 0
 
     # Which of the provider's rates the message that actually went out is
-    # charged at. Only WhatsApp sets it, and only it has two: free-form inside
-    # the 24-hour window is a `service` message, and the approved template
-    # that is the only way to reach a shut window is a `utility` one, priced
-    # differently. The notifier is the one thing that knows which payload it
-    # sent, so it is the one thing that can say — see 0063, and `_post`.
+    # charged at. Only WhatsApp sets it, and only it has more than one:
+    # free-form inside the 24-hour window is a `service` message, and the
+    # approved templates that are the only way to reach a shut window are
+    # priced by their category — `utility` for the listing template,
+    # `marketing` for the plan notice, which carries a payment button and is
+    # therefore the dearest thing we send. The notifier is the one thing that
+    # knows which payload it sent, so it is the one thing that can say — see
+    # 0063, 0066, and `_post`.
     #
     # None means "no rate applies", which is Telegram: nothing to meter where
     # delivery is free.
-    billed_as: Literal["service", "utility"] | None = None
+    billed_as: Literal["service", "utility", "marketing"] | None = None
 
 @runtime_checkable
 class Notifier(Protocol):

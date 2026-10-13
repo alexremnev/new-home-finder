@@ -103,13 +103,49 @@ Only the notice template is new. Create it once:
 ```sh
 curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
   -H "Authorization: Bearer $WA_ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"plan_notice","language":"en","category":"UTILITY",
-       "components":[{"type":"BODY",
-         "text":"Your {{1}} has ended. You now receive {{2}} that match your filter. Your filter is kept exactly as it is — reply here and we will send you the link to turn everything back on.",
-         "example":{"body_text":[["free trial","20% of the listings"]]}}]}'
+  -d '{"name":"plan_notice_paid","language":"en","category":"MARKETING",
+   "components":[
+     {"type":"BODY",
+      "text":"Your alerts have stopped — your plan has run out.\n\nYour filter is kept exactly as it is. Tap below and everything turns back on, with nothing to set up again."},
+     {"type":"BUTTONS","buttons":[{"type":"URL","text":"Get full access",
+      "url":"https://londonhomefinder.co.uk/upgrade?t={{1}}",
+      "example":["https://londonhomefinder.co.uk/upgrade?t=AbC123xyz"]}]}]}'
 ```
 
-`example` is required whenever the text has variables.
+No variable in the body, so no `body_text` example — one wording covers both
+ways a period ends, out of days and out of its message allowance, and there was
+nothing left for a variable to say. The button's variable is the upgrade token,
+without which the page cannot tell whose plan is being bought; a declared
+button variable is not optional, so a send with no token is refused with 132000
+and the notifier does not attempt one.
+
+`language` must be plain `en`. Picking "English (UK)" in the editor gives
+`en_GB`, the code sends `en`, and every send fails with 132001.
+
+**Who gets it.** Only a plan somebody paid for, and only when their window is
+shut. An ended trial is told nothing on this path: the template is a marketing
+message at three times the price of one inside the window, and the warning
+before the end has already gone out while the window was open — see
+`claim_plan_notices`, which treats the window shutting as a deadline of its
+own, and `worth_a_template` in the outbox, which is where the line is drawn.
+
+**Category is not yours to decide.** This one was submitted as `UTILITY` and
+came back `MARKETING`: Meta classifies templates itself, and a body that sells
+with a button that takes payment is a marketing template whatever the
+submission said. It re-classifies after approval too. `marketing` is therefore
+what the notifier bills it at by default; `WA_NOTICE_CATEGORY` is there to
+follow Meta if it moves the template again, and it prices the ledger row and
+nothing else. Read the current answer off the template:
+
+```sh
+curl -s "https://graph.facebook.com/v21.0/$WABA_ID/message_templates?fields=name,status,category" \
+  -H "Authorization: Bearer $WA_ACCESS_TOKEN"
+```
+
+Marketing also costs something other than money: Meta pauses marketing
+templates first when a number's quality rating drops, and they count against
+the business-initiated ceiling that business verification raises. A utility
+template is subject to neither.
 
 The listing template's shape is fixed by the code, so do not rebuild it by hand
 unless you have to. In order: `{{1}}` area or address, `{{2}}` price,
@@ -134,23 +170,35 @@ That was not true when this was written, and the code was built on the old
 rule: see 0063, which moved the nine-hundred allowance onto messages and
 started counting all of them in `wa_messages`.
 
-Two rates, and the prices live in `plan_settings` in **millionths of a US
+Three rates, and the prices live in `plan_settings` in **millionths of a US
 dollar** — the currency Meta bills in, left unconverted so that no invented
 exchange rate ends up quoted as a cost:
 
 ```sql
 -- free-form inside the 24-hour window: $0.022 a message, already set by 0063
--- the template that reaches a shut window: a different and higher rate, per
--- category and per country, so read it off the first bill that has one
-SELECT wa_service_micros, wa_template_micros FROM plan_settings;
-UPDATE plan_settings SET wa_template_micros = <price>;
+-- the plan notice, which carries a payment button and is therefore marketing:
+--   $0.0635, set by 0066
+-- the listing template, utility: $0.022 as well — the same as service, set by
+--   0067. Its own column because they are two rates that are equal today,
+--   not one rate with two names
+SELECT wa_service_micros, wa_marketing_micros, wa_template_micros
+  FROM plan_settings;
 ```
 
-Until the template rate is set, those messages are counted and left out of the
-money, and the dashboard tile says how many — an understated total that admits
-it beats a confident wrong one. In practice almost everything is the service
-rate: the queue holds any alert whose window is shut, so the template path is
-only ever the `expired` plan notice.
+Nothing on WhatsApp is free: there is no free service tier any more, so every
+message has a price and only the marketing one stands apart. Messages sent
+before a rate was set carry no money — the price is stamped at send time so
+that setting one now does not rewrite a month already billed — and the
+dashboard tile says how many, an understated total that admits it. In practice
+almost everything is the service rate: the queue holds any alert whose window
+is shut, so the listing template is never actually sent, and the only template
+that goes out is the plan notice.
+
+Which rate a given row was charged at is `wa_messages.billed_as`, written by
+the notifier because only it knows which payload it posted. For the notice it
+comes from `WA_NOTICE_CATEGORY` — see step 4 — so if Meta re-classifies the
+template, one variable and a restart puts the ledger back in step with the
+invoice.
 
 ## 6. Business profile
 
@@ -172,8 +220,12 @@ WHATSAPP_NUMBER=<the number, e.g. 447721317302>
 
 ```
 WA_PHONE_NUMBER_ID=<the same id>
-WA_NOTICE_TEMPLATE=plan_notice
+WA_NOTICE_TEMPLATE=plan_notice_paid
 ```
+
+`WA_NOTICE_CATEGORY` is not needed: it defaults to `marketing`, which is what
+the review returned. Set it only if Meta moves the template to another
+category.
 
 `WA_PHONE_NUMBER_ID` is needed in both places: the worker sends the alerts and
 the site answers what comes back. `WHATSAPP_NUMBER` is the site's only, because
@@ -203,11 +255,15 @@ curl -s -X POST "https://graph.facebook.com/v21.0/$WA_PHONE_NUMBER_ID/messages" 
   -H "Content-Type: application/json" \
   -d '{"messaging_product":"whatsapp","to":"<your number>",
        "type":"template",
-       "template":{"name":"plan_notice","language":{"code":"en"},
-       "components":[{"type":"body","parameters":[
-         {"type":"text","text":"free trial"},
-         {"type":"text","text":"20% of the listings"}]}]}}'
+       "template":{"name":"plan_notice_paid","language":{"code":"en"},
+       "components":[{"type":"button","sub_type":"url","index":"0",
+         "parameters":[{"type":"text","text":"AbC123xyz"}]}]}}'
 ```
+
+One component, and no body among them: the body declares no variables, and a
+component the template does not declare is 132000. The token is a sample here,
+so the button lands on "that link has expired" — which is the page working, not
+the send failing.
 
 Reply from your phone, then read the Vercel log:
 

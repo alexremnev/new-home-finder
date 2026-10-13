@@ -489,10 +489,26 @@ export type Person = {
   message_allowance: number | null;
   messages_used: number;
   plan_live: boolean;
-  // What this period has cost on WhatsApp, in millionths of a pound, summed
-  // from the price stamped on each message. 0 when nobody has set a price —
-  // not the same as free, and the page says which.
+  // What this period has cost on WhatsApp, in millionths of a US dollar,
+  // summed from the price stamped on each message. 0 when nobody has set a
+  // price — not the same as free, and the page says which.
   wa_cost_micros: number;
+  // The same messages split by what they cost, so the tile can show the sum
+  // rather than asserting it. Two buckets because Meta charges two prices:
+  // marketing is the plan notice with a payment button on it, and everything
+  // else — free-form text and the listing template alike — is $0.022.
+  // Counted over this period, like `messages_used`, so the three numbers on
+  // the tile are about the same span of time.
+  wa_marketing: number;
+  wa_service: number;
+  // How many of them carry no price at all, which is the one thing that makes
+  // the sum an understatement rather than a total.
+  wa_uncosted: number;
+  // The two rates in force now, so the page can write the sum out. Read here
+  // rather than in a second query: one row, one round trip, and the page is
+  // already waiting on this one.
+  wa_service_micros: number;
+  wa_marketing_micros: number;
   joined: string;
   consent_at: string | null;
   consent_source: string | null;
@@ -530,6 +546,23 @@ export async function person(userId: number): Promise<Person | null> {
             (SELECT coalesce(sum(w.cost_micros), 0)::int FROM wa_messages w
               WHERE w.user_id = u.id
                 AND (u.plan_from IS NULL OR w.sent_at >= u.plan_from)) AS wa_cost_micros,
+            -- The same period, split by price. Three subqueries over one
+            -- small index range rather than one lateral: this query already
+            -- has a dozen of them, and matching the shape of its neighbours
+            -- is worth more here than saving a scan of a handful of rows.
+            (SELECT count(*)::int FROM wa_messages w
+              WHERE w.user_id = u.id AND w.billed_as = 'marketing'
+                AND (u.plan_from IS NULL OR w.sent_at >= u.plan_from)) AS wa_marketing,
+            (SELECT count(*)::int FROM wa_messages w
+              WHERE w.user_id = u.id AND w.billed_as <> 'marketing'
+                AND (u.plan_from IS NULL OR w.sent_at >= u.plan_from)) AS wa_service,
+            (SELECT count(*)::int FROM wa_messages w
+              WHERE w.user_id = u.id AND w.cost_micros = 0
+                AND (u.plan_from IS NULL OR w.sent_at >= u.plan_from)) AS wa_uncosted,
+            coalesce((SELECT ps.wa_service_micros FROM plan_settings ps), 0)
+              AS wa_service_micros,
+            coalesce((SELECT ps.wa_marketing_micros FROM plan_settings ps), 0)
+              AS wa_marketing_micros,
             u.created_at::text AS joined, u.consent_at::text,
             u.consent_source, u.stopped_at::text, u.payment_ref,
             uc.channel, uc.address, uc.verified_at::text,
@@ -1098,12 +1131,30 @@ export type WaSpend = {
   messages: number;
   /** What they cost, in millionths of a US dollar, from the price on each one. */
   cost_micros: number;
-  /** The free-form rate in force now. 0 means nobody has set one — see 0063. */
+  /**
+   * The two rates Meta actually charges this number, in force now.
+   *
+   * `service` covers free-form text inside the 24-hour window and the listing
+   * template outside it: two categories at one price, $0.022 — see 0067.
+   * `marketing` is the plan notice, which carries a payment button and costs
+   * nearly three times as much.
+   */
   service_micros: number;
-  /** The template rate. 0 is the usual answer: nobody has read it off a bill. */
-  template_micros: number;
-  /** How many of the messages went out as templates, at that other rate. */
-  templates: number;
+  marketing_micros: number;
+  /**
+   * The month's messages split by what they cost, which is the only split
+   * worth showing: two buckets because there are two prices. `service` holds
+   * the utility rows as well, since they are charged at the same rate.
+   */
+  service: number;
+  marketing: number;
+  /**
+   * Messages carrying no money at all, which is what makes the total an
+   * understatement. Counted from the price stamped on each row rather than
+   * worked out from the rates in force now: a month billed before a rate was
+   * set stays uncosted even once it is, which is the truth about that month.
+   */
+  uncosted: number;
   /** How many accounts were messaged at all. */
   people: number;
   /** The heaviest single account this month, which is where a bill comes from. */
@@ -1113,8 +1164,8 @@ export type WaSpend = {
 };
 
 const NO_SPEND: WaSpend = {
-  messages: 0, cost_micros: 0, service_micros: 0, template_micros: 0,
-  templates: 0, people: 0, busiest: 0, by_kind: [],
+  messages: 0, cost_micros: 0, service_micros: 0, marketing_micros: 0,
+  service: 0, marketing: 0, uncosted: 0, people: 0, busiest: 0, by_kind: [],
 };
 
 // The month boundary below is written out four times rather than held in a
@@ -1124,10 +1175,18 @@ const NO_SPEND: WaSpend = {
 // costs.
 export async function waSpend(): Promise<WaSpend> {
   const [kinds, totals] = await Promise.all([
-    query<{ label: string; value: number; cost: number; templates: number }>(
+    query<{
+      label: string; value: number; cost: number;
+      marketing: number; uncosted: number;
+    }>(
+      // Split by price and not by category: `service` and `utility` are two
+      // of Meta's names for the same $0.022, so counting them apart here
+      // would offer a distinction that costs nothing and answers nothing.
+      // Marketing is the one that is priced differently — see 0067.
       `SELECT w.kind AS label, count(*)::int AS value,
               coalesce(sum(w.cost_micros), 0)::bigint AS cost,
-              count(*) FILTER (WHERE w.billed_as = 'utility')::int AS templates
+              count(*) FILTER (WHERE w.billed_as = 'marketing')::int AS marketing,
+              count(*) FILTER (WHERE w.cost_micros = 0)::int AS uncosted
          FROM wa_messages w
         WHERE (w.sent_at AT TIME ZONE 'Europe/London')
               >= date_trunc('month', now() AT TIME ZONE 'Europe/London')
@@ -1135,15 +1194,15 @@ export async function waSpend(): Promise<WaSpend> {
         ORDER BY value DESC`,
     ).catch(() => []),
     query<{
-      service_micros: number; template_micros: number;
+      service_micros: number; marketing_micros: number;
       people: number; busiest: number;
     }>(
       // The prices are read even when the month is empty, so a dashboard
       // opened on the first still says whether they are configured.
       `SELECT coalesce((SELECT ps.wa_service_micros FROM plan_settings ps), 0)
                 AS service_micros,
-              coalesce((SELECT ps.wa_template_micros FROM plan_settings ps), 0)
-                AS template_micros,
+              coalesce((SELECT ps.wa_marketing_micros FROM plan_settings ps), 0)
+                AS marketing_micros,
               coalesce((SELECT count(DISTINCT w.user_id)::int FROM wa_messages w
                          WHERE w.user_id IS NOT NULL
                            AND (w.sent_at AT TIME ZONE 'Europe/London')
@@ -1161,12 +1220,19 @@ export async function waSpend(): Promise<WaSpend> {
   const head = totals[0];
   if (!head && kinds.length === 0) return NO_SPEND;
 
+  const messages = kinds.reduce((sum, one) => sum + Number(one.value), 0);
+  const marketing = kinds.reduce((sum, one) => sum + Number(one.marketing), 0);
+
   return {
-    messages: kinds.reduce((sum, one) => sum + Number(one.value), 0),
+    messages,
+    marketing,
+    // By subtraction, so the two buckets always add up to the total however
+    // many names Meta invents for the cheap rate.
+    service: messages - marketing,
     cost_micros: kinds.reduce((sum, one) => sum + Number(one.cost), 0),
-    templates: kinds.reduce((sum, one) => sum + Number(one.templates), 0),
+    uncosted: kinds.reduce((sum, one) => sum + Number(one.uncosted), 0),
     service_micros: Number(head?.service_micros ?? 0),
-    template_micros: Number(head?.template_micros ?? 0),
+    marketing_micros: Number(head?.marketing_micros ?? 0),
     people: Number(head?.people ?? 0),
     busiest: Number(head?.busiest ?? 0),
     by_kind: kinds.map((one) => ({ label: one.label, value: Number(one.value) })),

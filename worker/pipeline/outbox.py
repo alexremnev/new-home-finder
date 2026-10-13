@@ -600,17 +600,35 @@ def watch_whatsapp_cost(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             user = int(row["user_id"])
             sent = int(row["sent"])
             paid = bool(row["paid"])
-            # One threshold, so one message. The lifetime figure that used to
-            # need a branch here has had no producer since 0057 replaced it
-            # with the allowance — see `costly_whatsapp`.
-            what = (
-                f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages today.\n"
-                + (
-                    "They are paying, so delivery carries on."
-                    if paid
-                    else "They are not paying, so delivery is stopped until tomorrow."
+
+            if str(row["kind"]) == "allowance":
+                # The one that is somebody else's loss rather than ours. Their
+                # period has ended early, they have been told, and what is
+                # wanted here is the chance to notice it before they write in.
+                #
+                # The allowance is named rather than just the count: "all 200"
+                # against "all 900" is the difference between the week behaving
+                # normally and a month that has burnt through its messages, and
+                # the two need different reactions.
+                allowance = row.get("allowance")
+                how_many = f"all {allowance}" if allowance else "every message"
+                what = (
+                    f"⚠️ WhatsApp: subscriber #{user} has used {how_many} "
+                    f"included in their {row['plan']} plan.\n"
+                    "Their period has ended on messages rather than on days, so "
+                    "alerts have stopped and they have been told. Renewing is "
+                    "the only thing that restarts them."
                 )
-            )
+            else:
+                what = (
+                    f"⚠️ WhatsApp: subscriber #{user} has had {sent} messages today.\n"
+                    + (
+                        "They are paying, so delivery carries on."
+                        if paid
+                        else "They are not paying, so delivery is stopped until tomorrow."
+                    )
+                )
+
             stage.log("warn", f"whatsapp volume: user {user} {row['kind']} {sent}",
                       user_id=user)
             stage.count("alerted" if tell_ops(what) else "alert_failed")
@@ -690,29 +708,57 @@ def ask_before_the_window_shuts(
                 "they write in, nothing can be sent to them."
             )
 
+def worth_a_template(row: Row) -> bool:
+    """Whether this notice may be bought as a marketing template.
+
+    An ended period on a plan somebody paid for: yes. They are owed the
+    sentence saying the alerts stopped and the tap that resumes them, and the
+    only route to somebody who has not written in for a day is the template.
+
+    A trial: no. Six cents a head to tell somebody who never paid that a free
+    thing has finished, when the warning before the end has already gone out
+    inside the window — see `claim_plan_notices`, which treats the window
+    shutting as a deadline of its own for exactly that reason.
+
+    The warning itself, `hour`: no, and not as a policy. `expiring` has no
+    approved template at all, so there is nothing here to allow.
+
+    One function because two places ask: the alert that is built, and
+    `reachable_later`, which decides whether a refusal is worth another go.
+    Asked twice and answered twice, they would eventually answer differently
+    and the difference would be a notice retried for ever or never at all.
+    """
+
+    return str(row["stage"]) in ("expired", "spent") and str(row["plan"]) != "trial"
+
 def reachable_later(row: Row) -> bool:
     """Whether handing a plan notice back is a retry with somewhere to land.
 
     Telegram always: a failure there is a failure of the moment.
 
-    WhatsApp only while the 24-hour window is open, because that is the only
-    path there is. There are no approved templates, so a shut window is not a
-    delay, it is the absence of a route — and nothing will open it for the
-    person this notice is about: `closing_windows` stops asking "how is the
-    search going?" within the hour before a plan ends and does not ask a
-    lapsed account at all, which is precisely who these notices are for.
+    WhatsApp while the 24-hour window is open, because inside it anything can
+    be said. Outside it, only where a template may be bought — an ended paid
+    plan — because there a refusal is Meta's answer to a request that is
+    allowed to be made again, which is what a retry is.
 
-    So a shut window keeps its claim. What was given up with it is the chance
-    that somebody writes in unprompted during that hour; what was bought is
-    that the warning before the end goes out on the first attempt whenever the
-    window is open — and `claim_plan_notices` treats the window shutting as a
-    deadline of its own, so on WhatsApp that warning is the last message that
-    can arrive rather than merely one that usually does.
+    Outside the window with no template to buy, a shut window is not a delay,
+    it is the absence of a route, and nothing will open it for the person this
+    notice is about: `closing_windows` stops asking "how is the search going?"
+    within the hour before a plan ends and does not ask a lapsed account at
+    all, which is precisely who these notices are for. So that case keeps its
+    claim rather than asking Meta the same impossible question every five
+    minutes until the account is deleted.
+
+    What was given up with it is the chance that somebody writes in unprompted
+    during that hour; what was bought is that the warning before the end goes
+    out on the first attempt whenever the window is open — and on WhatsApp
+    that warning is the last message that can arrive rather than merely one
+    that usually does.
     """
 
     if str(row["channel"]) != "whatsapp":
         return True
-    return window_open(row.get("last_inbound_at"))
+    return window_open(row.get("last_inbound_at")) or worth_a_template(row)
 
 def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
@@ -815,7 +861,16 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
             # Telegram draws it as an inline button; WhatsApp, inside its
             # window, as its one cta_url — and the notifier leaves it out of the
             # text it is already drawn on.
-            link = checkout_for(conn, int(row["user_id"]))
+            #
+            # The token is taken rather than the link, and the link built from
+            # it, because a template button is declared as a fixed url plus one
+            # variable and is given the variable alone. Two calls would be two
+            # tokens — `upgrade_token` extends a live one rather than replacing
+            # it, so they would in fact be the same string, but a reader should
+            # not have to know that to believe the button and the link go to
+            # the same place.
+            token = store.upgrade_token(conn, int(row["user_id"]))
+            link = checkout_link(token)
             result = notifier.send(
                 Recipient(
                     channel=str(row["channel"]),
@@ -836,14 +891,14 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         if notice_stage in ("expired", "spent")
                         else "expiring"
                     ),
-                    # The same two facts as the text, apart, for a channel that
-                    # can only send an approved template — see the WhatsApp
-                    # notifier. Nothing else reads them.
-                    params=[
-                        "free trial" if str(row["plan"]) == "trial" else "subscription",
-                        "no listings" if not share
-                        else f"{share}% of the listings",
-                    ],
+                    # Whether this one is worth buying a marketing template for
+                    # when the window is shut and there is no other route —
+                    # see `worth_a_template`, which `reachable_later` asks as
+                    # well.
+                    billable_template=worth_a_template(row),
+                    # The template's button is a fixed url and one variable, so
+                    # it is given the token and not the link `actions` carries.
+                    checkout_token=token,
                     text=notice_for(
                         str(row["plan"]),
                         row["plan_until"],
@@ -865,11 +920,23 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 ),
             )
             if result.ok:
+                # The claim says this was attempted; this says it arrived, and
+                # that is the difference `claim_plan_notices` reads to decide
+                # whether an ended period has already been announced. Without
+                # it a `spent` notice nobody received would cancel the
+                # `expired` one too, and the period would be announced to
+                # nobody at all. See 0066.
+                store.mark_plan_notice_delivered(
+                    conn, int(row["user_id"]), notice_stage, row["plan_until"]
+                )
                 if str(row["channel"]) == "whatsapp":
                     # The one message here that can go out at either rate: an
-                    # `expired` notice to somebody who has not written in for a
-                    # month travels as the template, which Meta charges as a
-                    # utility message rather than a service one.
+                    # ended paid plan reaching somebody who has not written in
+                    # for a month travels as the notice template, which carries
+                    # a payment button and is therefore billed as marketing —
+                    # three times a message inside the window. Which rate it
+                    # actually was comes back on the result, because only the
+                    # notifier knows which payload it sent. See 0066.
                     store.record_wa_message(
                         conn, int(row["user_id"]), "notice",
                         provider_msg_id=result.provider_msg_id,

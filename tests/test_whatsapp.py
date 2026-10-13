@@ -556,28 +556,61 @@ def test_a_listing_with_a_picture_keeps_both_the_picture_and_the_button() -> Non
     assert interactive["header"] == {"type": "image", "image": {"link": PICTURE}}
     assert interactive["action"]["parameters"]["display_text"] == "View"
 
-def test_an_ended_plan_reaches_a_closed_window_through_the_template() -> None:
+def test_an_ended_paid_plan_reaches_a_closed_window_through_the_template() -> None:
 
     # Somebody whose access just changed has, by definition, not written in for
     # a day — which is exactly when free-form text is shut off. Without this the
     # one notice that matters is the one that never arrives.
     calls, sender = sent_through(messages=[{"id": "x"}])
-    result = notifier(sender, notice_template="plan_notice").send(
+    result = notifier(sender, notice_template="plan_notice_paid").send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
         Alert(
             kind="expired",
-            text="Your free trial has ended.",
-            params=["free trial", "20% of the listings"],
+            text="Your subscription has ended.",
+            billable_template=True,
+            checkout_token="AbC123xyz",
         ),
     )
     assert result.ok
     body = calls[0]["payload"]
     assert body["type"] == "template"
-    assert body["template"]["name"] == "plan_notice"
-    assert [p["text"] for p in body["template"]["components"][0]["parameters"]] == [
-        "free trial",
-        "20% of the listings",
-    ]
+    assert body["template"]["name"] == "plan_notice_paid"
+
+    # One component and no body among them: the template declares no variables
+    # in its text, and a component it does not declare is 132000 on every send.
+    components = body["template"]["components"]
+    assert [c["type"] for c in components] == ["button"]
+    assert components[0]["parameters"] == [{"type": "text", "text": "AbC123xyz"}]
+
+def test_an_ended_trial_is_not_worth_a_marketing_template() -> None:
+
+    # The template is a marketing message at three times the price of one
+    # inside the window, and somebody who never paid has already had the
+    # warning that went out five minutes before their window shut. So the
+    # notice waits for a window that may reopen rather than being bought.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender, notice_template="plan_notice_paid").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expired", text="Your free trial has ended."),
+    )
+    assert not result.ok and result.retryable
+    assert "not worth the template" in (result.error or "")
+    assert calls == []
+
+def test_the_notice_template_is_never_sent_without_its_button_parameter() -> None:
+
+    # The button is declared as a fixed url plus `{{1}}`, and a declared
+    # variable is not optional: sending the template without it is 132000. So a
+    # missing token is a send that is not attempted, and retryable, because
+    # `upgrade_token` issues one on every drain.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender, notice_template="plan_notice_paid").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expired", text="ended", billable_template=True),
+    )
+    assert not result.ok and result.retryable
+    assert "checkout token" in (result.error or "")
+    assert calls == []
 
 def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
 
@@ -586,21 +619,56 @@ def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
     # which it sent: `body` chose by asking about the window, and the ledger
     # needs the answer to price the row. Read off the payload rather than
     # recomputed from the clock — see 0063.
+    ended = Alert(
+        kind="expired", text="ended", billable_template=True, checkout_token="tok"
+    )
+
     calls, sender = sent_through(messages=[{"id": "x"}])
-    outside = notifier(sender, notice_template="plan_notice").send(
+    outside = notifier(sender, notice_template="plan_notice_paid").send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
-        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+        ended,
     )
     assert calls[0]["payload"]["type"] == "template"
-    assert outside.billed_as == "utility"
+    # The notice template carries a payment button, so Meta prices it as
+    # marketing — the dearest of the three. Told to the notifier rather than
+    # inferred, because the category is Meta's to change. See 0066.
+    assert outside.billed_as == "marketing"
 
     calls, sender = sent_through(messages=[{"id": "y"}])
-    inside = notifier(sender, notice_template="plan_notice").send(
+    inside = notifier(sender, notice_template="plan_notice_paid").send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
-        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+        ended,
     )
     assert calls[0]["payload"]["type"] == "text"
     assert inside.billed_as == "service"
+
+def test_the_listing_template_is_still_a_utility_one() -> None:
+
+    # Two templates, two categories, and the notice's is a setting — so a
+    # listing sent as a template must not pick up the notice's rate just
+    # because that setting says marketing.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender, notice_template="plan_notice_paid").send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=None),
+        Alert(kind="listing", listing=view()),
+    )
+    assert calls[0]["payload"]["template"]["name"] == "new_listing"
+    assert result.ok and result.billed_as == "utility"
+
+def test_a_mistyped_category_falls_back_to_the_reviewed_one() -> None:
+
+    # A typo in a settings file must not reach the ledger: a row Meta's
+    # invoice has no such line for is worse than a row at the wrong one of two
+    # known rates, because the first cannot be reconciled at all.
+    assert notifier(notice_category="Utility").notice_category == "utility"
+    assert notifier(notice_category="promotional").notice_category == "marketing"
+
+def test_the_reviewed_category_needs_no_setting() -> None:
+
+    # Meta reviewed the notice template as marketing, so that is what an
+    # unconfigured notifier bills it at. The variable exists to follow Meta if
+    # it moves the template again, not to be remembered on every deploy.
+    assert notifier().notice_category == "marketing"
 
 def test_a_listing_is_always_the_cheaper_rate() -> None:
 
@@ -622,9 +690,12 @@ def test_without_that_template_nothing_is_invented() -> None:
     # beats sending something that cannot arrive.
     result = notifier().send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
-        Alert(kind="expired", text="ended", params=["free trial", "none"]),
+        Alert(
+            kind="expired", text="ended", billable_template=True,
+            checkout_token="tok",
+        ),
     )
-    assert not result.ok and "no template" in (result.error or "")
+    assert not result.ok and "WA_NOTICE_TEMPLATE is not set" in (result.error or "")
 
 def test_inside_the_window_the_notice_is_still_plain_text() -> None:
 
@@ -633,7 +704,10 @@ def test_inside_the_window_the_notice_is_still_plain_text() -> None:
     calls, sender = sent_through(messages=[{"id": "x"}])
     notifier(sender, notice_template="plan_notice").send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
-        Alert(kind="expired", text="Your free trial has ended.", params=["free trial", "none"]),
+        Alert(
+            kind="expired", text="Your subscription has ended.",
+            billable_template=True, checkout_token="tok",
+        ),
     )
     assert calls[0]["payload"]["type"] == "text"
 

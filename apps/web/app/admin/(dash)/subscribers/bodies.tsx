@@ -3,7 +3,7 @@ import Link from "next/link";
 import {
   alertPoints, byDistrict, byPrice, waSpend, WA_DAILY_ALERT,
 } from "@/lib/admin-queries";
-import { dollars } from "@/lib/money";
+import { dollars, rate, waFormula } from "@/lib/money";
 import { dayOf, since, windowLeft } from "@/lib/when";
 
 import { planMixOnce, subscriberPageOnce, windowFor } from "../cached";
@@ -12,6 +12,11 @@ import { MoreRank } from "../more-rank";
 import { Paged, type MorePage } from "../paged";
 import { bucketMinutes, spanWords } from "../span";
 import { moreDistricts, moreEveryone } from "./more";
+
+// A thousands separator, the same local const `[id]/page.tsx` keeps. Not
+// promoted to a shared module: `charts.tsx` has its own inside the client
+// bundle, and a separator cannot be got subtly wrong the way a currency can.
+const comma = (n: number) => n.toLocaleString("en-GB");
 
 // One definition per card. They live apart from the page so the page can
 // render each inside its own Suspense boundary and the queries run in
@@ -116,10 +121,20 @@ export async function SubscriberTiles({ span }: { span: string }) {
 export async function WhatsAppSpend() {
   const spend = await waSpend();
   const priced = spend.service_micros > 0;
-  // Templates with no rate against them are the one thing here that makes the
+  // Messages with no rate against them are the one thing here that makes the
   // total an understatement, so the tile says how many rather than letting a
   // confident figure stand for an incomplete one.
-  const uncosted = spend.templates > 0 && spend.template_micros === 0;
+  //
+  // Counted in SQL off the price stamped on each row, not inferred from the
+  // rates in force now: a month billed before a rate was set stays uncosted
+  // even once it is, which is the truth about that month.
+  const uncosted = spend.uncosted > 0;
+
+  // The sum written out, so the figure beside it can be checked rather than
+  // taken. Two terms because Meta charges two prices — see `waFormula`.
+  const sum = waFormula(
+    spend.service, spend.marketing, spend.service_micros, spend.marketing_micros,
+  );
 
   // Nine hundred a subscriber a period is the bound we sold; there is no
   // monthly bound on the account as a whole, so the only honest tone here is
@@ -131,8 +146,12 @@ export async function WhatsAppSpend() {
         <Metric
           label="Messages"
           value={spend.messages}
-          note="this calendar month, London"
-          why="Все сообщения, которые Meta у нас приняла с первого числа: объявления, ответы бота, вечерняя сводка, чек-ин перед закрытием окна и уведомления о тарифе. Meta берёт деньги за каждое, поэтому считаются все, а не только алерты."
+          // Split by what they cost and not by what they were. Two buckets
+          // because there are two prices: everything cheap on one side,
+          // the marketing template on the other. What kind of message each
+          // was is the Rank below.
+          note={`${comma(spend.service)} service · ${comma(spend.marketing)} marketing`}
+          why="Все сообщения, которые Meta у нас приняла с первого числа: объявления, ответы бота, вечерняя сводка, чек-ин перед закрытием окна и уведомления о тарифе. Meta берёт деньги за каждое, поэтому считаются все, а не только алерты. Разбивка — по тарифу, а не по виду: service — это и свободный текст внутри 24-часового окна, и utility-шаблон объявления, оба по $0.022; marketing — уведомление о законченном платном тарифе, оно несёт кнопку оплаты и стоит $0.0635. Календарный месяц по Лондону — в таком виде приходит счёт."
         />
         <Metric
           label="What it cost"
@@ -140,15 +159,17 @@ export async function WhatsAppSpend() {
           note={
             priced
               ? uncosted
-                ? `${spend.templates} template${spend.templates === 1 ? "" : "s"} not costed`
-                // Three places where the total gets two: the rate is $0.022,
-                // and rounding it to the nearest cent prints $0.02 — a tenth
-                // out, and confidently so.
-                : `at $${(spend.service_micros / 1_000_000).toFixed(3)} a message`
+                ? `${comma(spend.uncosted)} message${spend.uncosted === 1 ? "" : "s"} not costed`
+                : sum
               : "set plan_settings.wa_service_micros"
           }
           tone={priced ? (uncosted ? "warn" : undefined) : "warn"}
-          why="В долларах, потому что Meta выставляет счёт в них — пересчёт в фунты означал бы выдуманный курс в роли факта. Цена берётся из plan_settings и штампуется на каждой строке журнала в момент отправки, поэтому смена цены не переписывает уже закрытый месяц. Сообщение внутри 24-часового окна стоит service-тариф ($0.022); шаблон, которым уведомление о тарифе достаёт человека с закрытым окном, стоит дороже, и пока wa_template_micros не задан, такие сообщения считаются, но в сумму не входят — об этом и говорит подпись."
+          why={
+            `Сумма за месяц: ${sum}. ` +
+            "В долларах, потому что Meta выставляет счёт в них — пересчёт в фунты означал бы выдуманный курс в роли факта. " +
+            `Два тарифа: service ${rate(spend.service_micros)} — свободный текст внутри 24-часового окна и utility-шаблон объявления, у Meta это две категории по одной цене; marketing ${rate(spend.marketing_micros)} — уведомление о законченном платном тарифе, оно несёт кнопку оплаты. ` +
+            "Само число над подписью — не эта формула, а сумма цен, проштампованных на каждой строке журнала в момент отправки: так смена тарифа не переписывает уже закрытый месяц. Поэтому они могут расходиться, и расхождение — это сообщения, отправленные до того, как тариф задали. Сколько их, говорит подпись."
+          }
         />
         <Metric
           label="Accounts reached"

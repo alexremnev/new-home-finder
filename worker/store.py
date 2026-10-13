@@ -574,9 +574,21 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
 
     One row per alert still owed, with `kind` saying which threshold and
     `paid` saying whether delivery was stopped or merely noted. The insert into
-    `whatsapp_cost_alerts` is what makes it "still owed": drain runs every
-    minute, and without it crossing a line would be announced sixty times an
+    `whatsapp_cost_alerts` is what makes it "still owed": drain runs every five
+    minutes, and without it crossing a line would be announced twelve times an
     hour.
+
+    Two thresholds, and they are not the same kind of fact:
+
+    `daily` — the thirty-a-day cap. Ours, applied to anybody not on a live
+    paid plan, and it releases itself at midnight. Delivery is held, not lost.
+
+    `allowance` — the messages included in a paid period are used up, so the
+    period has ended with days still on the clock. Nothing releases that but
+    paying again. The subscriber is told by `claim_plan_notices`; this is the
+    half that reaches us, because a paying subscriber going quiet three weeks
+    early is something to know before they ask. Once per period, keyed on
+    `plan_until` — see 0067.
     """
 
     return list(
@@ -607,23 +619,57 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
                 -- was a proxy for a bound on what one subscriber can cost, and
                 -- 0057 made that a real one: `plans.message_allowance`, which
                 -- ends the period and tells the person rather than telling us.
-                SELECT t.user_id, 'daily' AS kind, t.today AS sent
+                SELECT t.user_id, 'daily' AS kind,
+                       (now() AT TIME ZONE 'Europe/London')::date AS day,
+                       t.today AS sent, NULL::integer AS allowance
                   FROM tally t
                  WHERE t.today >= (SELECT wa_daily_cap FROM delivery_limits)
+
+                 UNION ALL
+
+                -- The other threshold, and the one that costs a paying
+                -- subscriber something: the messages included in their period
+                -- are used up, so their alerts stop with days still on the
+                -- clock. The daily cap is a thing we do to a non-payer and
+                -- releases itself at midnight; this does not, and the first we
+                -- would otherwise hear of it is them asking why it went quiet.
+                --
+                -- `priced` only. A trial has an allowance too and runs out the
+                -- same way, but a trial ending is the product working and not
+                -- news — and there are as many of those a week as there are
+                -- signups.
+                --
+                -- `day` holds `plan_until`, which is what makes this once per
+                -- period rather than once per day: the event belongs to the
+                -- period. Without it a month that ran out in its first week
+                -- would be announced again every day for three weeks. See
+                -- 0067.
+                SELECT e.user_id, 'allowance' AS kind,
+                       u.plan_until::date AS day,
+                       e.messages_used AS sent, e.message_allowance AS allowance
+                  FROM user_entitlement e
+                  JOIN users u ON u.id = e.user_id
+                 WHERE e.priced
+                   AND e.out_of_messages
+                   AND u.plan_until IS NOT NULL
             ),
             claimed AS (
                 INSERT INTO whatsapp_cost_alerts (user_id, kind, day, sent)
-                SELECT user_id, kind, (now() AT TIME ZONE 'Europe/London')::date, sent
-                  FROM owed
+                SELECT user_id, kind, day, sent FROM owed
                 ON CONFLICT DO NOTHING
                 RETURNING user_id, kind, sent
             )
-            SELECT c.user_id, c.kind, c.sent,
+            SELECT c.user_id, c.kind, c.sent, o.allowance,
+                   -- Which plan ran out, so the alert names it. "subscriber
+                   -- #12 has used all 200" leaves the reader working out
+                   -- whether that is the week or a misconfigured month.
+                   (SELECT u.plan FROM users u WHERE u.id = c.user_id) AS plan,
                    EXISTS (
                        SELECT 1 FROM user_entitlement e
                         WHERE e.user_id = c.user_id AND e.priced AND e.live
                    ) AS paid
               FROM claimed c
+              JOIN owed o ON o.user_id = c.user_id AND o.kind = c.kind
              ORDER BY c.user_id, c.kind
             """
         ).fetchall()
@@ -864,8 +910,47 @@ def claim_plan_notices(
                  WHERE NOT EXISTS (
                      SELECT 1 FROM plan_notices pn
                       WHERE pn.user_id = c.user_id
-                        AND pn.stage = c.stage
                         AND pn.plan_until = c.plan_until
+                        -- One notice per period about that period having
+                        -- ended, whichever of the two ways it ended.
+                        --
+                        -- `spent` and `expired` were separate claims, and a
+                        -- subscriber who used their allowance early got both:
+                        -- "the alerts have stopped" when the messages ran out,
+                        -- and the same sentence again when the days did, weeks
+                        -- later. Two names for one event, and the second of
+                        -- them is the marketing template — so the duplicate
+                        -- was also the expensive one.
+                        --
+                        -- Which of the two arrives is whichever came first,
+                        -- and in practice that is `spent`: an allowance can
+                        -- only be used up by a message, a message can only be
+                        -- sent inside the 24-hour window, and the drain is
+                        -- five minutes behind — so the window is still open
+                        -- and the notice goes out as free text with a button
+                        -- on it. The template is what is left for the ordinary
+                        -- case of a plan that simply ran out of days.
+                        --
+                        -- `delivered_at`, and not the row's existence, because
+                        -- a row here is a claim: it is inserted before the
+                        -- send and kept even when the send failed for good.
+                        -- Deduplicating on the claim would have thrown away
+                        -- what the two stages were accidentally providing — a
+                        -- notice nobody could be told at `spent` got a second,
+                        -- independent go when the days ran out. So the
+                        -- question is whether they were told, not whether we
+                        -- tried. See 0066.
+                        --
+                        -- `hour` keeps its own claim. It is the warning before
+                        -- the end and not a second account of it, so it is not
+                        -- a duplicate of anything. And the same-stage rule
+                        -- asks nothing about delivery: that one is the guard
+                        -- against a drain every five minutes repeating itself,
+                        -- and it has to hold whatever the send did.
+                        AND (pn.stage = c.stage
+                          OR (pn.stage IN ('expired', 'spent')
+                         AND c.stage IN ('expired', 'spent')
+                         AND pn.delivered_at IS NOT NULL))
                  )
                  ORDER BY c.plan_until
                  LIMIT %(limit)s
@@ -921,12 +1006,12 @@ def release_plan_notice(
     stage never comes round again.
 
     Which is worth undoing for a failure of the moment — a timeout, a 5xx, a
-    rate limit — and not for a shut WhatsApp window. With no approved
-    templates a shut window has no second path, and nothing will open it for
-    the person a plan notice is about, so handing the row back would ask Meta
-    the same impossible question every two minutes until the account is
-    deleted. `reachable_later` in the outbox draws that line; this only does
-    what it is told.
+    rate limit — and not for a shut WhatsApp window with nothing that may be
+    sent into it. There a refusal is not a delay, it is the absence of a
+    route, and handing the row back would ask Meta the same impossible
+    question every five minutes until the account is deleted.
+    `reachable_later` in the outbox draws that line; this only does what it is
+    told.
 
     A claim kept is not a message lost. The hour warning is the one that
     carries the payment button, and with `last_inbound_at` now reaching the
@@ -939,6 +1024,34 @@ def release_plan_notice(
         """
         DELETE FROM plan_notices
          WHERE user_id = %s AND stage = %s AND plan_until = %s
+        """,
+        (user_id, stage, plan_until),
+    )
+
+def mark_plan_notice_delivered(
+    conn: Conn, user_id: int, stage: str, plan_until: datetime | None
+) -> None:
+    """Record that a claimed notice actually reached somebody.
+
+    The row was written before the send, as the claim that keeps a drain every
+    five minutes from repeating itself, and it is kept even when the send
+    failed for good. So its existence says "this was attempted" and nothing
+    more — which is enough for the stage's own idempotency and not enough for
+    the one question `claim_plan_notices` now asks across stages: has this
+    period already been announced?
+
+    `spent` and `expired` are two names for one event, and only one message
+    about it should go out. Deciding that on the claim would mean a notice
+    that could not be delivered at `spent` silently cancelled the `expired`
+    one as well, so a period that ended would be announced to nobody. See
+    0066.
+    """
+
+    conn.execute(
+        """
+        UPDATE plan_notices SET delivered_at = now()
+         WHERE user_id = %s AND stage = %s AND plan_until = %s
+           AND delivered_at IS NULL
         """,
         (user_id, stage, plan_until),
     )
@@ -1135,8 +1248,11 @@ def mark_sent(
                (user_id, kind, notification_id, provider_msg_id, billed_as,
                 cost_micros, sent_at)
         SELECT n.user_id, 'listing', n.id, n.provider_msg_id, %(billed_as)s,
-               (SELECT CASE WHEN %(billed_as)s = 'utility'
-                            THEN ps.wa_template_micros
+               (SELECT CASE
+                            WHEN %(billed_as)s = 'utility'
+                                 THEN ps.wa_template_micros
+                            WHEN %(billed_as)s = 'marketing'
+                                 THEN ps.wa_marketing_micros
                             ELSE ps.wa_service_micros
                        END
                   FROM plan_settings ps),
@@ -1169,11 +1285,12 @@ def record_wa_message(
     must not look like spend — and it must not eat the subscriber's allowance
     either, which is the worse of the two mistakes.
 
-    `billed_as` is which of Meta's two rates applied, and it comes from the
+    `billed_as` is which of Meta's three rates applied, and it comes from the
     notifier rather than from a second look at the window: the plan notice is
     the one message here that can go either way, and it is also the only one
-    charged at the template rate. Defaulted to `service` because that is what
-    every other path can produce.
+    charged at a template rate — the marketing one, since it carries a payment
+    button. Defaulted to `service` because that is what every other path can
+    produce. See 0066.
 
     The price is read inside the statement so that it is the price now, with
     no round trip and nothing cached in a process that runs for days.
@@ -1184,8 +1301,11 @@ def record_wa_message(
         INSERT INTO wa_messages
                (user_id, kind, provider_msg_id, billed_as, cost_micros)
         SELECT %(user_id)s, %(kind)s, %(msg_id)s, %(billed_as)s,
-               (SELECT CASE WHEN %(billed_as)s = 'utility'
-                            THEN ps.wa_template_micros
+               (SELECT CASE
+                            WHEN %(billed_as)s = 'utility'
+                                 THEN ps.wa_template_micros
+                            WHEN %(billed_as)s = 'marketing'
+                                 THEN ps.wa_marketing_micros
                             ELSE ps.wa_service_micros
                        END
                   FROM plan_settings ps)

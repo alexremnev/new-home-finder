@@ -51,3 +51,47 @@ export function dollars(micros: number): string {
     })
   );
 }
+
+/**
+ * A per-message rate, written out at the precision it actually has: "$0.022".
+ *
+ * `dollars` rounds to the cent, which is right for a total and wrong for a
+ * rate — $0.022 printed to two places is $0.02, a tenth out and confidently
+ * so. Three places, and trailing zeroes kept, because a rate quoted as
+ * "$0.06" invites the reader to multiply by it and get a different answer
+ * from the one above it.
+ */
+export function rate(micros: number): string {
+  return "$" + (micros / 1_000_000).toFixed(4).replace(/0$/, "");
+}
+
+/**
+ * The WhatsApp bill as the sum it is: "1,234 × $0.022 + 7 × $0.0635 = $27.59".
+ *
+ * Written out rather than asserted. Meta charges two prices on this number —
+ * $0.022 for free-form text inside the 24-hour window and for the listing
+ * template, $0.0635 for the marketing template that carries a payment button
+ * — and a single dollar figure gives the reader no way to tell a quiet month
+ * of alerts from a month that sent a lot of plan notices. See 0067.
+ *
+ * Takes counts and rates rather than the stamped total, so what it prints can
+ * be checked against the total beside it. Where the two disagree, the total
+ * is right and the difference is messages sent before a rate was set: the
+ * price is stamped on each row at send time precisely so that setting one now
+ * does not rewrite a month already billed. The caller says so — see
+ * `wa_uncosted`.
+ */
+export function waFormula(
+  service: number,
+  marketing: number,
+  serviceMicros: number,
+  marketingMicros: number,
+): string {
+  const comma = (n: number) => n.toLocaleString("en-GB");
+  const total = service * serviceMicros + marketing * marketingMicros;
+  return (
+    `${comma(service)} × ${rate(serviceMicros)} service` +
+    ` + ${comma(marketing)} × ${rate(marketingMicros)} marketing` +
+    ` = ${dollars(total)}`
+  );
+}

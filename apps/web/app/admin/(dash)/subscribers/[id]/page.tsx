@@ -1,4 +1,4 @@
-import { dollars, pounds } from "@/lib/money";
+import { dollars, pounds, rate, waFormula } from "@/lib/money";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
@@ -50,6 +50,13 @@ export default async function UserPage({
   const ended = who.plan_live === false;
   const spent =
     who.message_allowance !== null && who.messages_used >= who.message_allowance;
+  // The same sum the month-wide tile shows, over this person's current period.
+  // Written out so the dollar figure beside it can be checked rather than
+  // taken — see `waFormula`.
+  const sum = waFormula(
+    who.wa_service, who.wa_marketing, who.wa_service_micros,
+    who.wa_marketing_micros,
+  );
 
   return (
     <>
@@ -111,10 +118,19 @@ export default async function UserPage({
                 // shows above it is in pounds because that is what arrived.
                 // Mixing them is honest; converting one would not be.
                 who.wa_cost_micros > 0
-                  ? `${dollars(who.wa_cost_micros)} this period`
+                  ? `${comma(who.wa_service)} service · ${comma(who.wa_marketing)} marketing · ${dollars(who.wa_cost_micros)}`
                   : `since ${who.plan_from ? dayOf(who.plan_from) : "the start"}`
               }
-              why="Сколько сообщений ушло этому человеку в WhatsApp за текущий оплаченный период и сколько включено в тариф. Считаются все: объявления, ответы бота, вечерняя сводка, чек-ин и уведомления о тарифе — Meta берёт деньги за каждое. Когда счётчик доходит до лимита, период заканчивается так же, как если бы кончились дни, и человек получает об этом сообщение."
+              why={
+                "Сколько сообщений ушло этому человеку в WhatsApp за текущий оплаченный период и сколько включено в тариф. Считаются все: объявления, ответы бота, вечерняя сводка, чек-ин и уведомления о тарифе — Meta берёт деньги за каждое. " +
+                `Период считается от ${who.plan_from ? dayOf(who.plan_from) : "начала"}: при смене или продлении тарифа эта дата сдвигается, поэтому счётчик обнуляется. ` +
+                `Стоимость за период: ${sum}. ` +
+                `Два тарифа: service ${rate(who.wa_service_micros)} — свободный текст внутри 24-часового окна и utility-шаблон объявления; marketing ${rate(who.wa_marketing_micros)} — уведомление о законченном платном тарифе с кнопкой оплаты. ` +
+                (who.wa_uncosted > 0
+                  ? `На ${who.wa_uncosted} сообщениях цены не оказалось — они отправлены до того, как тариф задали, и в сумму не входят, поэтому формула и число могут расходиться. `
+                  : "") +
+                "Когда счётчик доходит до лимита, период заканчивается так же, как если бы кончились дни: человек получает об этом сообщение, а в опс-чат приходит алерт."
+              }
             />
           )}
         </div>

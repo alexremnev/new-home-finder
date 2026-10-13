@@ -433,6 +433,54 @@ def entitlement(conn: Any, user_id: int) -> dict[str, Any]:
     return row
 
 
+def test_telegram_has_no_message_allowance_whatever_the_plan_says(
+    conn: Any,
+) -> None:
+    # A message allowance is a property of the channel that charges per
+    # message, and Telegram is not it. The trial row is shared by both
+    # messengers — one row, two products — so without the gate in
+    # `user_entitlement` giving the trial thirty messages would have given
+    # them to Telegram too, where delivery is free and a limit means nothing.
+    #
+    # It is also what the counter already did: `messages_used` counts
+    # `wa_messages`, which holds nothing but WhatsApp, so on Telegram the
+    # allowance could never be reached. 0068 says so instead of relying on it.
+    telegram = make_user(conn, plan="trial", plan_hours=48)
+    conn.execute("UPDATE plans SET message_allowance = 30 WHERE key = 'trial'")
+
+    one = entitlement(conn, telegram)
+    assert one["message_allowance"] is None
+    assert one["messages_left"] is None
+    assert one["out_of_messages"] is False
+    # And so it is live on days alone, which is the whole of the rule there.
+    assert one["live"] is True
+
+
+def test_a_whatsapp_trial_is_metered_like_any_other_plan(conn: Any) -> None:
+    # The other half: on the channel that bills us, the trial has the same
+    # shape as the week and the month — used against included — so the
+    # dashboard can show 5/30 beside 55/200 and 350/900 as one kind of fact.
+    conn.execute("UPDATE plans SET message_allowance = 30 WHERE key = 'trial'")
+    user_id = make_user(conn, address="", plan="trial", plan_hours=24)
+    conn.execute(
+        "INSERT INTO user_channels (user_id, channel, address, verified_at) "
+        "VALUES (%s, 'whatsapp', %s, now())",
+        (user_id, f"4477009{user_id:05d}"),
+    )
+    conn.execute(
+        """
+        INSERT INTO wa_messages (user_id, kind, cost_micros)
+        SELECT %s, 'listing', 0 FROM generate_series(1, 5)
+        """,
+        (user_id,),
+    )
+
+    one = entitlement(conn, user_id)
+    assert (int(one["messages_used"]), int(one["message_allowance"])) == (5, 30)
+    assert int(one["messages_left"]) == 25
+    assert one["live"] is True
+
+
 def test_a_month_with_messages_left_is_live(conn: Any) -> None:
     one = entitlement(conn, wa_subscriber(conn, used=10))
 
@@ -571,17 +619,18 @@ def test_the_price_is_stamped_on_each_message_as_it_is_sent(conn: Any) -> None:
     assert (int(spent["n"]), int(spent["micros"])) == (2, 26200)
 
 
-def test_the_two_rates_are_charged_apart(conn: Any) -> None:
-    # Meta prices a free-form message inside the window and the template that
-    # reaches a shut one differently, and the expensive one is the rarer one —
-    # so one price for both would misreport exactly the messages that cost the
-    # most. The notifier says which went out; this is what the ledger does
-    # with the answer.
+def test_the_three_rates_are_charged_apart(conn: Any) -> None:
+    # Meta prices a free-form message inside the window, the listing template,
+    # and the marketing template that carries a payment button, all
+    # differently — and the dearest is the rarest, so one price for all three
+    # would misreport exactly the messages that cost the most. The notifier
+    # says which went out; this is what the ledger does with the answer.
     user_id = wa_subscriber(conn, used=0)
     conn.execute("UPDATE plan_settings SET wa_template_micros = 50000")
     try:
         store.record_wa_message(conn, user_id, "notice", billed_as="service")
         store.record_wa_message(conn, user_id, "notice", billed_as="utility")
+        store.record_wa_message(conn, user_id, "notice", billed_as="marketing")
     finally:
         conn.execute("UPDATE plan_settings SET wa_template_micros = 0")
 
@@ -590,12 +639,15 @@ def test_the_two_rates_are_charged_apart(conn: Any) -> None:
         "ORDER BY id",
         (user_id,),
     ).fetchall()
+    # The marketing rate is the one figure anybody has read off a price list —
+    # $0.0635, set by 0066 — so unlike the other template rate it is not 0.
     assert [(r["billed_as"], int(r["cost_micros"])) for r in rows] == [
         ("service", 22000),
         ("utility", 50000),
+        ("marketing", 63500),
     ]
-    # Both still count against the allowance: the bound is on messages.
-    assert entitlement(conn, user_id)["messages_used"] == 2
+    # All three still count against the allowance: the bound is on messages.
+    assert entitlement(conn, user_id)["messages_used"] == 3
 
 
 def test_a_template_with_no_rate_is_counted_and_not_costed(conn: Any) -> None:
@@ -701,6 +753,81 @@ def test_the_notice_for_a_spent_allowance_is_claimed_once(conn: Any) -> None:
     # Said once per period: the unique key is (user, stage, plan_until), so a
     # drain every minute does not say it sixty times an hour.
     assert store.claim_plan_notices(conn) == []
+
+
+def test_a_period_that_ended_on_its_allowance_is_not_announced_twice(
+    conn: Any,
+) -> None:
+    # `spent` and `expired` are two names for one event — the period is over —
+    # and they used to be two claims. A subscriber who used their allowance
+    # early got both: "the alerts have stopped" when the messages ran out, and
+    # the same sentence again when the days did, weeks later. The second was
+    # also the marketing template, so the duplicate was the expensive one.
+    user_id = wa_subscriber(conn, used=900, days_left=20)
+    make_subscription(conn, user_id)
+
+    claimed = store.claim_plan_notices(conn)
+    assert [row["stage"] for row in claimed] == ["spent"]
+    store.mark_plan_notice_delivered(
+        conn, user_id, "spent", claimed[0]["plan_until"]
+    )
+
+    # The days run out too. Nothing more to say, and nothing more to buy.
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 hour' WHERE id = %s",
+        (user_id,),
+    )
+    assert store.claim_plan_notices(conn) == []
+
+
+def test_a_period_nobody_was_told_about_is_announced_when_the_days_run_out(
+    conn: Any,
+) -> None:
+    # The other half of the rule above, and the reason it asks about delivery
+    # rather than about the claim. A row in `plan_notices` is written before
+    # the send and kept even when the send failed for good — so if `spent`
+    # cancelled `expired` on the strength of the row alone, a period that
+    # ended would be announced to nobody.
+    user_id = wa_subscriber(conn, used=900, days_left=20)
+    make_subscription(conn, user_id)
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["spent"]
+    # Claimed and never delivered: no `mark_plan_notice_delivered` call.
+
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 hour' WHERE id = %s",
+        (user_id,),
+    )
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
+
+
+def test_a_notice_still_says_itself_once_per_drain(conn: Any) -> None:
+    # The same-stage guard asks nothing about delivery, because it is what
+    # stops a drain every five minutes repeating itself — and a send that
+    # failed for good would otherwise be retried for ever.
+    user_id = wa_subscriber(conn, used=900, days_left=20)
+    make_subscription(conn, user_id)
+
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["spent"]
+    assert store.claim_plan_notices(conn) == []
+
+
+def test_the_warning_before_the_end_is_not_the_same_claim(conn: Any) -> None:
+    # `hour` is the warning, not a second account of the end, so it keeps its
+    # own claim and the expiry still follows it.
+    user_id = wa_subscriber(conn, used=0, days_left=20)
+    make_subscription(conn, user_id)
+    conn.execute(
+        "UPDATE users SET plan_until = now() + interval '3 minutes' WHERE id = %s",
+        (user_id,),
+    )
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
+        (user_id,),
+    )
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["expired"]
 
 
 def test_out_of_days_outranks_out_of_messages(conn: Any) -> None:
