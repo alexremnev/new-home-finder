@@ -160,36 +160,70 @@ A **quick reply** fixes that, because a tap on one is an inbound message. The
 window reopens before the payment rather than after it, and the site answers
 the tap with the same checkout link the url button carried:
 
+**Do not edit `plan_notice_paid`. Make a second template beside it.** Editing
+the live one puts it back through review, and review is where the category gets
+decided again — but the worse problem is the middle. `WA_NOTICE_BUTTON` has to
+match whatever Meta is actually serving, and during a review of an edited
+template which version that is, is not something this document can promise. Get
+it wrong in either direction and every notice is refused with 132000.
+
+A second template removes the question. Both are approved, the old one stays
+live and working, and one deploy switches from one to the other — which is also
+the rollback, because the old name is still there:
+
 ```sh
 curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
   -H "Authorization: Bearer $WA_ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"plan_notice_paid","language":"en","category":"UTILITY",
+  -d '{"name":"plan_notice_tap","language":"en","category":"UTILITY",
    "components":[
      {"type":"BODY",
       "text":"Your alerts have stopped — your plan has run out.\n\nYour filter is kept exactly as it is. Tap below and everything turns back on, with nothing to set up again."},
      {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Get full access"}]}]}'
 ```
 
-No url and therefore no button variable, which also means no token: the link
-is minted when the tap arrives and lives an hour, where a template button's
-token was minted on the drain that sent the notice and could be most of a day
-old by the time anybody pressed it.
+Then, in one go: `WA_NOTICE_TEMPLATE=plan_notice_tap` **and**
+`WA_NOTICE_BUTTON=reply`, then restart. Either variable alone is 132000.
 
-**The template and `WA_NOTICE_BUTTON` move together.** A template's buttons are
-declared, so sending a `quick_reply` component to a template with a url button
-— or the reverse — is 132000 on every notice. Hence the setting, defaulting to
-`url`, which is the shape that was live first:
+### By hand, in WhatsApp Manager
+
+The same thing through the panel, for when curl is not to hand. **Create
+template**, not Edit:
+
+| Field | Value |
+| --- | --- |
+| Name | `plan_notice_tap` |
+| Category | Utility |
+| Language | **English** — not English (UK), which is `en_GB` and 132001 |
+| Header | None |
+| Body | the text above, **with no variables in it** |
+| Footer | none |
+| Buttons | **Quick reply** → `Get full access` |
+
+The button is the only part that differs from what is live, and it differs
+completely: where the old one is *Call to action → Visit website → Dynamic*
+with a url and a `{{1}}` on the end, this is *Quick reply* with nothing but
+words on it. No url, no variable, no sample value to fill in — the panel will
+not ask for one, and if it does you have the wrong button type selected.
+
+The body is unchanged, including "Tap below and everything turns back on",
+which was already written for a tap rather than for a link and needs no
+rewording.
+
+**Why there is no link any more.** There was never a link in the body; it was
+inside the button, as a fixed prefix plus the upgrade token in `{{1}}`. With a
+quick reply the link moves to the message the site sends back the moment the
+tap arrives — and it is better there: that token is minted on the tap and
+lives an hour, where the template's was minted on the drain that sent the
+notice and could be most of a day old before anybody pressed it.
 
 | `WA_NOTICE_BUTTON` | The template must have | What the tap does |
 | --- | --- | --- |
 | `url` (default) | `URL` with `?t={{1}}` | opens the browser, window stays shut |
-| `reply` | `QUICK_REPLY` | sends `pay` to the webhook, window reopens |
+| `reply` | `QUICK_REPLY`, no variables | sends `pay` to the webhook, window reopens |
 
-Editing a live template puts it back through review, and review is where the
-category gets decided. Submit the quick-reply version, wait for `APPROVED`,
-check the category came back `UTILITY`, and only then set `WA_NOTICE_BUTTON`
-and restart. Until that moment the url shape is what is live and the default
-is correct.
+Wait for `APPROVED` and check the category came back `UTILITY` before switching
+either variable. Until then the url template is live and the defaults are
+correct.
 
 ### The payment receipt
 
@@ -205,9 +239,21 @@ curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
   -d '{"name":"payment_received","language":"en","category":"UTILITY",
    "components":[
      {"type":"BODY",
-      "text":"Payment received — thank you. Your plan is extended and every matching listing is on its way again.\n\nTap below and I will show you what you are on and what you are looking for."},
-     {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Show my plan"}]}]}'
+      "text":"Payment received — thank you. Your plan is extended and your filter is exactly as you left it.\n\nOne thing left to do. WhatsApp only lets us send you alerts once you have replied to us, so tap the button below — that is what starts them."},
+     {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Start my alerts"}]}]}'
 ```
+
+**The button is the message.** It says what tapping does rather than what
+tapping shows: the tap is the only thing that reopens the window, so a label
+like "Show my plan" offers somebody a reason to ignore it, and ignoring it is
+the one outcome that leaves a paying subscriber with no alerts. The body says
+why it is being asked for, because an instruction with no reason behind it
+reads as a growth trick rather than as the platform's own rule — which is what
+it is.
+
+Twenty characters on the label. Meta allows twenty-five on a quick reply, but
+the rest of this codebase is built to twenty (`BUTTON_CHARS`) and truncation is
+silent, so there is nothing to gain by going near the real limit.
 
 Then `WA_RECEIPT_TEMPLATE=payment_received` **on Vercel**, not on the server:
 the Stripe webhook is the site's. Left unset, the receipt is simply not sent

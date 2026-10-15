@@ -155,6 +155,37 @@ export function paymentReceived(planName: string, until: Date | null): string {
 }
 
 /**
+ * The answer to the tap under the payment receipt on WhatsApp.
+ *
+ * Not `paymentReceived`, which is the same event said to somebody who can
+ * still be written to. Here the template has already said the payment cleared
+ * — it is the message this button is attached to, one line up the screen — so
+ * repeating it would make the tap look like it did nothing. What the tap
+ * actually did is the news: it was the only thing that could reopen WhatsApp's
+ * window, and delivery is live again because of it.
+ *
+ * The filter comes with it for the same reason it comes with every other
+ * confirmation: somebody turning alerts back on after a lapse wants to see
+ * what they are about to start receiving, and asking them to send /current to
+ * find out is a second errand on a message whose point was that the first one
+ * is done.
+ */
+export function alertsBackOn(
+  planName: string,
+  until: Date | null,
+  criteria: Criteria,
+): string {
+  return [
+    "✅ Alerts are back on — every matching listing arrives in full from now on.",
+    planLine(planName, until, true),
+    "",
+    criteriaCard(criteria),
+    "",
+    "/update — change what you are looking for",
+  ].join("\n");
+}
+
+/**
  * What somebody is told when a refund goes through.
  *
  * Says the amount, then what it means for the alerts, then how to come back —

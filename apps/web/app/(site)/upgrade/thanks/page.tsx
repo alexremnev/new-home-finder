@@ -54,8 +54,9 @@ export default async function Page({
         Your plan is extended.{" "}
         {url && whatsapp ? (
           <>
-            Open WhatsApp and press send on the message waiting there — the bot
-            answers with your new limits, and the alerts resume with it.
+            One thing left: open WhatsApp and press send on the message waiting
+            there. WhatsApp only lets us send you alerts once you have replied
+            to us, so that is what starts them.
           </>
         ) : url ? (
           <>
@@ -70,9 +71,13 @@ export default async function Page({
       </p>
 
       {url && (
+        /* The label says what the tap is for, not where it goes — the same
+           reasoning as the receipt template's button. "Back to WhatsApp" is
+           somewhere a person can decide they do not need to be; starting the
+           alerts is the thing they just paid for. */
         <a href={url} className={whatsapp ? "cta cta-whatsapp" : "cta cta-telegram"}>
-          {whatsapp ? <WhatsAppMark /> : <TelegramMark />} Back to{" "}
-          {whatsapp ? "WhatsApp" : "Telegram"}
+          {whatsapp ? <WhatsAppMark /> : <TelegramMark />}{" "}
+          {whatsapp ? "Start my alerts" : "Open Telegram"}
         </a>
       )}
 

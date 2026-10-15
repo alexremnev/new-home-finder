@@ -19,7 +19,7 @@ import {
   criteriaCard,
   LINK_EXPIRED,
   criteriaSet,
-  paymentReceived,
+  alertsBackOn,
   planLine,
   upgradeInvitation,
   upgradeUrl,
@@ -84,9 +84,37 @@ const linked = (text: string, label: string, url: string): Reply => ({
 // characters and WhatsApp spends some of them on the glyph.
 const plainLabel = (label: string) => label.replace(/[^\p{L}\p{N} ]/gu, "").trim();
 
+/**
+ * The two template quick replies, by the words printed on them.
+ *
+ * A belt to the payload's braces. A quick reply on a template carries whatever
+ * payload the send put in it, which is what `tapped` reads and what everything
+ * downstream matches on — but the payload is only there if the sender included
+ * the button component, and the one thing it is certain to come back with is
+ * the label, because that is fixed in the approved template itself.
+ *
+ * Worth the duplication for these two and no others. They are the buttons on
+ * the notice a lapsed subscriber gets and on the receipt for money already
+ * taken, so "the button did nothing" is the most expensive outcome in the
+ * product. Everything else here is a free-form reply button, where the id is
+ * set by the same code that draws it and cannot go missing.
+ *
+ * Kept in step with the templates by hand, which is why the words are quoted
+ * from them exactly and the mismatch is harmless: a label that has drifted
+ * falls through to the payload, which is the normal route anyway.
+ */
+const TEMPLATE_BUTTONS: Record<string, string> = {
+  "get full access": "pay",
+  "start my alerts": "paid",
+};
+
 function tapped(message: Message): string | null {
+  const label = message.button?.text?.trim().toLowerCase() ?? "";
   return (
-    message.interactive?.button_reply?.id ?? message.button?.payload ?? null
+    message.interactive?.button_reply?.id ??
+    message.button?.payload ??
+    TEMPLATE_BUTTONS[label] ??
+    null
   );
 }
 
@@ -325,11 +353,11 @@ async function pressed(number: string, id: string): Promise<Reply | null> {
   if (id === "paid") {
     const account = await accountForChat(number, "whatsapp").catch(() => null);
     if (!account) return NO_FILTER_YET;
-    return [
-      paymentReceived(account.plan_name, account.plan_until),
-      "",
-      criteriaCard((account.criteria ?? {}) as Criteria),
-    ].join("\n");
+    return alertsBackOn(
+      account.plan_name,
+      account.plan_until,
+      (account.criteria ?? {}) as Criteria,
+    );
   }
 
   // The answer to the check-in sent five minutes before the window shut. The

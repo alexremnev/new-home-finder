@@ -2,8 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Criteria } from "../criteria";
 import {
+  alertsBackOn,
   criteriaCard,
   criteriaSet,
+  paymentReceived,
   refundIssued,
   upgradeInvitation,
   upgradeUrl,
@@ -258,5 +260,34 @@ describe("the upgrade invitation", () => {
     const text = await upgradeInvitation(account as never, "abc");
     expect(text).toContain("There is nothing to upgrade to at the moment.");
     expect(text).not.toContain("\n\n");
+  });
+});
+
+describe("the answer to the receipt's button on WhatsApp", () => {
+  const plan = new Date("2026-11-30T00:00:00Z");
+
+  it("reports what the tap did, not what the template already said", () => {
+    // The template this button hangs under has already said the payment
+    // cleared. Saying it again would make the tap look like it did nothing —
+    // where in fact it did the only thing that mattered, which is reopen
+    // WhatsApp's window so the alerts can actually be delivered.
+    const said = alertsBackOn("WhatsApp month", plan, { bedrooms: { min: 2 } });
+    expect(said).toContain("Alerts are back on");
+    expect(said).not.toContain("Payment received");
+    expect(paymentReceived("WhatsApp month", plan)).toContain("Payment received");
+  });
+
+  it("shows the plan and the filter, so nothing else has to be asked for", () => {
+    const said = alertsBackOn("WhatsApp month", plan, { bedrooms: { min: 2 } });
+    expect(said).toContain("Plan: WhatsApp month, until 2026-11-30");
+    expect(said).toContain("🛏 Bedrooms: 2 or more");
+    // Somebody turning alerts back on has one thing left they might want to
+    // change, and it is not the plan.
+    expect(said).toContain("/update");
+    expect(said).not.toContain("/current");
+  });
+
+  it("says a plan with no end date without inventing one", () => {
+    expect(alertsBackOn("Lifetime", null, {})).toContain("Plan: Lifetime");
   });
 });
