@@ -56,13 +56,29 @@ and `/for-rent2/*`, none of which is touched here. No `Crawl-delay`.
 Zoopla refuses a plain client outright — it answered 403 even to `robots.txt`
 from `urllib` — and serves the same request under impersonation. So it needs
 the shared transport for exactly the reason Rightmove does.
+
+── what a card cannot answer, and what that cost ───────────────────────────
+
+A card is thinner than it looks. It carries no furnishing field and no pets
+field — checked against every key on a live page — its `summaryDescription` is
+cut at 150 characters, and its `tags` array is usually empty. Measured on a
+live London page of 25 on 15 October 2026: reading those three with
+`prose` gave the furnishing for 2 listings of 25 and pets for 2 of 25.
+
+Both are on the listing's own page, which this reader already fetches for every
+listing it stores, because a Zoopla search page states no full postcode
+anywhere. So `enrich` reads them out of the body `postcode_for` was going to
+ask for regardless, and the two hooks together still make one request. See
+`furnishing_on` for the order the page's three sources are asked in, and why
+asking them in the wrong order files a flat as the opposite of what the portal
+says it is.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time
 from typing import Any
 
@@ -117,6 +133,13 @@ REGION = "london"
 # 1,000 listings is everything this search can ever reach, and a gap longer
 # than that is a gap the engine must refuse to settle over rather than skip.
 MAX_PAGES_REGION = 20
+
+# Listing pages per run, for `Zoopla.enrich`. Deliberately the same number as
+# `sweep.POSTCODE_BUDGET`: this reader has always fetched the listing page for
+# every stored listing — a Zoopla search page states no full postcode anywhere
+# — so reading the furnishing out of it as well costs no extra requests, and
+# the ceiling on those requests should stay where it was.
+DETAIL_BUDGET = 40
 
 # An outward code anywhere in the address, not only at the end.
 #
@@ -207,6 +230,34 @@ FURNISHING: tuple[tuple[Furnished, re.Pattern[str]], ...] = (
     ("unfurnished", re.compile(r"\bunfurnished\b", re.IGNORECASE)),
     ("furnished", re.compile(r"\bfurnished\b", re.IGNORECASE)),
 )
+
+# Zoopla's own machine-readable furnishing, which exists only on the listing's
+# own page: a search card carries no such field, and no pets field either —
+# see `prose` for the whole of what a card can be asked.
+#
+# "furnished_or_unfurnished" is deliberately absent, and so is the empty
+# string. Both mean the portal is not stating one, and `unknown` is the value
+# that lets `match._check_furnished` hand the listing to everybody rather than
+# to the wrong half. Measured 15 October 2026: listing 74495118 carried
+# `furnishedState: ""` while its own bullets said "Unfurnished", which is why
+# `furnishing_on` falls through to the tag and then to the bullets.
+FURNISHED_STATES: dict[str, Furnished] = {
+    "furnished": "furnished",
+    "unfurnished": "unfurnished",
+    "part_furnished": "part",
+    "partly_furnished": "part",
+}
+
+# The labels on the little chips above the description — "Unfurnished",
+# "Pets allowed", "Available from 31 October 2026". Zoopla's own summary of
+# the advert, and the only place it ever states pets at all.
+TAGS_KEY = "tagsV2"
+
+# The advert's bullet list, reached as `"features":{"bullets":[…]}`. The
+# agent's own words, so it is read last: on listing 72469489 the bullets said
+# "Fully Furnished for a comfortable living" while `furnishedState` and the
+# tag both said unfurnished. See `furnishing_on`.
+BULLETS_KEY = "features"
 
 SPACES = re.compile(r"\s+")
 
@@ -526,8 +577,29 @@ def picture(row: dict[str, Any]) -> str | None:
     return fallback[:1000] if fallback.startswith("https://") else None
 
 
+def furnishing_in(text: str) -> Furnished:
+    """Which of the three furnishing words `text` states, if any.
+
+    Order matters and `FURNISHING` carries it: "part furnished" contains
+    "furnished", and "unfurnished" contains it too, so the longest claim has
+    to be tested first or every advert comes back furnished.
+    """
+
+    for name, pattern in FURNISHING:
+        if pattern.search(text):
+            return name
+    return "unknown"
+
+
 def prose(row: dict[str, Any]) -> str:
-    """The listing's own words, for the facts only text states."""
+    """The listing's own words, for the facts only text states.
+
+    A card is a thin thing and this is nearly all of it. `summaryDescription`
+    is capped at 150 characters — 20 of 25 on a live region page ended in an
+    ellipsis — and `tags` was non-empty on 4 of those 25. So a card answers the
+    furnishing filter about twice in 25 and the pets filter about twice in 25,
+    which is why both are read again from the listing's own page in `fill`.
+    """
 
     parts = [str(row.get("title") or ""), str(row.get("summaryDescription") or "")]
     tags = row.get("tags")
@@ -576,11 +648,7 @@ def as_listing(row: Any, district: str, *, from_address: bool = False) -> Listin
         beds = int(in_title.group(1)) if in_title else 0
 
     words = prose(row)
-    furnished: Furnished = "unknown"
-    for name, pattern in FURNISHING:
-        if pattern.search(words):
-            furnished = name
-            break
+    furnished = furnishing_in(words)
 
     # Collapsed rather than stripped, for the same reason as Rightmove's: an
     # alert is a list of one-line facts and a portal is free to embed a
@@ -678,6 +746,114 @@ def _coord(raw: Any, limit: float) -> float | None:
     return value if -limit <= value <= limit else None
 
 
+# ── the listing's own page ───────────────────────────────────────────────────
+#
+# Already fetched for every stored listing, because a Zoopla search page states
+# no full postcode anywhere — see `Zoopla.enrich`. Everything below reads more
+# out of the page that request already paid for.
+
+
+def tag_labels(stream: str) -> list[str]:
+    """The chips Zoopla puts above the description, as plain labels."""
+
+    return [
+        str(one.get("label") or "")
+        for one in _array_after(stream, TAGS_KEY)
+        if isinstance(one, dict)
+    ]
+
+
+def bullets(stream: str) -> list[str]:
+    """The advert's bullet list — the agent's own words, not Zoopla's."""
+
+    return [str(one) for one in _array_after(stream, BULLETS_KEY) if isinstance(one, str)]
+
+
+def furnishing_on(stream: str) -> Furnished:
+    """The furnishing, from the strongest statement the page makes.
+
+    Structured field, then tag, then the agent's bullets — and in that order
+    because they disagree, which is the whole reason this is not one regular
+    expression over the lot:
+
+      * 74495118 carried `furnishedState: ""` and no furnishing tag, but a
+        bullet reading "Unfurnished". Only the bullets answer it.
+      * 72469489 carried `furnishedState: "unfurnished"` and the tag
+        "Unfurnished", and a bullet reading "Fully Furnished for a comfortable
+        living". Reading the bullets first would file it as the opposite of
+        what the portal says it is.
+
+    Both measured on live pages, 15 October 2026.
+    """
+
+    stated = FURNISHED_STATES.get(
+        str(re.sub(r"[\s-]+", "_", _text_after(stream, "furnishedState"))).lower()
+    )
+    if stated is not None:
+        return stated
+
+    for label in tag_labels(stream):
+        found = furnishing_in(label)
+        if found != "unknown":
+            return found
+
+    return furnishing_in(" · ".join(bullets(stream)))
+
+
+def pets_on(stream: str) -> bool | None:
+    """Whether the page says pets are allowed, or None if it does not say.
+
+    Never False, for the reason `as_listing` gives: a page that does not
+    mention pets has not refused them, and recording a refusal nobody made
+    would hide flats from the people who most need this filter.
+
+    Zoopla has no structured pets field — checked against every key on a live
+    detail page — so its own tag is the strongest statement available, and the
+    bullets are the fallback.
+    """
+
+    if any(PETS.search(label) for label in tag_labels(stream)):
+        return True
+    return True if PETS.search(" · ".join(bullets(stream))) else None
+
+
+def _text_after(stream: str, key: str) -> str:
+    """One string-valued field out of the flight stream, or empty."""
+
+    found = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]*)"', stream)
+    return found.group(1) if found else ""
+
+
+def fill(listing: Listing, page: str) -> Listing:
+    """The listing with the two filters a search card cannot answer.
+
+    The page wins wherever it has an answer, and the card is the fallback
+    rather than the other way round. That is not deference to the newer
+    reading — it is the ordering `furnishing_on` documents. Everything a card
+    can say about furnishing comes from `prose` running over 150 truncated
+    characters, which is the weakest of the three sources; the page carries the
+    structured field and Zoopla's own tag above it. A card that guessed
+    "furnished" off the word inside "unfurnished" in a sentence cut mid-way is
+    exactly what this is here to overrule.
+
+    Never back to silence, though: a page that states nothing leaves whatever
+    the card managed to find.
+    """
+
+    stream = flight_stream(page)
+    update: dict[str, Any] = {}
+
+    furnished = furnishing_on(stream)
+    if furnished != "unknown":
+        update["furnished"] = furnished
+
+    pets = pets_on(stream)
+    if pets is not None:
+        update["pets_allowed"] = pets
+
+    return listing.model_copy(update=update) if update else listing
+
+
 @dataclass(frozen=True)
 class Read:
     """One search page, as far as this module is concerned."""
@@ -720,9 +896,12 @@ def catches_in(page: str, district: str, *, from_address: bool = False) -> Read:
     )
 
 
-@dataclass(frozen=True)
+@dataclass
 class Zoopla:
     """The portal, as `worker.sources.sweep.collect` needs it.
+
+    Not frozen: `_details` is this run's remaining detail-page budget and
+    `enrich` spends it, the same arrangement `spareroom.SpareRoom` uses.
 
     Two modes, one class, one source key.
 
@@ -750,14 +929,26 @@ class Zoopla:
     dated: bool = True
 
     #: The region to sweep instead of the subscribed districts, or None for the
-    #: district reader. A frozen field rather than a subclass: everything else
-    #: about the two is identical, and a second class would have to be kept in
-    #: step with this one for ever.
+    #: district reader. A field rather than a subclass: everything else about
+    #: the two is identical, and a second class would have to be kept in step
+    #: with this one for ever.
     region: str | None = None
 
     #: Pages per run. Left settable so a test can cap it; `for_region` is what
     #: raises it in normal use, because one region page is the whole city.
     max_pages: int = MAX_PAGES
+
+    #: Listing pages per run. Matches `sweep.POSTCODE_BUDGET` on purpose: the
+    #: postcode has always been read from this same page for every stored
+    #: listing, so this reader's detail traffic is unchanged by `enrich` and
+    #: the ceiling on it should not move either.
+    detail_budget: int = DETAIL_BUDGET
+
+    _details: int = field(default=-1, init=False)
+    #: What `enrich` read off each listing page, so `postcode_for` can have it
+    #: without a second request. Keyed by external id, and absent rather than
+    #: None when the page was never read.
+    _postcodes: dict[str, str | None] = field(default_factory=dict, init=False)
 
     @classmethod
     def for_region(cls, region: str = REGION) -> Zoopla:
@@ -775,6 +966,45 @@ class Zoopla:
 
         return (self.region,) if self.region else ()
 
+    def enrich(self, catch: Catch, get: Fetcher, stage: Stage) -> Catch:
+        """The two filters a search card cannot answer, from the advert.
+
+        Zoopla's card carries no furnishing field and no pets field at all, and
+        its description is cut at 150 characters, so `prose` answered the
+        furnishing filter for about two listings in 25 and the pets filter for
+        about two in 25. Everything above those two numbers is on the listing's
+        own page — see `furnishing_on`.
+
+        The page costs nothing extra. `postcode_for` already fetches it for
+        every stored listing, so this reads the same body and leaves the
+        postcode it found in `_postcodes` for that hook to collect; the two
+        hooks together make one request, exactly as before this existed.
+        """
+
+        if self._details < 0:
+            self._details = self.detail_budget
+        if self._details <= 0:
+            stage.count("detail_over_budget")
+            return catch
+        self._details -= 1
+
+        reply = get.get(catch.listing.url)
+        # Read before the fields and kept whatever happens next: a page that
+        # says nothing about furnishing may still state the postcode, and
+        # `postcode_for` must not be sent back to fetch it again.
+        self._postcodes[catch.listing.external_id] = postcode.from_fields(
+            reply.body, catch.listing.postcode_district
+        )
+        try:
+            filled = fill(catch.listing, reply.body)
+        except ValidationError:
+            # The card already validated, so this is the page contradicting it.
+            # Keeping the card's version is the conservative answer.
+            stage.count("detail_invalid")
+            return catch
+        stage.count("detail_pages")
+        return catch if filled is catch.listing else replace(catch, listing=filled)
+
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
     ) -> str | None:
@@ -787,9 +1017,18 @@ class Zoopla:
 
         Its page carries the halves as structured fields, `"outcode": "E14"`
         and `"incode": "0UY"`, so there is nothing to guess. About 47KB.
+
+        Normally free: `enrich` has already read that page this run and left
+        the answer behind. The fetch here is for the listings it did not reach
+        — one whose page would not load, and one past `detail_budget` — so that
+        the postcode keeps its own budget and does not inherit enrich's.
         """
 
         del stage
+        # Membership, not the value: "looked and the page did not say" and
+        # "never looked" are both None and only the second is worth a request.
+        if catch.listing.external_id in self._postcodes:
+            return self._postcodes[catch.listing.external_id]
         reply = get.get(catch.listing.url)
         return postcode.from_fields(reply.body, catch.listing.postcode_district)
 
@@ -888,6 +1127,9 @@ class Zoopla:
 
 __all__ = [
     "BASE",
+    "BULLETS_KEY",
+    "DETAIL_BUDGET",
+    "FURNISHED_STATES",
     "KINDS",
     "LISTINGS_KEY",
     "MAX_PAGES",
@@ -898,24 +1140,31 @@ __all__ = [
     "OUTCODE_IN_ADDRESS",
     "REGION",
     "SOURCE_KEY",
+    "TAGS_KEY",
     "Read",
     "Zoopla",
     "a_dwelling",
     "as_listing",
+    "bullets",
     "card_is_a_dwelling",
     "catches_in",
     "feature",
+    "fill",
     "flight_stream",
+    "furnishing_in",
+    "furnishing_on",
     "kind_of",
     "listings_in",
     "monthly",
     "pages_total",
+    "pets_on",
     "picture",
     "prose",
     "published",
     "said_type",
     "search_url",
     "stated_outcode",
+    "tag_labels",
     "type_of",
     "when",
 ]

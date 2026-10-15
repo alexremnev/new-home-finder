@@ -18,25 +18,30 @@ Nothing here touches the network.
 
 from __future__ import annotations
 
+import json
 import pathlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from worker.contracts.listing import Listing
 from worker.sources.fetch import Reply
-from worker.sources.sweep import Memory, _announceable
+from worker.sources.sweep import Catch, Memory, _announceable, _enrich
 from worker.sources.zoopla import (
     Zoopla,
     a_dwelling,
     as_listing,
     card_is_a_dwelling,
     catches_in,
+    fill,
     flight_stream,
+    furnishing_on,
     kind_of,
     listings_in,
     monthly,
     outcode_in,
     pages_total,
+    pets_on,
     picture,
     published,
     search_url,
@@ -527,3 +532,210 @@ def test_a_district_read_is_not_affected_by_the_new_stop() -> None:
     )
 
     assert harvest.pages == 1
+
+
+# ── the listing's own page ───────────────────────────────────────────────
+#
+# Every statement below was measured against a live page on 15 October 2026 and
+# is named by the listing it came from, because the three sources disagree and
+# the disagreement is the whole reason the ordering exists.
+
+
+def _detail(
+    *,
+    state: str | None = None,
+    tags: tuple[str, ...] = (),
+    bullets: tuple[str, ...] = (),
+    postcode: tuple[str, str] | None = None,
+) -> str:
+    """A listing page in the real shape: one RSC push carrying the fields.
+
+    Separators are compact because the live payload's are: `_array_after`
+    finds an array by looking for `"key":` with no space, so a fixture that
+    pretty-printed would pass a test the real page fails.
+
+    `postcode` goes in unescaped and outside the push, which is where the real
+    page carries it too — `postcode.from_fields` reads the raw body rather than
+    the reassembled stream, and on a live page the halves appear in a separate
+    script as `"outcode":"SW11"`.
+    """
+
+    payload: dict[str, object] = {
+        "tagsV2": [{"label": one} for one in tags],
+        "features": {"bullets": list(bullets)},
+    }
+    if state is not None:
+        payload["furnishedState"] = state
+    pushed = json.dumps(payload, separators=(",", ":"))
+    where = ""
+    if postcode is not None:
+        where = (
+            '<script>{"outcode":"' + postcode[0] + '","incode":"' + postcode[1] + '"}'
+            "</script>"
+        )
+    return (
+        "<html><body><script>self.__next_f.push([1,"
+        + json.dumps(pushed)
+        + "])</script>"
+        + where
+        + "</body></html>"
+    )
+
+
+def test_the_structured_furnishing_is_what_the_page_is_asked_first() -> None:
+    assert furnishing_on(flight_stream(_detail(state="unfurnished"))) == "unfurnished"
+    assert furnishing_on(flight_stream(_detail(state="furnished"))) == "furnished"
+    assert furnishing_on(flight_stream(_detail(state="part_furnished"))) == "part"
+
+
+def test_the_structured_field_beats_bullets_that_contradict_it() -> None:
+    # Listing 72469489: `furnishedState: "unfurnished"` and the tag
+    # "Unfurnished", with a bullet reading "Fully Furnished for a comfortable
+    # living". Reading the agent's words first files it as the opposite of what
+    # the portal says it is.
+    page = _detail(
+        state="unfurnished",
+        tags=("Unfurnished",),
+        bullets=("Fully Furnished for a comfortable living",),
+    )
+    assert furnishing_on(flight_stream(page)) == "unfurnished"
+
+
+def test_the_tag_answers_when_the_structured_field_is_empty() -> None:
+    page = _detail(state="", tags=("Available from 31 October 2026", "Unfurnished"))
+    assert furnishing_on(flight_stream(page)) == "unfurnished"
+
+
+def test_the_bullets_answer_when_the_field_and_the_tag_are_both_silent() -> None:
+    # Listing 74495118: `furnishedState: ""`, no furnishing tag, and a bullet
+    # reading "Unfurnished". The bullets are the only source that has it.
+    page = _detail(
+        state="",
+        tags=("Available from 31 October 2026", "Pets allowed"),
+        bullets=("Long Let - apt", "Unfurnished", "24-hour concierge"),
+    )
+    assert furnishing_on(flight_stream(page)) == "unfurnished"
+
+
+def test_a_furnishing_the_portal_will_not_state_stays_unknown() -> None:
+    # "furnished_or_unfurnished" means the agent will do either, so it answers
+    # neither filter, and `unknown` is what hands the listing to both halves
+    # rather than to the wrong one.
+    assert furnishing_on(flight_stream(_detail(state="furnished_or_unfurnished"))) == (
+        "unknown"
+    )
+    assert furnishing_on(flight_stream(_detail())) == "unknown"
+
+
+def test_pets_come_from_zooplas_own_tag() -> None:
+    page = _detail(tags=("Available from 31 October 2026", "Pets allowed"))
+    assert pets_on(flight_stream(page)) is True
+
+
+def test_pets_fall_back_to_the_bullets() -> None:
+    page = _detail(bullets=("Pets considered", "Private balcony"))
+    assert pets_on(flight_stream(page)) is True
+
+
+def test_a_page_that_does_not_mention_pets_refuses_nothing() -> None:
+    # None rather than False: a page that says nothing has not forbidden them,
+    # and a refusal nobody made would hide flats from the people who most need
+    # this filter.
+    assert pets_on(flight_stream(_detail(bullets=("Private balcony",)))) is None
+
+
+def test_the_page_overrules_a_card_that_guessed_from_truncated_prose() -> None:
+    # The card's value comes from `prose` over 150 cut characters, which is the
+    # weakest of the three sources. The page carries the structured field.
+    card = _listing(furnished="furnished")
+    filled = fill(card, _detail(state="unfurnished"))
+    assert filled.furnished == "unfurnished"
+
+
+def test_a_silent_page_leaves_what_the_card_managed_to_find() -> None:
+    card = _listing(furnished="furnished", pets_allowed=True)
+    filled = fill(card, _detail())
+    assert filled.furnished == "furnished"
+    assert filled.pets_allowed is True
+
+
+def _listing(**fields: object) -> Listing:
+    return Listing(
+        source_key="zoopla",
+        external_id="74495118",
+        url="https://www.zoopla.co.uk/to-rent/details/74495118/",
+        price_pcm=2750,
+        bedrooms=1,
+        postcode_district="SW11",
+        **fields,  # type: ignore[arg-type]
+    )
+
+
+# ── enrich, and what it costs ────────────────────────────────────────────
+
+
+class _Detail:
+    """One listing page for every request, counting what was asked."""
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+        self.asked: list[str] = []
+
+    def get(self, url: str, **_: object) -> Reply:
+        self.asked.append(url)
+        return Reply(status=200, body=self.body, wire=47_000, impersonated="chrome124")
+
+
+def _caught(**fields: object) -> Catch:
+    return Catch(listing=_listing(**fields), image=None, first_listed=None)
+
+
+def test_enrich_fills_the_two_filters_a_card_cannot_answer() -> None:
+    page = _detail(state="unfurnished", tags=("Pets allowed",))
+    get = _Detail(page)
+    filled = _enrich(Zoopla(), [_caught()], {"SW11"}, get, Quiet())  # type: ignore[arg-type]
+    assert filled[0].listing.furnished == "unfurnished"
+    assert filled[0].listing.pets_allowed is True
+
+
+def test_the_postcode_hook_spends_no_second_request_on_the_same_page() -> None:
+    # The whole cost argument for this reader: the listing page was already
+    # being fetched for the postcode, so reading the furnishing out of it has
+    # to add no requests at all.
+    get = _Detail(_detail(state="unfurnished", postcode=("SW11", "1DF")))
+    portal = Zoopla()
+    one = _caught()
+    filled = _enrich(portal, [one], {"SW11"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+    found = portal.postcode_for(filled[0], get, Quiet())  # type: ignore[arg-type]
+    assert found == "SW11 1DF"
+    assert len(get.asked) == 1
+
+
+def test_a_listing_enrich_never_reached_still_gets_its_postcode() -> None:
+    # Past the budget, or a page that would not load. The postcode keeps its
+    # own budget rather than inheriting enrich's, so it asks for itself.
+    get = _Detail(_detail(state="unfurnished", postcode=("SW11", "1DF")))
+    portal = Zoopla(detail_budget=0)
+    one = _caught()
+    _enrich(portal, [one], {"SW11"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 0
+
+    assert portal.postcode_for(one, get, Quiet()) == "SW11 1DF"  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+
+def test_the_detail_budget_is_a_ceiling_on_one_run() -> None:
+    get = _Detail(_detail(state="unfurnished"))
+    portal = Zoopla(detail_budget=1)
+    _enrich(portal, [_caught(), _caught()], {"SW11"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+
+def test_only_a_wanted_district_costs_a_listing_page() -> None:
+    # A region sweep reads the whole city. Without this gate the reader would
+    # fetch a page for every new listing in London on every run.
+    get = _Detail(_detail(state="unfurnished"))
+    _enrich(Zoopla.for_region(), [_caught()], {"E14"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 0

@@ -53,6 +53,23 @@ No general decoder is needed and none is written: finding the one object with
 both keys and following two indices is the whole job, and a decoder for a
 format nobody documents is a decoder that breaks silently.
 
+── the furnishing, which is in there too ───────────────────────────────────
+
+The same payload carries `lettings`, and `furnishType` in it is Rightmove's own
+answer — "Unfurnished" on listing 94293753, measured 15 October 2026. The
+search card has no such field: `tags` and `keywords` have never been non-empty
+here, so `features` had only the 300-character `summary` and whatever the agent
+chose to bullet. On a live E14 page of 25 that gave the furnishing for 11
+listings and pets for none at all, and 94293753 was one of the fourteen — it
+went out to subscribers who had asked for furnished, because prose called it
+unknown and `match._check_furnished` passes unknown to everybody.
+
+So `enrich` reads it, along with the untruncated description that is the only
+place pets are ever stated. Unlike Zoopla's, this page is not free: the
+postcode above is only wanted for a card that stated none, about two in three,
+so the other third is a request that was not being made before. `DETAIL_BUDGET`
+is the ceiling, and `details_on` parses the payload once for both answers.
+
 About 100KB a page, spent only on a listing we are about to store that has no
 postcode of its own. It buys two things — an alert that names the street, and
 a working duplicate rule, since `store.mark_duplicate` compares on the full
@@ -80,7 +97,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import Any
 
@@ -115,6 +133,18 @@ MAX_PAGES = 5
 # eight times smaller. Set False to always take the photograph the agent put
 # first, whatever it weighs.
 PREFER_JPEG = True
+
+# Listing pages per run, for `Rightmove.enrich`. Lower than
+# `sweep.POSTCODE_BUDGET` because unlike Zoopla's this one costs real extra
+# requests: the postcode is read from this page only for a card that stated
+# none, about two in three, so the remaining third is traffic that was not
+# being spent before. A page is about 100KB across the wire.
+#
+# It is a ceiling and not a target. A district producing more than 25 new
+# listings between two runs is already past what one search page carries, and
+# the listings past this budget are stored with what the card said — which is
+# what every Rightmove listing was stored with before this existed.
+DETAIL_BUDGET = 25
 
 SPACES = re.compile(r"\s+")
 
@@ -189,6 +219,27 @@ FURNISHING: tuple[tuple[Furnished, re.Pattern[str]], ...] = (
     ("unfurnished", re.compile(r"\bunfurnished\b", re.IGNORECASE)),
     ("furnished", re.compile(r"\bfurnished\b", re.IGNORECASE)),
 )
+
+# Rightmove's own machine-readable furnishing, `lettings.furnishType` on the
+# listing's page. There is no such field on a search card — see `features` for
+# the whole of what a card can be asked.
+#
+# Matched on a lowercased, space-collapsed value. Only "Unfurnished" has been
+# seen on a live page here (listing 94293753, 15 October 2026); the other
+# spellings are Rightmove's own filter wording. Anything unrecognised falls
+# through to `unknown`, which is the safe direction: a value this map has not
+# learned yet leaves the listing answering every furnishing filter, exactly as
+# it did before this existed, rather than being filed as the wrong one.
+#
+# "Ask agent" and "Furnished or unfurnished" are deliberately absent. Both mean
+# the portal is not stating one, and `unknown` is what lets
+# `match._check_furnished` hand the listing to everybody rather than to half.
+FURNISH_TYPES: dict[str, Furnished] = {
+    "furnished": "furnished",
+    "unfurnished": "unfurnished",
+    "part furnished": "part",
+    "partly furnished": "part",
+}
 
 PETS = re.compile(r"\bpets?\s*(?:allowed|welcome|considered|friendly)\b", re.IGNORECASE)
 BILLS = re.compile(r"\bbills?\s*(?:are\s*)?includ", re.IGNORECASE)
@@ -354,8 +405,33 @@ def picture(images: Any) -> str | None:
     return urls[0]
 
 
+def furnishing_in(text: str) -> Furnished:
+    """Which of the three furnishing words `text` states, if any.
+
+    Order matters and `FURNISHING` carries it: "part furnished" contains
+    "furnished", and "unfurnished" contains it too, so the longest claim has to
+    be tested first or every advert comes back furnished.
+    """
+
+    for name, pattern in FURNISHING:
+        if pattern.search(text):
+            return name
+    return "unknown"
+
+
 def features(row: dict[str, Any]) -> str:
-    """The listing's own words, for the few facts only prose states."""
+    """The listing's own words, for the few facts only prose states.
+
+    This is the whole of what a search card can be asked, and it is thin.
+    `summary` is a truncation of the description — 300 characters, ending in an
+    ellipsis on 8 of 25 on a live E14 page — and `keyFeatures` is whatever the
+    agent chose to bullet. Neither `tags` nor `keywords` has ever been
+    non-empty here. Measured on that page: the furnishing came out for 11 of 25
+    and pets for 0 of 25, because the card has no field for either.
+
+    So the card is the fallback and the listing's own page is the answer; see
+    `details_on`.
+    """
 
     parts = [str(row.get("summary") or "")]
     listed = row.get("keyFeatures")
@@ -399,11 +475,7 @@ def as_listing(row: Any, district: str) -> Listing | None:
         postcode = " ".join(stated.group(1).upper().split())
 
     prose = features(row)
-    furnished: Furnished = "unknown"
-    for name, pattern in FURNISHING:
-        if pattern.search(prose):
-            furnished = name
-            break
+    furnished = furnishing_in(prose)
 
     where = row.get("location")
     where = where if isinstance(where, dict) else {}
@@ -554,6 +626,12 @@ PAGE_MODEL = "window.__PAGE_MODEL"
 # whatever the page happened to render.
 ADDRESS_KEYS = ("outcode", "incode")
 
+# The same trick for the letting details, which is where the furnishing is:
+# `{letAvailableDate, deposit, minimumTermInMonths, letType, furnishType}`.
+# Two keys rather than one, so that the match is about this object and not
+# about a field name that might appear anywhere.
+LETTINGS_KEYS = ("furnishType", "letType")
+
 
 def page_model(page: str) -> dict[str, Any]:
     """`window.__PAGE_MODEL` as a dict, or empty when it is not there.
@@ -601,25 +679,25 @@ def page_model(page: str) -> dict[str, Any]:
     return {}
 
 
-def postcode_on(page: str, district: str) -> str | None:
-    """The listing's full postcode, from its own page. See the module note.
+def flat_payload(page: str) -> list[Any]:
+    """The flattened, index-referencing array inside `window.__PAGE_MODEL`.
 
-    `district` is the outward code we already know from the search. It is used
-    to choose between candidates and to refuse a disagreement: a page can
-    carry panels for other properties, and a neighbour's postcode in the alert
-    would also put a wrong fingerprint into the duplicate rule.
+    Empty when the page carries none. See the module note for the shape and
+    for why no general decoder is written for it.
     """
 
-    model = page_model(page)
-    payload = model.get("data")
+    payload = page_model(page).get("data")
     if not isinstance(payload, str):
-        return None
+        return []
     try:
         flat = json.loads(payload)
     except json.JSONDecodeError:
-        return None
-    if not isinstance(flat, list):
-        return None
+        return []
+    return flat if isinstance(flat, list) else []
+
+
+def _reader(flat: list[Any]) -> Callable[[Any], Any]:
+    """Resolve one entry of the flattened payload to its value."""
 
     def at(index: Any) -> Any:
         # An entry is either an index into the array or the value itself.
@@ -627,6 +705,13 @@ def postcode_on(page: str, district: str) -> str | None:
             return flat[index] if 0 <= index < len(flat) else None
         return index
 
+    return at
+
+
+def postcode_in(flat: list[Any], district: str) -> str | None:
+    """The listing's full postcode, from an already-parsed payload."""
+
+    at = _reader(flat)
     found: set[str] = set()
     for entry in flat:
         if not isinstance(entry, dict):
@@ -649,9 +734,140 @@ def postcode_on(page: str, district: str) -> str | None:
     return ours.pop() if len(ours) == 1 else None
 
 
+def postcode_on(page: str, district: str) -> str | None:
+    """The listing's full postcode, from its own page. See the module note.
+
+    `district` is the outward code we already know from the search. It is used
+    to choose between candidates and to refuse a disagreement: a page can
+    carry panels for other properties, and a neighbour's postcode in the alert
+    would also put a wrong fingerprint into the duplicate rule.
+    """
+
+    return postcode_in(flat_payload(page), district)
+
+
+def furnish_type_in(flat: list[Any]) -> Furnished:
+    """`lettings.furnishType`, Rightmove's own answer, or unknown.
+
+    Found by its keys rather than by position, exactly as `postcode_in` finds
+    the address: the position is an artefact of whatever the page rendered.
+    `LETTINGS_KEYS` asks for two of them together so that a panel for some
+    other property — or a future payload that moves the field — cannot be
+    mistaken for this listing's letting details.
+    """
+
+    at = _reader(flat)
+    for entry in flat:
+        if not isinstance(entry, dict):
+            continue
+        if not all(key in entry for key in LETTINGS_KEYS):
+            continue
+        stated = at(entry["furnishType"])
+        if not isinstance(stated, str):
+            continue
+        found = FURNISH_TYPES.get(SPACES.sub(" ", stated).strip().lower())
+        if found is not None:
+            return found
+    return "unknown"
+
+
+def prose_in(flat: list[Any]) -> str:
+    """The advert's full description and bullets, untruncated.
+
+    The card carries 300 characters of the first and a copy of the second; this
+    is the whole of both, which is the only place Rightmove ever states pets.
+    """
+
+    at = _reader(flat)
+    parts: list[str] = []
+    for entry in flat:
+        if not isinstance(entry, dict) or "keyFeatures" not in entry:
+            continue
+        text = at(entry.get("text"))
+        if isinstance(text, dict):
+            described = at(text.get("description"))
+            if isinstance(described, str):
+                parts.append(described)
+        bullets = at(entry["keyFeatures"])
+        if isinstance(bullets, list):
+            parts.extend(one for one in (at(x) for x in bullets) if isinstance(one, str))
+    return " · ".join(part for part in parts if part)
+
+
 @dataclass(frozen=True)
+class Details:
+    """What only the listing's own page states.
+
+    One parse of a hundred kilobytes of JSON, read once and asked several
+    questions, because `enrich` and `postcode_for` both want answers out of the
+    same body.
+    """
+
+    postcode: str | None = None
+    furnished: Furnished = "unknown"
+    pets_allowed: bool | None = None
+
+
+def details_on(page: str, district: str) -> Details:
+    """Everything this project stores that only the listing's page states."""
+
+    flat = flat_payload(page)
+    if not flat:
+        return Details()
+    words = prose_in(flat)
+    # Structured first, the agent's words second — and spelled out rather than
+    # left to `or`, because "unknown" is a non-empty string and would have
+    # swallowed the fallback whole.
+    #
+    # They disagree, and the field is the portal's own answer: 94293753 stated
+    # `furnishType: "Unfurnished"` while nothing in its description or its nine
+    # bullets mentioned furnishing at all, so prose alone called it unknown and
+    # `match._check_furnished` passed it to everybody — including the
+    # subscribers who had asked for furnished. Measured 15 October 2026.
+    # Rightmove has no tag tier between the two; Zoopla does, and
+    # `zoopla.furnishing_on` uses it.
+    stated = furnish_type_in(flat)
+    return Details(
+        postcode=postcode_in(flat, district),
+        furnished=stated if stated != "unknown" else furnishing_in(words),
+        # Never False, for the reason `as_listing` gives: a page that does not
+        # mention pets has not refused them. Rightmove has no structured field
+        # for this — checked against every key on a live page — so the advert's
+        # own words are the only statement there is.
+        pets_allowed=True if PETS.search(words) else None,
+    )
+
+
+def fill(listing: Listing, found: Details) -> Listing:
+    """The listing with the two filters a search card cannot answer.
+
+    The page wins wherever it has an answer, and the card is the fallback
+    rather than the other way round — see `details_on` for the ordering and
+    `features` for why the card is the weaker source. A page that states
+    nothing leaves whatever the card managed to find.
+
+    The postcode is not written here on purpose: `postcode_for` owns it, for
+    the ordering reason `sweep.collect` gives — it has to be in place before
+    `store.mark_duplicate` runs — and `Rightmove.enrich` hands it over rather
+    than setting it, so that the engine's own postcode counters and budget keep
+    meaning what they say.
+    """
+
+    update: dict[str, Any] = {}
+    if found.furnished != "unknown":
+        update["furnished"] = found.furnished
+    if found.pets_allowed is not None:
+        update["pets_allowed"] = found.pets_allowed
+    return listing.model_copy(update=update) if update else listing
+
+
+@dataclass
 class Rightmove:
-    """The portal, as `worker.sources.sweep.collect` needs it."""
+    """The portal, as `worker.sources.sweep.collect` needs it.
+
+    Not frozen: `_details` is this run's remaining detail-page budget and
+    `enrich` spends it, the same arrangement `spareroom.SpareRoom` uses.
+    """
 
     key: str = SOURCE_KEY
     #: Every listing carries `firstVisibleDate`, so announceability is decided
@@ -659,6 +875,56 @@ class Rightmove:
     #: one page. See the note in worker.sources.sweep.
     dated: bool = True
     max_pages: int = MAX_PAGES
+
+    #: Listing pages per run, for `enrich`. See `DETAIL_BUDGET` for what this
+    #: costs, which unlike Zoopla's is not nothing.
+    detail_budget: int = DETAIL_BUDGET
+
+    _details: int = field(default=-1, init=False)
+    #: What `enrich` read off each listing page, so `postcode_for` can have it
+    #: without a second request. Keyed by external id, and absent rather than
+    #: None when the page was never read.
+    _postcodes: dict[str, str | None] = field(default_factory=dict, init=False)
+
+    def enrich(self, catch: Catch, get: Fetcher, stage: Stage) -> Catch:
+        """The two filters a search card cannot answer, from the advert.
+
+        A Rightmove card has no furnishing field and no pets field: the
+        furnishing came out for 11 of 25 on a live page and pets for 0 of 25,
+        both off prose alone. The page states the first outright and carries
+        the untruncated description the second would have to be in — see
+        `details_on` and `features`.
+
+        Unlike Zoopla's, this is not free. `postcode_for` reads this page only
+        for a listing whose card stated no full postcode, about two in three,
+        so for the other third this is a request that was not being made
+        before. `DETAIL_BUDGET` is the ceiling on it.
+        """
+
+        if self._details < 0:
+            self._details = self.detail_budget
+        if self._details <= 0:
+            stage.count("detail_over_budget")
+            return catch
+        self._details -= 1
+
+        district = catch.listing.postcode_district or ""
+        reply = get.get(catch.listing.url)
+        found = details_on(reply.body, district)
+        # Kept whatever happens to the rest: a page that says nothing about
+        # furnishing may still state the postcode, and `postcode_for` must not
+        # be sent back to fetch the same body again.
+        if district:
+            self._postcodes[catch.listing.external_id] = found.postcode
+        try:
+            filled = fill(catch.listing, found)
+        except ValidationError:
+            # The card already validated, so this is the page contradicting it.
+            # Keeping the card's version is the conservative answer.
+            stage.count("detail_invalid")
+            return catch
+        stage.count("detail_pages")
+        return catch if filled is catch.listing else replace(catch, listing=filled)
 
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
@@ -668,12 +934,22 @@ class Rightmove:
         Only reached for a listing whose search result stated none, which is
         about two in three. See the module note for where it hides and why
         finding it took two attempts.
+
+        Normally free now: `enrich` has already read that page this run and
+        left the answer behind. The fetch here is for the listings it did not
+        reach — one whose page would not load, and one past `detail_budget` —
+        so that the postcode keeps its own budget rather than inheriting
+        enrich's.
         """
 
         del stage
         district = catch.listing.postcode_district or ""
         if not district:
             return None
+        # Membership, not the value: "looked and the page did not say" and
+        # "never looked" are both None and only the second is worth a request.
+        if catch.listing.external_id in self._postcodes:
+            return self._postcodes[catch.listing.external_id]
         return postcode_on(get.get(catch.listing.url).body, district)
 
     def harvest(

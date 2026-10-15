@@ -46,7 +46,31 @@ def insert_listing(conn: Conn, listing: Listing) -> int:
                -- Blanks only. A reader that stated a type stated it from the
                -- page it read, and the second reader is not better informed
                -- about the same flat.
-               property_type = COALESCE(listings.property_type, EXCLUDED.property_type)
+               property_type = COALESCE(listings.property_type, EXCLUDED.property_type),
+
+               -- The same rule, for the same reason, for the two fields the
+               -- filters ask about that a search card most often withholds.
+               -- Without these the clause above was discarding them twice
+               -- over: a Zoopla or Rightmove row the feed had written first
+               -- kept the feed's silence for ever, and so did a row whose own
+               -- scraper read the card on one run and the listing page — where
+               -- both fields actually are — on the next. See
+               -- `zoopla.furnishing_on` and `rightmove.details_on`.
+               --
+               -- 'unknown' is this column's blank, not NULL: it is NOT NULL
+               -- DEFAULT 'unknown' and a CHECK constraint keeps it one of the
+               -- four words, so NULLIF is what makes COALESCE mean the same
+               -- thing here as it does above.
+               furnished = COALESCE(
+                   NULLIF(listings.furnished, 'unknown'),
+                   NULLIF(EXCLUDED.furnished, 'unknown'),
+                   'unknown'
+               ),
+               -- NULL is the blank here and it means "not stated". Never
+               -- written back to NULL, and never to False: see
+               -- `rightmove.as_listing` for why a refusal nobody made is worse
+               -- than silence.
+               pets_allowed = COALESCE(listings.pets_allowed, EXCLUDED.pets_allowed)
         RETURNING id
         """,
         {**values, "schema_id": None, "raw": Jsonb(listing.raw)},

@@ -106,6 +106,52 @@ def test_a_stated_type_is_not_overwritten_by_another_one(conn: Any) -> None:
     assert type_of(conn, first) == "flat"
 
 
+def filters_of(conn: Any, listing_id: int) -> tuple[str, bool | None]:
+    row = conn.execute(
+        "SELECT furnished, pets_allowed FROM listings WHERE id = %s", (listing_id,)
+    ).fetchone()
+    assert row is not None
+    return row["furnished"], row["pets_allowed"]
+
+
+def test_a_later_read_fills_the_furnishing_the_first_one_left_unknown(
+    conn: Any,
+) -> None:
+    # Two ways this happens, and before this clause both were lost. The feed
+    # writes a Zoopla or Rightmove row first and states no furnishing; and a
+    # scraper stores the search card on one run — where neither portal carries
+    # the field — and reads the listing page on the next, which is where both
+    # of these actually are. See `zoopla.furnishing_on`.
+    first = store.insert_listing(conn, listing(furnished="unknown"))
+    assert filters_of(conn, first) == ("unknown", None)
+
+    again = store.insert_listing(conn, listing(furnished="unfurnished"))
+    assert again == first
+    assert filters_of(conn, first) == ("unfurnished", None)
+
+
+def test_a_stated_furnishing_is_not_overwritten_by_unknown(conn: Any) -> None:
+    # 'unknown' is this column's blank — it is NOT NULL DEFAULT 'unknown' — so
+    # a reader that found nothing must not write its silence over an answer.
+    first = store.insert_listing(conn, listing(furnished="furnished"))
+    store.insert_listing(conn, listing(furnished="unknown"))
+    assert filters_of(conn, first) == ("furnished", None)
+
+
+def test_a_later_read_fills_pets_the_first_one_did_not_state(conn: Any) -> None:
+    first = store.insert_listing(conn, listing(pets_allowed=None))
+    store.insert_listing(conn, listing(pets_allowed=True))
+    assert filters_of(conn, first) == ("unknown", True)
+
+
+def test_pets_already_allowed_are_never_written_back_to_silence(conn: Any) -> None:
+    # None means "not stated", and it must not undo a page that did state it:
+    # a listing that stops mentioning pets has not refused them.
+    first = store.insert_listing(conn, listing(pets_allowed=True))
+    store.insert_listing(conn, listing(pets_allowed=None))
+    assert filters_of(conn, first) == ("unknown", True)
+
+
 PAGE = (
     '<head><meta property="og:title" '
     'content="Check out this 2 bedroom apartment for rent on Rightmove">'

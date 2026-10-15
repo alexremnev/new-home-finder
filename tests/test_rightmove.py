@@ -18,13 +18,17 @@ from datetime import UTC, datetime
 
 import pytest
 
+from worker.contracts.listing import Listing
 from worker.sources.fetch import Reply
 from worker.sources.rightmove import (
+    Details,
     Rightmove,
     a_dwelling,
     as_listing,
     at,
     catches_in,
+    details_on,
+    fill,
     kind_of,
     monthly,
     page_model,
@@ -34,7 +38,7 @@ from worker.sources.rightmove import (
     search_url,
     type_of,
 )
-from worker.sources.sweep import _announceable
+from worker.sources.sweep import Catch, _announceable, _enrich
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "rightmove_e14_search.html"
 PAGE = FIXTURE.read_text(encoding="utf-8")
@@ -534,3 +538,217 @@ def test_every_fixture_listing_carries_a_type() -> None:
     read = catches_in(PAGE, "E14")
     assert read.caught
     assert all(one.listing.property_type for one in read.caught)
+
+
+# ── the lettings panel, out of the same window.__PAGE_MODEL ──────────────
+#
+# Everything the search card withholds and the filters ask about. Measured
+# against listing 94293753 on 15 October 2026, whose card said nothing about
+# furnishing in its description or any of its nine bullets while the page said
+# `furnishType: "Unfurnished"` outright — so prose alone called it unknown,
+# `match._check_furnished` passed it to everybody, and it reached subscribers
+# who had asked for furnished.
+
+
+def _detail_entries(
+    *, furnish: object = "Unfurnished", description: str = "", bullets: tuple[str, ...] = ()
+) -> list[object]:
+    """A listing page's payload, in the real indexed shape.
+
+    The two objects this reads are found by their keys and not their position,
+    so they are deliberately not adjacent and the address object from
+    `PAGE_MODEL_ENTRIES` is kept in front of them.
+    """
+
+    base = list(PAGE_MODEL_ENTRIES)
+    at = len(base)
+    base.extend([
+        # The letting details, matched on `furnishType` and `letType` together.
+        {
+            "letAvailableDate": at + 3,
+            "deposit": 3288,
+            "minimumTermInMonths": None,
+            "letType": at + 4,
+            "furnishType": at + 1,
+        },
+        furnish,
+        # The main object: its bullets and its untruncated description.
+        {"keyFeatures": at + 5, "text": at + 6},
+        "Ask agent",
+        "Long term",
+        [at + 7 + n for n in range(len(bullets))],
+        {"description": at + 7 + len(bullets)},
+        *bullets,
+        description,
+    ])
+    return base
+
+
+def test_the_structured_furnishing_is_what_the_page_is_asked_first() -> None:
+    found = details_on(_page_with_model(_detail_entries()), "E14")
+    assert found.furnished == "unfurnished"
+    # The postcode still comes off the same parse, which is the whole point of
+    # reading the page once.
+    assert found.postcode == "E14 9LZ"
+
+
+def test_the_structured_field_beats_prose_that_contradicts_it() -> None:
+    found = details_on(
+        _page_with_model(
+            _detail_entries(furnish="Unfurnished", bullets=("Fully Furnished",))
+        ),
+        "E14",
+    )
+    assert found.furnished == "unfurnished"
+
+
+def test_prose_answers_when_the_portal_will_not() -> None:
+    # "Ask agent" means Rightmove is not stating one, so the agent's own words
+    # are all there is. Rightmove has no tag tier between the two.
+    found = details_on(
+        _page_with_model(
+            _detail_entries(furnish="Ask agent", bullets=("Part furnished",))
+        ),
+        "E14",
+    )
+    assert found.furnished == "part"
+
+
+def test_a_furnish_type_the_map_has_not_learned_stays_unknown() -> None:
+    # The safe direction: a value this map does not know leaves the listing
+    # answering every furnishing filter, as it did before this existed, rather
+    # than being filed as the wrong one.
+    found = details_on(_page_with_model(_detail_entries(furnish="Mystery")), "E14")
+    assert found.furnished == "unknown"
+    assert details_on(_page_with_model(_detail_entries(furnish=None)), "E14").furnished == (
+        "unknown"
+    )
+
+
+def test_pets_come_from_the_untruncated_description() -> None:
+    # The card carries 300 characters of this and Rightmove has no pets field
+    # at all, which is why pets came out for 0 of 25 on a live search page.
+    found = details_on(
+        _page_with_model(
+            _detail_entries(
+                description="A bright flat moments from the station. " * 10
+                + "Pets considered on application."
+            )
+        ),
+        "E14",
+    )
+    assert found.pets_allowed is True
+
+
+def test_a_page_that_does_not_mention_pets_refuses_nothing() -> None:
+    found = details_on(_page_with_model(_detail_entries(description="A flat.")), "E14")
+    assert found.pets_allowed is None
+
+
+def test_a_page_without_a_lettings_panel_gives_nothing_rather_than_raising() -> None:
+    found = details_on(PAGE_WITH_MODEL, "E14")
+    assert found.furnished == "unknown"
+    assert found.pets_allowed is None
+    assert details_on("<html>maintenance</html>", "E14") == Details()
+
+
+def test_the_page_overrules_a_card_that_guessed_from_truncated_prose() -> None:
+    card = _listing(furnished="furnished")
+    filled = fill(card, details_on(_page_with_model(_detail_entries()), "E14"))
+    assert filled.furnished == "unfurnished"
+
+
+def test_a_silent_page_leaves_what_the_card_managed_to_find() -> None:
+    card = _listing(furnished="furnished", pets_allowed=True)
+    filled = fill(card, details_on(PAGE_WITH_MODEL, "E14"))
+    assert filled.furnished == "furnished"
+    assert filled.pets_allowed is True
+
+
+def test_fill_does_not_write_the_postcode() -> None:
+    # `postcode_for` owns it, for the ordering reason sweep.collect gives: it
+    # has to be in place before store.mark_duplicate runs, and leaving it to
+    # that hook keeps the engine's postcode counters and budget meaning what
+    # they say.
+    filled = fill(_listing(), details_on(_page_with_model(_detail_entries()), "E14"))
+    assert filled.postcode is None
+
+
+def _listing(**fields: object) -> Listing:
+    return Listing(
+        source_key="rightmove",
+        external_id="94293753",
+        url="https://www.rightmove.co.uk/properties/94293753",
+        price_pcm=2850,
+        bedrooms=2,
+        postcode_district="E14",
+        **fields,  # type: ignore[arg-type]
+    )
+
+
+# ── enrich, and what it costs ────────────────────────────────────────────
+
+
+class _Detail:
+    """One listing page for every request, counting what was asked."""
+
+    def __init__(self, body: str) -> None:
+        self.body = body
+        self.asked: list[str] = []
+
+    def get(self, url: str, **_: object) -> Reply:
+        self.asked.append(url)
+        return Reply(status=200, body=self.body, wire=100_000, impersonated="chrome124")
+
+
+def _caught(**fields: object) -> Catch:
+    return Catch(listing=_listing(**fields), image=None, first_listed=None)
+
+
+def test_enrich_fills_the_two_filters_a_card_cannot_answer() -> None:
+    get = _Detail(
+        _page_with_model(_detail_entries(description="Pets allowed by arrangement."))
+    )
+    filled = _enrich(Rightmove(), [_caught()], {"E14"}, get, Quiet())  # type: ignore[arg-type]
+    assert filled[0].listing.furnished == "unfurnished"
+    assert filled[0].listing.pets_allowed is True
+
+
+def test_the_postcode_hook_spends_no_second_request_on_the_same_page() -> None:
+    # Unlike Zoopla's this page is not free, so it must at least not be paid
+    # for twice: the postcode was already read from it for two listings in
+    # three and now comes out of the same body.
+    get = _Detail(_page_with_model(_detail_entries()))
+    portal = Rightmove()
+    one = _caught()
+    filled = _enrich(portal, [one], {"E14"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+    assert portal.postcode_for(filled[0], get, Quiet()) == "E14 9LZ"  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+
+def test_a_listing_enrich_never_reached_still_gets_its_postcode() -> None:
+    get = _Detail(_page_with_model(_detail_entries()))
+    portal = Rightmove(detail_budget=0)
+    one = _caught()
+    _enrich(portal, [one], {"E14"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 0
+
+    assert portal.postcode_for(one, get, Quiet()) == "E14 9LZ"  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+
+def test_the_detail_budget_is_a_ceiling_on_one_run() -> None:
+    # This one costs real extra traffic — a third of listings already carried a
+    # postcode and were never fetched before — so the ceiling matters.
+    get = _Detail(_page_with_model(_detail_entries()))
+    portal = Rightmove(detail_budget=1)
+    _enrich(portal, [_caught(), _caught()], {"E14"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 1
+
+
+def test_only_a_wanted_district_costs_a_listing_page() -> None:
+    get = _Detail(_page_with_model(_detail_entries()))
+    _enrich(Rightmove(), [_caught()], {"SE16"}, get, Quiet())  # type: ignore[arg-type]
+    assert len(get.asked) == 0
