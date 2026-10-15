@@ -51,9 +51,14 @@ describe("WhatsApp rates", () => {
     );
   });
 
+  it("drops the marketing term when nothing was billed at it", () => {
+    // The shape of every month from 0070 on: the plan notice is a utility
+    // template now, so one rate covers everything and a "+ 0 × $0.0635" on
+    // the end would send the reader looking for a cost nobody is paying.
+    expect(waFormula(1234, 0, 22000, 63500)).toBe("1,234 × $0.022 = $27.15");
+  });
+
   it("says nought rather than nothing on an empty month", () => {
-    expect(waFormula(0, 0, 22000, 63500)).toBe(
-      "0 × $0.022 service + 0 × $0.0635 marketing = $0.00",
-    );
+    expect(waFormula(0, 0, 22000, 63500)).toBe("0 × $0.022 = $0.00");
   });
 });

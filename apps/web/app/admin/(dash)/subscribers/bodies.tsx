@@ -131,7 +131,8 @@ export async function WhatsAppSpend() {
   const uncosted = spend.uncosted > 0;
 
   // The sum written out, so the figure beside it can be checked rather than
-  // taken. Two terms because Meta charges two prices — see `waFormula`.
+  // taken. One term now that the plan notice is a utility template, two over
+  // any month that still has marketing in it — see `waFormula` and 0070.
   const sum = waFormula(
     spend.service, spend.marketing, spend.service_micros, spend.marketing_micros,
   );
@@ -146,12 +147,18 @@ export async function WhatsAppSpend() {
         <Metric
           label="Messages"
           value={spend.messages}
-          // Split by what they cost and not by what they were. Two buckets
-          // because there are two prices: everything cheap on one side,
-          // the marketing template on the other. What kind of message each
-          // was is the Rank below.
-          note={`${comma(spend.service)} service · ${comma(spend.marketing)} marketing`}
-          why="Все сообщения, которые Meta у нас приняла с первого числа: объявления, ответы бота, вечерняя сводка, чек-ин перед закрытием окна и уведомления о тарифе. Meta берёт деньги за каждое, поэтому считаются все, а не только алерты. Разбивка — по тарифу, а не по виду: service — это и свободный текст внутри 24-часового окна, и utility-шаблон объявления, оба по $0.022; marketing — уведомление о законченном платном тарифе, оно несёт кнопку оплаты и стоит $0.0635. Календарный месяц по Лондону — в таком виде приходит счёт."
+          // Split by what they cost and not by what they were. One bucket
+          // while one rate is being charged, which it is since the plan
+          // notice became a utility template; the second appears only for a
+          // month that was billed marketing, because those rows have to stay
+          // visible to be matched against that month's invoice. What kind of
+          // message each was is the Rank below.
+          note={
+            spend.marketing > 0
+              ? `${comma(spend.service)} service · ${comma(spend.marketing)} marketing`
+              : `all at ${rate(spend.service_micros)}`
+          }
+          why="Все сообщения, которые Meta у нас приняла с первого числа: объявления, ответы бота, вечерняя сводка, чек-ин перед закрытием окна и уведомления о тарифе. Meta берёт деньги за каждое, поэтому считаются все, а не только алерты. Сейчас тариф один на всё — $0.022: и свободный текст внутри 24-часового окна, и utility-шаблон объявления, и уведомление о законченном тарифе, которое Meta на ревью перевела из marketing в utility. Дорогой marketing-тариф $0.0635 остаётся только на строках, отправленных до этого перевода — их видно отдельной цифрой, пока они попадают в выбранный месяц, иначе этой разбивки здесь нет. Календарный месяц по Лондону — в таком виде приходит счёт."
         />
         <Metric
           label="What it cost"
@@ -167,7 +174,10 @@ export async function WhatsAppSpend() {
           why={
             `Сумма за месяц: ${sum}. ` +
             "В долларах, потому что Meta выставляет счёт в них — пересчёт в фунты означал бы выдуманный курс в роли факта. " +
-            `Два тарифа: service ${rate(spend.service_micros)} — свободный текст внутри 24-часового окна и utility-шаблон объявления, у Meta это две категории по одной цене; marketing ${rate(spend.marketing_micros)} — уведомление о законченном платном тарифе, оно несёт кнопку оплаты. ` +
+            `Тариф ${rate(spend.service_micros)} за сообщение — им оплачивается всё: свободный текст внутри 24-часового окна, utility-шаблон объявления и уведомление о законченном тарифе. У Meta это три категории по одной цене. ` +
+            (spend.marketing > 0
+              ? `В этом месяце есть ${comma(spend.marketing)} сообщ. по marketing-тарифу ${rate(spend.marketing_micros)} — это уведомления о тарифе, отправленные до того, как Meta перевела шаблон в utility. `
+              : "") +
             "Само число над подписью — не эта формула, а сумма цен, проштампованных на каждой строке журнала в момент отправки: так смена тарифа не переписывает уже закрытый месяц. Поэтому они могут расходиться, и расхождение — это сообщения, отправленные до того, как тариф задали. Сколько их, говорит подпись."
           }
         />

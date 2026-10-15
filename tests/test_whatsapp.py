@@ -612,6 +612,42 @@ def test_the_notice_template_is_never_sent_without_its_button_parameter() -> Non
     assert "checkout token" in (result.error or "")
     assert calls == []
 
+def test_the_quick_reply_notice_sends_a_payload_and_needs_no_token() -> None:
+
+    # The shape worth having, and the one thing it changes is the thing that
+    # matters: a quick reply is an inbound message, so the tap reopens the
+    # 24-hour window *before* the payment. With the url button it stays shut
+    # through the payment, Meta refuses the receipt with 131047, and every
+    # alert behind it waits in the queue. See 0070.
+    #
+    # No token travels with it: the site mints the link when the tap arrives,
+    # which is also how it stops being most of a day old by the time somebody
+    # presses it.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(
+        sender, notice_template="plan_notice_paid", notice_button="reply"
+    ).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(kind="expired", text="ended", billable_template=True),
+    )
+
+    assert result.ok
+    button = calls[0]["payload"]["template"]["components"][0]
+    assert button["sub_type"] == "quick_reply"
+    # What the site's webhook matches on — `pressed` there, NOTICE_TAP here.
+    # Both halves are ours, and a payload nobody handles is a button that
+    # visibly does nothing.
+    assert button["parameters"] == [{"type": "payload", "payload": "pay"}]
+
+def test_a_mistyped_button_shape_falls_back_to_the_live_one() -> None:
+
+    # A template's buttons are declared, so the wrong shape is 132000 on every
+    # notice rather than a cosmetic fault. `url` is what is live, which makes
+    # it the safe landing place for a typo.
+    assert notifier(notice_button="Reply").notice_button == "reply"
+    assert notifier(notice_button="cta_url").notice_button == "url"
+    assert notifier().notice_button == "url"
+
 def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
 
     # Meta prices the template that reaches a shut window differently from
@@ -629,10 +665,11 @@ def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
         ended,
     )
     assert calls[0]["payload"]["type"] == "template"
-    # The notice template carries a payment button, so Meta prices it as
-    # marketing — the dearest of the three. Told to the notifier rather than
-    # inferred, because the category is Meta's to change. See 0066.
-    assert outside.billed_as == "marketing"
+    # A utility template since Meta's second look at it, which is the same
+    # $0.022 as free-form text. Told to the notifier rather than inferred,
+    # because the category is Meta's to change and it has changed twice. See
+    # 0066 and 0070.
+    assert outside.billed_as == "utility"
 
     calls, sender = sent_through(messages=[{"id": "y"}])
     inside = notifier(sender, notice_template="plan_notice_paid").send(
@@ -644,11 +681,14 @@ def test_the_rate_that_was_charged_travels_back_with_the_result() -> None:
 
 def test_the_listing_template_is_still_a_utility_one() -> None:
 
-    # Two templates, two categories, and the notice's is a setting — so a
-    # listing sent as a template must not pick up the notice's rate just
-    # because that setting says marketing.
+    # Two templates and one rate between them today, but the notice's is a
+    # setting — so a listing sent as a template must not pick it up. Pinned
+    # with the notice set to marketing, because that is the arrangement where
+    # the mistake would cost money and the only one where it is visible.
     calls, sender = sent_through(messages=[{"id": "x"}])
-    result = notifier(sender, notice_template="plan_notice_paid").send(
+    result = notifier(
+        sender, notice_template="plan_notice_paid", notice_category="marketing"
+    ).send(
         Recipient(channel="whatsapp", address="447700900123", last_inbound=None),
         Alert(kind="listing", listing=view()),
     )
@@ -660,15 +700,16 @@ def test_a_mistyped_category_falls_back_to_the_reviewed_one() -> None:
     # A typo in a settings file must not reach the ledger: a row Meta's
     # invoice has no such line for is worse than a row at the wrong one of two
     # known rates, because the first cannot be reconciled at all.
-    assert notifier(notice_category="Utility").notice_category == "utility"
-    assert notifier(notice_category="promotional").notice_category == "marketing"
+    assert notifier(notice_category="Marketing").notice_category == "marketing"
+    assert notifier(notice_category="promotional").notice_category == "utility"
 
 def test_the_reviewed_category_needs_no_setting() -> None:
 
-    # Meta reviewed the notice template as marketing, so that is what an
-    # unconfigured notifier bills it at. The variable exists to follow Meta if
-    # it moves the template again, not to be remembered on every deploy.
-    assert notifier().notice_category == "marketing"
+    # Meta's latest review put the notice template at utility, so that is what
+    # an unconfigured notifier bills it at. The variable exists to follow Meta
+    # if it moves the template again — which it has, in both directions — not
+    # to be remembered on every deploy. See 0070.
+    assert notifier().notice_category == "utility"
 
 def test_a_listing_is_always_the_cheaper_rate() -> None:
 

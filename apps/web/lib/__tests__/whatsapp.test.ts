@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { sendWhatsApp } from "../whatsapp";
+import { sendWhatsApp, sendWhatsAppTemplate } from "../whatsapp";
+import { meterWhatsApp } from "../wa-meter";
 
 // The meter writes a row per delivered message and needs a database for it.
 // Stubbed, not pointed at one: these tests are about the shape of what goes
@@ -132,6 +133,70 @@ describe("without credentials", () => {
     expect(await sendWhatsApp("447700900123", "x")).toBe(false);
     expect(calls).toHaveLength(0);
     expect(complained.mock.calls[0]?.[0]).toContain("WA_ACCESS_TOKEN");
+    complained.mockRestore();
+  });
+});
+
+describe("the receipt template", () => {
+  it("is the one shape that reaches a shut window", async () => {
+    // One component and no body among them. The template declares no body
+    // variables — a receipt's one interesting fact, the date the plan runs
+    // to, is null on a plan with no end date, and an empty parameter is
+    // refused — so a component the template does not have would be 132000 on
+    // every send.
+    const calls = fetching(true);
+    expect(
+      await sendWhatsAppTemplate("+44 7700 900123", "payment_received", "paid"),
+    ).toBe(true);
+    expect(calls[0]?.payload).toEqual({
+      messaging_product: "whatsapp",
+      to: "447700900123",
+      type: "template",
+      template: {
+        name: "payment_received",
+        // Plain `en`. `en_GB` is 132001 on every send, and the template
+        // editor offers it by default.
+        language: { code: "en" },
+        components: [
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "0",
+            // What `pressed` in the webhook matches on. A payload nobody
+            // handles is a button that does nothing, on the message telling
+            // somebody their money was taken.
+            parameters: [{ type: "payload", payload: "paid" }],
+          },
+        ],
+      },
+    });
+  });
+
+  it("is metered at the template rate and not the free-form one", async () => {
+    // The site could only ever send `service` messages before this, which is
+    // why the meter defaulted to it. A template is billed as a template
+    // whoever posted it, and a ledger that says otherwise cannot be matched
+    // against the invoice.
+    const calls = fetching(true);
+    await sendWhatsAppTemplate("447700900123", "payment_received", "paid");
+    expect(calls).toHaveLength(1);
+    expect(meterWhatsApp).toHaveBeenCalledWith(
+      "447700900123", "receipt", "wamid.test", "utility",
+    );
+  });
+
+  it("is not recorded when Meta refuses it", async () => {
+    // A refused post is not a message, is not billed, and must not spend the
+    // subscriber's allowance — which is the more expensive mistake, because
+    // it withholds listings they paid for.
+    vi.mocked(meterWhatsApp).mockClear();
+    const complained = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    fetching(false);
+
+    expect(
+      await sendWhatsAppTemplate("447700900123", "payment_received", "paid"),
+    ).toBe(false);
+    expect(meterWhatsApp).not.toHaveBeenCalled();
     complained.mockRestore();
   });
 });

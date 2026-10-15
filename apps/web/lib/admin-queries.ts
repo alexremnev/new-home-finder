@@ -494,9 +494,11 @@ export type Person = {
   // price — not the same as free, and the page says which.
   wa_cost_micros: number;
   // The same messages split by what they cost, so the tile can show the sum
-  // rather than asserting it. Two buckets because Meta charges two prices:
-  // marketing is the plan notice with a payment button on it, and everything
-  // else — free-form text and the listing template alike — is $0.022.
+  // rather than asserting it. Two buckets because Meta has charged two prices:
+  // everything is $0.022 now that the plan notice is a utility template — see
+  // 0070 — and `marketing` holds what was billed at $0.0635 before that. Kept
+  // as its own count rather than folded in, because a period that spans the
+  // re-classification has to be matchable against the invoice that covers it.
   // Counted over this period, like `messages_used`, so the three numbers on
   // the tile are about the same span of time.
   wa_marketing: number;
@@ -1182,7 +1184,10 @@ export async function waSpend(): Promise<WaSpend> {
       // Split by price and not by category: `service` and `utility` are two
       // of Meta's names for the same $0.022, so counting them apart here
       // would offer a distinction that costs nothing and answers nothing.
-      // Marketing is the one that is priced differently — see 0067.
+      // Marketing is the one that is priced differently — see 0067 — and
+      // since 0070 nothing new is sent at it, so this count is nought on any
+      // month that starts after the plan notice was re-classified. Kept, not
+      // removed: a bill for an earlier month is still read on this page.
       `SELECT w.kind AS label, count(*)::int AS value,
               coalesce(sum(w.cost_micros), 0)::bigint AS cost,
               count(*) FILTER (WHERE w.billed_as = 'marketing')::int AS marketing,

@@ -66,20 +66,31 @@ export function rate(micros: number): string {
 }
 
 /**
- * The WhatsApp bill as the sum it is: "1,234 × $0.022 + 7 × $0.0635 = $27.59".
+ * The WhatsApp bill as the sum it is: "1,234 × $0.022 = $27.15", and
+ * "1,234 × $0.022 + 7 × $0.0635 = $27.59" for a span that still has marketing
+ * in it.
  *
- * Written out rather than asserted. Meta charges two prices on this number —
- * $0.022 for free-form text inside the 24-hour window and for the listing
- * template, $0.0635 for the marketing template that carries a payment button
- * — and a single dollar figure gives the reader no way to tell a quiet month
- * of alerts from a month that sent a lot of plan notices. See 0067.
+ * Written out rather than asserted, so the dollar figure beside it can be
+ * checked rather than taken.
  *
- * Takes counts and rates rather than the stamped total, so what it prints can
- * be checked against the total beside it. Where the two disagree, the total
- * is right and the difference is messages sent before a rate was set: the
- * price is stamped on each row at send time precisely so that setting one now
- * does not rewrite a month already billed. The caller says so — see
- * `wa_uncosted`.
+ * ── why the marketing term comes and goes ─────────────────────────────────
+ *
+ * Because there is now only one rate being charged. Meta moved the plan notice
+ * to `utility` on review — see 0070 — so everything we send is $0.022, and a
+ * "+ 0 × $0.0635" on the end of every sum is a term that invites the reader to
+ * look for a cost nobody is paying. Dropped when the count is nought, kept
+ * whenever it is not: rows already written carry the rate they were billed at,
+ * and a month that really did send marketing messages has to show them or it
+ * cannot be matched against that month's invoice.
+ *
+ * So this prints one term today and two over any span reaching back before the
+ * re-classification, which is the honest shape for both.
+ *
+ * Takes counts and rates rather than the stamped total, for the same
+ * checkability. Where the two disagree, the total is right and the difference
+ * is messages sent before a rate was set: the price is stamped on each row at
+ * send time precisely so that setting one now does not rewrite a month already
+ * billed. The caller says so — see `wa_uncosted`.
  */
 export function waFormula(
   service: number,
@@ -89,9 +100,10 @@ export function waFormula(
 ): string {
   const comma = (n: number) => n.toLocaleString("en-GB");
   const total = service * serviceMicros + marketing * marketingMicros;
-  return (
-    `${comma(service)} × ${rate(serviceMicros)} service` +
-    ` + ${comma(marketing)} × ${rate(marketingMicros)} marketing` +
-    ` = ${dollars(total)}`
-  );
+  const terms =
+    marketing > 0
+      ? `${comma(service)} × ${rate(serviceMicros)} service` +
+        ` + ${comma(marketing)} × ${rate(marketingMicros)} marketing`
+      : `${comma(service)} × ${rate(serviceMicros)}`;
+  return `${terms} = ${dollars(total)}`;
 }

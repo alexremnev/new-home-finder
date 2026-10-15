@@ -118,14 +118,19 @@ export default async function UserPage({
                 // shows above it is in pounds because that is what arrived.
                 // Mixing them is honest; converting one would not be.
                 who.wa_cost_micros > 0
-                  ? `${comma(who.wa_service)} service · ${comma(who.wa_marketing)} marketing · ${dollars(who.wa_cost_micros)}`
+                  ? who.wa_marketing > 0
+                    ? `${comma(who.wa_service)} service · ${comma(who.wa_marketing)} marketing · ${dollars(who.wa_cost_micros)}`
+                    : dollars(who.wa_cost_micros)
                   : `since ${who.plan_from ? dayOf(who.plan_from) : "the start"}`
               }
               why={
                 "Сколько сообщений ушло этому человеку в WhatsApp за текущий оплаченный период и сколько включено в тариф. Считаются все: объявления, ответы бота, вечерняя сводка, чек-ин и уведомления о тарифе — Meta берёт деньги за каждое. " +
                 `Период считается от ${who.plan_from ? dayOf(who.plan_from) : "начала"}: при смене или продлении тарифа эта дата сдвигается, поэтому счётчик обнуляется. ` +
                 `Стоимость за период: ${sum}. ` +
-                `Два тарифа: service ${rate(who.wa_service_micros)} — свободный текст внутри 24-часового окна и utility-шаблон объявления; marketing ${rate(who.wa_marketing_micros)} — уведомление о законченном платном тарифе с кнопкой оплаты. ` +
+                `Тариф ${rate(who.wa_service_micros)} за сообщение — им оплачивается всё: свободный текст внутри 24-часового окна, utility-шаблон объявления и уведомление о законченном тарифе, которое Meta на ревью перевела из marketing в utility. ` +
+                (who.wa_marketing > 0
+                  ? `${comma(who.wa_marketing)} сообщ. в этом периоде оплачено по старому marketing-тарифу ${rate(who.wa_marketing_micros)} — они отправлены до перевода. `
+                  : "") +
                 (who.wa_uncosted > 0
                   ? `На ${who.wa_uncosted} сообщениях цены не оказалось — они отправлены до того, как тариф задали, и в сумму не входят, поэтому формула и число могут расходиться. `
                   : "") +

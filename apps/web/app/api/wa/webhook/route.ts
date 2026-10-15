@@ -19,6 +19,7 @@ import {
   criteriaCard,
   LINK_EXPIRED,
   criteriaSet,
+  paymentReceived,
   planLine,
   upgradeInvitation,
   upgradeUrl,
@@ -255,16 +256,8 @@ async function commanded(
       ].join("\n");
     }
 
-    case "upgrade": {
-      const account = await accountForChat(number, "whatsapp");
-      if (!account) return NO_FILTER_YET;
-      const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
-      return linked(
-        await upgradeInvitation(account, token),
-        plainLabel(CHOOSE_PLAN_BUTTON),
-        upgradeUrl(token),
-      );
-    }
+    case "upgrade":
+      return payOffer(number);
 
     case "start":
     case "update": {
@@ -284,8 +277,60 @@ async function commanded(
   }
 }
 
+/**
+ * What they are on now, what a plan costs, and the checkout link as a button.
+ *
+ * One function because two things ask for it and they must not drift: /pay
+ * typed into the chat, and a tap on the notice template's quick reply. The tap
+ * is the one that matters — see `NOTICE_TAP` in the worker's notifier — and it
+ * arrives from somebody whose window was shut a moment ago, which is precisely
+ * why the answer has to be built here rather than baked into the template: the
+ * token is minted now and lives an hour, where a template button's token is
+ * minted on the drain that sent it and may be most of a day old by the tap.
+ */
+async function payOffer(number: string): Promise<Reply> {
+  const account = await accountForChat(number, "whatsapp");
+  if (!account) return NO_FILTER_YET;
+  const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
+  return linked(
+    await upgradeInvitation(account, token),
+    plainLabel(CHOOSE_PLAN_BUTTON),
+    upgradeUrl(token),
+  );
+}
+
 async function pressed(number: string, id: string): Promise<Reply | null> {
   console.log("wa tap", { from: number.slice(-4), id });
+
+  // The quick reply on the plan notice — the one button somebody whose plan
+  // has ended is given, and the reason the notice carries a button that sends
+  // something back rather than one that opens a browser.
+  //
+  // The tap has already reopened the 24-hour window, at the top of this route,
+  // and that is worth more than the message it is about to be answered with: a
+  // url button sends us nothing, so the window stayed shut through the payment
+  // and Meta refused the receipt and held every alert behind it. By the time
+  // the card clears here, free-form text works again.
+  if (id === "pay") return payOffer(number);
+
+  // The quick reply under the payment receipt — the template that reached them
+  // when the window was shut, which is where a payment lands whenever the plan
+  // it renews had already ended.
+  //
+  // The tap is the whole mechanism. A template cannot reopen the window and
+  // sending one does not; only something inbound does, and this is it. So by
+  // the time this runs the alerts held behind that window are already free to
+  // go out on the next drain, and the answer only has to say so and show what
+  // was bought.
+  if (id === "paid") {
+    const account = await accountForChat(number, "whatsapp").catch(() => null);
+    if (!account) return NO_FILTER_YET;
+    return [
+      paymentReceived(account.plan_name, account.plan_until),
+      "",
+      criteriaCard((account.criteria ?? {}) as Criteria),
+    ].join("\n");
+  }
 
   // The answer to the check-in sent five minutes before the window shut. The
   // tap itself already reopened it — every inbound does, at the top of this

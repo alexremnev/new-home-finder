@@ -5,7 +5,7 @@ import { transaction } from "@/lib/db";
 import { stripeClient, stripeMode, stripeWebhookSecret } from "@/lib/stripe";
 
 import { paymentReceived, refundIssued } from "@/lib/messages";
-import { tell } from "@/lib/reach";
+import { PAYMENT_RECEIPT, tell } from "@/lib/reach";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -136,13 +136,21 @@ export async function POST(request: Request): Promise<NextResponse> {
   // not roll back a payment that has already cleared.
   if (told) {
     const said: { plan: string; until: Date | null } = told;
-    await tell(userId, paymentReceived(said.plan, said.until)).catch((error) => {
-      console.error("payment granted but not announced", {
-        user: userId,
-        error: String(error),
-      });
-      return false;
-    });
+    // With the receipt template behind it, because this is the one message
+    // whose arrival cannot wait for the person to write in: on WhatsApp the
+    // window is shut by definition for anybody whose plan had ended, and until
+    // something inbound arrives the alerts they have just bought stay queued
+    // behind it. The template reaches a shut window; the quick reply under it
+    // is what reopens it. See `tell` and `PAYMENT_RECEIPT`.
+    await tell(userId, paymentReceived(said.plan, said.until), PAYMENT_RECEIPT).catch(
+      (error) => {
+        console.error("payment granted but not announced", {
+          user: userId,
+          error: String(error),
+        });
+        return false;
+      },
+    );
   }
 
   return NextResponse.json({ ok: true });

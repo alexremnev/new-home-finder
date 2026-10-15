@@ -54,8 +54,21 @@ ABSENT = "—"
 # `WA_NOTICE_CATEGORY` may take. Anything else is a typo in a settings file, and
 # a typo that reached the ledger would be a row the invoice cannot be matched
 # against — so it falls back to the reviewed category rather than being written
-# down as given. See 0066.
+# down as given. See 0066 and 0070.
 RATES = ("utility", "marketing")
+
+# The two button shapes the notice template can have been approved with, and
+# the only values `WA_NOTICE_BUTTON` may take. A typo here would be sent as the
+# other shape and refused by Meta with 132000 on every notice, so it falls back
+# to `url` — the shape that was live first, and the one that is wrong only in
+# that it does not reopen the window.
+NOTICE_BUTTONS = ("url", "reply")
+
+# What a tap on the notice's quick reply sends back, and what the site's webhook
+# matches on to answer with the payment link. A constant rather than a setting:
+# both halves are ours, and a payload the webhook does not recognise is a button
+# that visibly does nothing. The site has the same string — see `pressed`.
+NOTICE_TAP = "pay"
 
 def _plain(line: Line) -> str:
 
@@ -336,7 +349,8 @@ class WhatsAppNotifier:
         sender: Sender | None = None,
         version: str = VERSION,
         notice_template: str | None = None,
-        notice_category: str = "marketing",
+        notice_category: str = "utility",
+        notice_button: str = "url",
     ) -> None:
         self.phone_id = phone_id
         self.token = token
@@ -347,15 +361,25 @@ class WhatsAppNotifier:
         self.sender = sender or _post
         self.version = version
         self.notice_template = notice_template
-        # Which rate the notice template is billed at. Meta reviewed it as
-        # marketing — a body that sells, with a button that takes payment —
-        # which is why that is the default rather than the `utility` it was
-        # submitted as. Still a setting and not a constant: the category is
-        # Meta's to change, and it re-classifies after approval. See 0066 for
-        # where to read the current answer, and `_post` for what this is used
-        # for — nothing is sent differently, only priced differently.
+        # Which rate the notice template is billed at. Meta now has it as
+        # `utility`, which is the default here and nearly three times cheaper
+        # than the `marketing` 0066 found on it — see 0070 for what changed and
+        # how to check. Still a setting and not a constant, for 0066's reason
+        # and not against it: the category is Meta's to decide and Meta's to
+        # move, and it re-classifies after approval in either direction.
+        # `_post` is what this is used for — nothing is sent differently, only
+        # priced differently.
         asked = (notice_category or "").strip().lower()
-        self.notice_category = asked if asked in RATES else "marketing"
+        self.notice_category = asked if asked in RATES else "utility"
+        # Which button the notice template was approved with, because the two
+        # shapes are sent differently and only one of them can be right for the
+        # template that is live. `url` is the original: the button carries the
+        # checkout link, with the upgrade token as its one variable. `reply` is
+        # a quick reply, which sends `NOTICE_TAP` back to the webhook instead —
+        # and that inbound is the whole point, because it reopens the 24-hour
+        # window before the payment rather than after it. See `body`.
+        wanted = (notice_button or "").strip().lower()
+        self.notice_button = wanted if wanted in NOTICE_BUTTONS else "url"
 
     @classmethod
     def from_env(cls) -> WhatsAppNotifier:
@@ -369,7 +393,8 @@ class WhatsAppNotifier:
             (os.environ.get("WA_TEMPLATE_IMAGE") or "").strip().lower()
             in ("1", "true", "yes"),
             notice_template=os.environ.get("WA_NOTICE_TEMPLATE") or None,
-            notice_category=os.environ.get("WA_NOTICE_CATEGORY") or "marketing",
+            notice_category=os.environ.get("WA_NOTICE_CATEGORY") or "utility",
+            notice_button=os.environ.get("WA_NOTICE_BUTTON") or "url",
         )
 
     def supports(self, kind: AlertKind) -> bool:
@@ -473,12 +498,58 @@ class WhatsAppNotifier:
             # is the sentence saying the alerts stopped and the one tap that
             # turns them back on.
             #
-            # `billable_template` and not merely "there is a template": this is
-            # a marketing message at three times the price of one inside the
-            # window, and the outbox sets the flag only for a plan somebody
-            # paid for. See the contract.
+            # `billable_template` and not merely "there is a template": the
+            # outbox sets the flag only for a plan somebody paid for, and a
+            # message to somebody who never did is one we would rather not
+            # buy. Cheaper than it was — the template is a utility one now,
+            # see 0070 — but the line is about who is owed a message and not
+            # about what it costs. See the contract.
             #
-            # The button is a fixed url and one variable, the same shape the
+            # ── which button, and why it is a setting ────────────────────
+            #
+            # `reply` is the shape worth having and `url` is the shape that
+            # was approved first, so the live template decides and the code
+            # follows it. Sending the wrong one is 132000 on every notice —
+            # a template's buttons are declared, and a component that does
+            # not match them is refused — which is why this cannot be
+            # inferred or tried both ways.
+            #
+            # The quick reply is better for a reason that has nothing to do
+            # with the notice itself: a tap on a url button sends us nothing,
+            # so the window is still shut when the payment clears half a
+            # minute later, and the receipt and every alert behind it stay in
+            # the queue. A quick reply *is* an inbound message. It reopens the
+            # window before the payment instead of after, and the webhook
+            # answers it with the same checkout link the url button carried —
+            # one tap further along, and the alerts can actually be delivered.
+            if self.notice_button == "reply":
+                # No token, and none needed: the link is in the reply the site
+                # sends back, which can be built when it is asked for rather
+                # than guessed at an hour early. The payload is what gets the
+                # person there — see `pressed` in the site's webhook — and a
+                # declared quick reply is sent with one whether or not we have
+                # anything to put in it.
+                return {
+                    "messaging_product": "whatsapp",
+                    "to": number,
+                    "type": "template",
+                    "template": {
+                        "name": self.notice_template,
+                        "language": {"code": self.language},
+                        "components": [
+                            {
+                                "type": "button",
+                                "sub_type": "quick_reply",
+                                "index": "0",
+                                "parameters": [
+                                    {"type": "payload", "payload": NOTICE_TAP}
+                                ],
+                            }
+                        ],
+                    },
+                }
+
+            # The url shape: a fixed link and one variable, the same shape the
             # listing template's button has — and a declared variable is not
             # optional: a template whose button takes `{{1}}` and is sent
             # without it is refused with 132000, so a missing token is a send
@@ -640,14 +711,16 @@ class WhatsAppNotifier:
         """Which of Meta's rates the payload that went out is charged at.
 
         Free-form is a service message. A template is priced by its category,
-        and there are two of them with two categories — the listing template
-        is a utility one, the plan notice carries a payment button and is
-        therefore a marketing one. So the name of the template decides, which
-        is the only thing in the payload that distinguishes them.
+        and the name of the template is the only thing in the payload that can
+        tell the two templates apart.
 
-        The notice's category is a setting rather than a constant for the
-        reason 0066 gives: Meta classifies templates itself and re-classifies
-        them, so what was submitted is not what will be billed.
+        Both are utility today — the listing template always was, and the plan
+        notice was moved there on review, see 0070 — so this looks like a
+        question with one answer. It is not one: the notice's category is a
+        setting rather than a constant for the reason 0066 gives, which 0070
+        does not retire. Meta classifies templates itself and re-classifies
+        them after the fact, so what it says today is not what the invoice
+        will say next quarter.
         """
 
         if payload.get("type") != "template":

@@ -14,6 +14,17 @@ import { query } from "./db";
 export type WaKind = "reply" | "receipt";
 
 /**
+ * Which of Meta's rates a message was charged at — its vocabulary, not ours,
+ * because the ledger exists to be matched against the invoice line for line.
+ *
+ * `service` is free-form inside the 24-hour window. `utility` is a template,
+ * which is the only thing that reaches a shut one. `marketing` is the dearest
+ * and nothing is sent at it any more — see 0070 — but a value this column may
+ * hold is a value this type has to admit.
+ */
+export type WaRate = "service" | "utility" | "marketing";
+
+/**
  * Record one WhatsApp message we sent and will be charged for.
  *
  * Meta bills every message now — there is no free window and no free service
@@ -44,6 +55,7 @@ export async function meterWhatsApp(
   address: string,
   kind: WaKind,
   providerMsgId?: string | null,
+  billedAs: WaRate = "service",
 ): Promise<void> {
   // Digits only, the same normalisation the sender applies to the number it
   // posts and the webhook applies to the number it looks up. `user_channels`
@@ -53,22 +65,33 @@ export async function meterWhatsApp(
 
   try {
     await query(
-      // `billed_as` takes its default of `service`, and that is a fact about
-      // this file rather than an assumption: `sendWhatsApp` has no template
-      // path at all. Everything here is free-form inside the 24-hour window,
-      // which the webhook has just reopened by receiving something. The
-      // worker's notifier is the one that can send the other kind, and it
-      // says so for itself.
-      `INSERT INTO wa_messages (user_id, kind, provider_msg_id, cost_micros)
+      // The price is chosen here, off `billed_as`, exactly as the worker's
+      // `record_wa_message` does it — and read inside the statement so that it
+      // is the price now, with nothing cached.
+      //
+      // `service` is still the default and still almost everything: the
+      // webhook's replies are free-form inside a window it has just reopened
+      // by receiving something. What changed is that this is no longer the
+      // only thing the site can send. The payment receipt goes out as a
+      // template when the window is shut — see `tell` — and a template is
+      // billed at the template rate whoever posted it.
+      `INSERT INTO wa_messages
+              (user_id, kind, provider_msg_id, billed_as, cost_micros)
        SELECT (SELECT uc.user_id FROM user_channels uc
                 WHERE uc.channel = 'whatsapp' AND uc.address = $1),
-              $2, $3,
-              coalesce((SELECT ps.wa_service_micros FROM plan_settings ps), 0)`,
-      [number, kind, providerMsgId ?? null],
+              $2, $3, $4,
+              (SELECT CASE
+                          WHEN $4 = 'utility'   THEN ps.wa_template_micros
+                          WHEN $4 = 'marketing' THEN ps.wa_marketing_micros
+                          ELSE ps.wa_service_micros
+                      END
+                 FROM plan_settings ps)`,
+      [number, kind, providerMsgId ?? null, billedAs],
     );
   } catch (error) {
     console.error("whatsapp message not metered", {
       kind,
+      billed_as: billedAs,
       to: number.slice(-4),
       error: error instanceof Error ? error.message : String(error),
     });

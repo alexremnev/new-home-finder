@@ -76,7 +76,19 @@ export async function GET(request: Request): Promise<NextResponse | Response> {
 
     mode: "payment",
     line_items: [{ price: plan.stripe_price_id, quantity: 1 }],
-    success_url: `${siteUrl()}/upgrade/thanks`,
+    // `c=` is which messenger to offer them a way back into, and it has to be
+    // put here because there is nothing on the other side to read it from.
+    // The token cannot do the job: this webhook's own handler deletes every
+    // upgrade token for the account, so by the time the browser lands on
+    // thanks the only thing a `t=` would say is "expired". The account is
+    // known here, and its channel with it.
+    //
+    // A hint and not a credential — it decides which of two buttons is drawn
+    // and nothing else, so a hand-edited value costs somebody a link into the
+    // wrong chat app and no more.
+    success_url: account.channel
+      ? `${siteUrl()}/upgrade/thanks?c=${encodeURIComponent(account.channel)}`
+      : `${siteUrl()}/upgrade/thanks`,
     cancel_url: `${siteUrl()}/upgrade?t=${encodeURIComponent(token)}`,
 
     client_reference_id: account.payment_ref ?? String(account.user_id),

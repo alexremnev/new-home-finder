@@ -129,23 +129,94 @@ before the end has already gone out while the window was open — see
 `claim_plan_notices`, which treats the window shutting as a deadline of its
 own, and `worth_a_template` in the outbox, which is where the line is drawn.
 
-**Category is not yours to decide.** This one was submitted as `UTILITY` and
-came back `MARKETING`: Meta classifies templates itself, and a body that sells
-with a button that takes payment is a marketing template whatever the
-submission said. It re-classifies after approval too. `marketing` is therefore
-what the notifier bills it at by default; `WA_NOTICE_CATEGORY` is there to
-follow Meta if it moves the template again, and it prices the ledger row and
-nothing else. Read the current answer off the template:
+**Category is not yours to decide, in either direction.** This one was
+submitted as `UTILITY`, came back `MARKETING`, and has since been reviewed as
+`UTILITY` again. Meta classifies templates itself and re-classifies them after
+approval, so neither the submission nor last quarter's answer settles it.
+`utility` is what the notifier bills it at by default now — $0.022 rather than
+$0.0635, see 0070 — and `WA_NOTICE_CATEGORY` is there to follow Meta if it
+moves again. It prices the ledger row and nothing else. Read the current answer
+off the template:
 
 ```sh
 curl -s "https://graph.facebook.com/v21.0/$WABA_ID/message_templates?fields=name,status,category" \
   -H "Authorization: Bearer $WA_ACCESS_TOKEN"
 ```
 
-Marketing also costs something other than money: Meta pauses marketing
-templates first when a number's quality rating drops, and they count against
-the business-initiated ceiling that business verification raises. A utility
-template is subject to neither.
+Marketing costs something other than money, which is why the move is worth
+more than the three cents: Meta pauses marketing templates first when a
+number's quality rating drops, and they count against the business-initiated
+ceiling that business verification raises. A utility template is subject to
+neither.
+
+**The button shape matters more than the category.** With a url button the
+notice is a dead end for delivery: tapping one sends us nothing, so the
+24-hour window — shut by definition, because a plan ends after a day of silence
+— is still shut when the payment clears. Meta refuses the receipt with 131047
+and every alert the person has just paid for waits in the queue until they
+write in of their own accord.
+
+A **quick reply** fixes that, because a tap on one is an inbound message. The
+window reopens before the payment rather than after it, and the site answers
+the tap with the same checkout link the url button carried:
+
+```sh
+curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
+  -H "Authorization: Bearer $WA_ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"plan_notice_paid","language":"en","category":"UTILITY",
+   "components":[
+     {"type":"BODY",
+      "text":"Your alerts have stopped — your plan has run out.\n\nYour filter is kept exactly as it is. Tap below and everything turns back on, with nothing to set up again."},
+     {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Get full access"}]}]}'
+```
+
+No url and therefore no button variable, which also means no token: the link
+is minted when the tap arrives and lives an hour, where a template button's
+token was minted on the drain that sent the notice and could be most of a day
+old by the time anybody pressed it.
+
+**The template and `WA_NOTICE_BUTTON` move together.** A template's buttons are
+declared, so sending a `quick_reply` component to a template with a url button
+— or the reverse — is 132000 on every notice. Hence the setting, defaulting to
+`url`, which is the shape that was live first:
+
+| `WA_NOTICE_BUTTON` | The template must have | What the tap does |
+| --- | --- | --- |
+| `url` (default) | `URL` with `?t={{1}}` | opens the browser, window stays shut |
+| `reply` | `QUICK_REPLY` | sends `pay` to the webhook, window reopens |
+
+Editing a live template puts it back through review, and review is where the
+category gets decided. Submit the quick-reply version, wait for `APPROVED`,
+check the category came back `UTILITY`, and only then set `WA_NOTICE_BUTTON`
+and restart. Until that moment the url shape is what is live and the default
+is correct.
+
+### The payment receipt
+
+A second template, and the one that closes the case the quick reply cannot.
+The notice only reaches people whose plan had ended; a payment can clear into a
+shut window for other reasons too — somebody who tapped yesterday and paid
+today, somebody who came back from browser history, a trial that was never sent
+a notice at all. So the receipt itself needs a route to a shut window:
+
+```sh
+curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
+  -H "Authorization: Bearer $WA_ACCESS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"name":"payment_received","language":"en","category":"UTILITY",
+   "components":[
+     {"type":"BODY",
+      "text":"Payment received — thank you. Your plan is extended and every matching listing is on its way again.\n\nTap below and I will show you what you are on and what you are looking for."},
+     {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Show my plan"}]}]}'
+```
+
+Then `WA_RECEIPT_TEMPLATE=payment_received` **on Vercel**, not on the server:
+the Stripe webhook is the site's. Left unset, the receipt is simply not sent
+into a shut window and the log names this variable as the reason.
+
+A post-purchase confirmation with no selling in it is the textbook utility
+case, so this one should come back `UTILITY` without argument. Check anyway —
+the category is Meta's either way, and `wa-meter` prices the row at the
+template rate on the assumption that it did.
 
 The listing template's shape is fixed by the code, so do not rebuild it by hand
 unless you have to. In order: `{{1}}` area or address, `{{2}}` price,
@@ -223,14 +294,23 @@ WA_PHONE_NUMBER_ID=<the same id>
 WA_NOTICE_TEMPLATE=plan_notice_paid
 ```
 
-`WA_NOTICE_CATEGORY` is not needed: it defaults to `marketing`, which is what
-the review returned. Set it only if Meta moves the template to another
-category.
+`WA_NOTICE_CATEGORY` is not needed: it defaults to `utility`, which is what the
+latest review returned. Set it only if Meta moves the template again — check
+with the curl in step 4 whenever the invoice looks wrong.
+
+`WA_NOTICE_BUTTON` is not needed either until the quick-reply template is
+approved. It defaults to `url`, the shape that is live; set it to `reply` in
+the same deploy that the new template goes live in, and in neither case before.
+
+`WA_RECEIPT_TEMPLATE` goes on **Vercel only** — the Stripe webhook is the
+site's, and the worker never sends a receipt. Leaving it unset costs the
+receipt on a shut window and says so in the log.
 
 `WA_PHONE_NUMBER_ID` is needed in both places: the worker sends the alerts and
 the site answers what comes back. `WHATSAPP_NUMBER` is the site's only, because
-the wa.me link on the button is built from it. Unchanged: `WA_ACCESS_TOKEN`,
-`WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_TEMPLATE_NAME`.
+the wa.me link on the button is built from it — including the one on the
+payment-received page, which is the other half of reopening the window. Unchanged:
+`WA_ACCESS_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, `WA_TEMPLATE_NAME`.
 
 ## 8. Reset the conversation windows — easy to miss
 

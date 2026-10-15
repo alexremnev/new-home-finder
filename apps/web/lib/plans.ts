@@ -326,6 +326,27 @@ export function whatsappChat(): string | null {
   return number ? `https://wa.me/${number}` : null;
 }
 
+/**
+ * The conversation with a command already typed into it, waiting to be sent.
+ *
+ * The third shape, and the reason it is not `whatsappChat` with an argument:
+ * the two exist for opposite reasons. That one deliberately types nothing
+ * because the person is already connected and has nothing to say. This one
+ * exists *because* of what sending costs us nothing and buys everything — an
+ * inbound message is the only thing that reopens WhatsApp's 24-hour window,
+ * and outside that window a paid subscriber's alerts sit in the queue.
+ *
+ * So the text is not a courtesy. It is the one tap that turns delivery back
+ * on, which is why it is a real command rather than a pleasantry: the person
+ * presses send, the window opens, and the answer that comes back is their own
+ * plan and filter rather than a list of things they could have typed.
+ */
+export function whatsappSay(text: string): string | null {
+  const number = (process.env.WHATSAPP_NUMBER ?? "").replace(/\D/g, "");
+  if (!number) return null;
+  return `https://wa.me/${number}?text=${encodeURIComponent(text)}`;
+}
+
 export function paymentRef(): string {
   const alphabet = "23456789BCDFGHJKMNPQRSTVWXZ";
   const bytes = randomBytes(6);
@@ -392,6 +413,22 @@ export function botLink(token: string): string {
   const bot = process.env.TELEGRAM_BOT_USERNAME;
   if (!bot) throw new Error("TELEGRAM_BOT_USERNAME is not set");
   return `https://t.me/${bot}?start=${token}`;
+}
+
+/**
+ * The chat itself, for somebody the bot already knows. `whatsappChat`'s
+ * opposite number.
+ *
+ * No `?start=`, because that is a token and this person has none to carry: a
+ * `/start` on a connected account re-runs the sign-up, which is not what
+ * "open the chat" should mean. Null rather than a throw, unlike `botLink`:
+ * this is drawn on a page that has something else to say when there is no bot
+ * username, where `botLink` is only ever called on a path that cannot proceed
+ * without one.
+ */
+export function botChat(): string | null {
+  const bot = process.env.TELEGRAM_BOT_USERNAME;
+  return bot ? `https://t.me/${bot}` : null;
 }
 
 export async function accountForToken(

@@ -1,4 +1,4 @@
-import { meterWhatsApp, type WaKind } from "./wa-meter";
+import { meterWhatsApp, type WaKind, type WaRate } from "./wa-meter";
 
 const GRAPH = "https://graph.facebook.com";
 const VERSION = "v21.0";
@@ -9,6 +9,11 @@ const VERSION = "v21.0";
 // trimmed to suit the button.
 const DISPLAY_CHARS = 20;
 const INTERACTIVE_BODY = 1024;
+
+// Plain `en`, matching the worker's default. Picking "English (UK)" in the
+// template editor gives `en_GB`, this sends `en`, and every send fails with
+// 132001 — which reads as a broken template rather than as a mismatched tag.
+const WA_TEMPLATE_LANGUAGE = "en";
 
 /**
  * A link drawn as a button rather than written out in the message.
@@ -81,6 +86,89 @@ async function post(payload: Payload, phoneId: string, token: string): Promise<P
   } catch {
     return { ok: true, id: null };
   }
+}
+
+/**
+ * An approved template, which is the only thing WhatsApp will deliver outside
+ * the 24-hour window.
+ *
+ * ── why the site needs one at all ─────────────────────────────────────────
+ *
+ * Because one of the things it says is not a reply. A payment clearing is our
+ * own event, it happens minutes after somebody tapped a link in a chat they
+ * then closed, and on the cohort most likely to pay — a plan that has just
+ * ended — the window is shut by definition. `sendWhatsApp` into that is
+ * 131047: the person is never told the payment went through, and the alerts
+ * they just bought sit in the queue behind the same shut window.
+ *
+ * ── the shape, and why it is this narrow ──────────────────────────────────
+ *
+ * One template, no body variables, one quick-reply button. Each of those is a
+ * refusal avoided rather than a preference:
+ *
+ * - a component the template does not declare is 132000 on every send, and so
+ *   is a declared one left out, so the payload has to match the approved
+ *   template exactly;
+ * - a body variable may not be empty, and the one fact a receipt wants to
+ *   carry — the date the plan runs to — is null on a plan with no end date,
+ *   so a wording that needs no variable is a wording that cannot be refused;
+ * - `language` must be plain `en`. "English (UK)" in the template editor gives
+ *   `en_GB` and every send fails with 132001.
+ *
+ * The quick reply is the point of the message as much as the words are. A
+ * template cannot reopen the window — only something inbound does that — and a
+ * tap on a quick reply *is* something inbound. So the receipt arrives, and the
+ * one tap under it is what releases everything held.
+ */
+export async function sendWhatsAppTemplate(
+  to: string,
+  template: string,
+  payload: string,
+  kind: WaKind = "receipt",
+  billedAs: WaRate = "utility",
+): Promise<boolean> {
+  const phoneId = process.env.WA_PHONE_NUMBER_ID;
+  const token = process.env.WA_ACCESS_TOKEN;
+  if (!phoneId || !token) {
+    const missing = [
+      !phoneId ? "WA_PHONE_NUMBER_ID" : null,
+      !token ? "WA_ACCESS_TOKEN" : null,
+    ].filter(Boolean);
+    console.error(
+      `whatsapp template not sent: ${missing.join(" and ")} ` +
+        `${missing.length > 1 ? "are" : "is"} not set in this deployment`,
+    );
+    return false;
+  }
+
+  const number = to.replace(/\D/g, "");
+  const sent = await post(
+    {
+      messaging_product: "whatsapp",
+      to: number,
+      type: "template",
+      template: {
+        name: template,
+        language: { code: WA_TEMPLATE_LANGUAGE },
+        components: [
+          {
+            type: "button",
+            sub_type: "quick_reply",
+            index: "0",
+            parameters: [{ type: "payload", payload }],
+          },
+        ],
+      },
+    },
+    phoneId,
+    token,
+  );
+
+  // Only what Meta accepted, the same rule as the free-form path: a refused
+  // post is not a message, is not billed, and must not spend the subscriber's
+  // allowance.
+  if (sent.ok) await meterWhatsApp(number, kind, sent.id, billedAs);
+  return sent.ok;
 }
 
 /**
