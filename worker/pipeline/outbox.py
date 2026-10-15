@@ -901,7 +901,6 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     checkout_token=token,
                     text=notice_for(
                         str(row["plan"]),
-                        row["plan_until"],
                         notice_stage,
                         share,
                         link,

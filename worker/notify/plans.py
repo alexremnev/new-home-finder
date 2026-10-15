@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
 
 SITE = os.environ.get("SITE_URL", "https://londonhomefinder.co.uk").rstrip("/")
 
@@ -17,12 +16,6 @@ def checkout_link(token: str) -> str:
 
 KEPT = "Your filter is kept — paying turns the alerts back on with nothing to set up again."
 
-def _when(plan_until: datetime | None) -> str:
-    if plan_until is None:
-        return ""
-
-    return plan_until.strftime("%d %b at %H:%M")
-
 def _falls_back_to(share: int | None) -> str:
 
     # The share is read from `user_entitlement`, never written here: one query
@@ -37,8 +30,7 @@ def _falls_back_to(share: int | None) -> str:
     return f"After that you will only see {share}% of what matches, until you renew."
 
 def expiring_notice(
-    plan: str, plan_until: datetime | None, share: int | None = None,
-    link: str | None = None,
+    plan: str, share: int | None = None, link: str | None = None,
 ) -> str:
     """The one warning before a plan ends, `NOTICE_LEAD_MINUTES` out.
 
@@ -48,17 +40,21 @@ def expiring_notice(
     the decision is in front of the person. See `claim_plan_notices`, which no
     longer produces the stage.
 
-    "In a few minutes" rather than a count of them. The lead lives in
-    `claim_plan_notices` and `drain` fires on its own timer, so the two would
-    have to agree for a number here to be true; the exact clock time is
-    already on the line and needs nobody to be right about the cadence.
+    "In a few minutes" rather than a count of them, and no clock time at all.
+    The lead lives in `claim_plan_notices` and `drain` fires on its own timer,
+    so the two would have to agree for a number here to be true.
+
+    The clock time used to follow — "ends in a few minutes — 09 Oct at 19:00".
+    `plan_until` comes back from Postgres in UTC, which is not the hour anybody
+    reading this is living in, so for half the year the message named a time an
+    hour behind the one on their phone. A relative "in a few minutes" needs no
+    timezone to be right about, and the `plan_until` argument that carried the
+    absolute one is gone from here and from `notice_for`.
     """
 
     what = "free trial" if plan == "trial" else "subscription"
-    when = _when(plan_until)
 
-    opening = f"Your {what} ends in a few minutes"
-    opening += f" — {when}." if when else "."
+    opening = f"Your {what} ends in a few minutes."
 
     # The link is a button rather than a line of text — see `plan_actions` in
     # the outbox — so the body does not repeat it. A url in the body of a
@@ -143,7 +139,7 @@ def spent_notice(
     return "\n".join(lines)
 
 def notice_for(
-    plan: str, plan_until: datetime | None, stage: str, share: int | None = None,
+    plan: str, stage: str, share: int | None = None,
     link: str | None = None, allowance: int | None = None,
 ) -> str:
 
@@ -151,7 +147,7 @@ def notice_for(
         return expiry_notice(plan, share, link)
     if stage == "spent":
         return spent_notice(allowance, share, link)
-    return expiring_notice(plan, plan_until, share, link)
+    return expiring_notice(plan, share, link)
 
 def checkin_notice() -> str:
     """Asked five minutes before WhatsApp's 24-hour window shuts.
