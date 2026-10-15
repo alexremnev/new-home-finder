@@ -686,6 +686,98 @@ def test_a_live_whatsapp_plan_is_still_sent_its_digest(conn: Any) -> None:
     assert [int(r["user_id"]) for r in store.daily_digests(conn)] == [user_id]
 
 
+def digest_day(conn: Any, user_id: int, *, sent: int = 0, withheld: int = 0) -> None:
+    """A day's worth of matches on the books, split the way the day went.
+
+    `daily_digests` counts from `notifications`, so the digest is only ever as
+    true as the rows are: `sent` is what reached them and `withheld` is what
+    the share kept back, which is the number the summary is about.
+    """
+
+    for n in range(sent + withheld):
+        listing_id = make_listing(conn, f"digest-{user_id}-{n}")
+        conn.execute(
+            """
+            INSERT INTO notifications (user_id, listing_id, channel, kind,
+                                       status, error)
+            VALUES (%s, %s, 'telegram', 'new_listing', %s, %s)
+            """,
+            (user_id, listing_id,
+             "sent" if n < sent else "skipped",
+             None if n < sent else "share"),
+        )
+
+
+def test_full_access_on_telegram_is_not_sent_a_summary_of_its_own_day(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing withheld is nothing to report and nothing to sell: every one of
+    # the day's matches was already sent, one message each, as it happened. A
+    # nightly "3 new listings matched your filter today" tells a paying
+    # subscriber only that they have been paying.
+    user_id = make_user(conn, plan="paid", plan_days=14)
+    make_subscription(conn, user_id)
+    digest_day(conn, user_id, sent=3)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert notifier.sent == []
+
+
+def test_a_live_trial_counts_as_full_access_for_the_digest(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The share and not `paid`: a trial costs nothing and withholds nothing, so
+    # the summary has exactly as little to say to it as to a subscription. The
+    # same mistake the upgrade button made before it read the share.
+    user_id = make_user(conn, plan="trial", plan_days=None, plan_hours=20)
+    make_subscription(conn, user_id)
+    digest_day(conn, user_id, sent=2)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert notifier.sent == []
+
+
+def test_a_throttled_telegram_plan_is_still_sent_its_digest(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other side of it, and the reason the digest exists at all: a share
+    # below a hundred means listings matched and were not delivered, and this
+    # is the only message that says so — with the one tap that undoes it.
+    user_id = make_user(conn, plan="free", plan_days=None)
+    make_subscription(conn, user_id)
+    digest_day(conn, user_id, sent=0, withheld=2)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert "you are seeing none of them" in (alert.text or "")
+    assert alert.actions[0].url is not None
+
+
+def test_a_quiet_day_is_reported_to_full_access_too(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing withheld, but also nothing sent — and a day with no messages at
+    # all is indistinguishable from a bot that has died. The quiet day is the
+    # one summary worth a subscriber's attention, because the usual cause is a
+    # filter that is too tight.
+    user_id = make_user(conn, plan="paid", plan_days=14)
+    make_subscription(conn, user_id)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert "Nothing matched your filter today." in (alert.text or "")
+
+
 def test_a_spent_allowance_brings_the_daily_cap_back(conn: Any) -> None:
     # "Paid" exempts somebody from the thirty-a-day cap, and a spent allowance
     # has to stop meaning paid — or the period would end with no consequence

@@ -776,6 +776,33 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 paid = bool(row["paid"])
                 share = int(row["delivery_share"] or 0)
 
+                # Nothing is being withheld, so there is nothing the summary
+                # can tell somebody they missed and no link worth tapping: the
+                # day's alerts already said everything this would, one at a
+                # time, as it happened. Full access is the share and not
+                # `paid` — a live trial is not paid and is not restricted
+                # either, the same reason the upgrade button below reads the
+                # share.
+                #
+                # Telegram only. On WhatsApp the digest carries "Keep
+                # searching", and that tap is what reopens the 24-hour window
+                # — there the message earns its place by existing, whatever it
+                # says. `daily_digests` has already written the claim, so this
+                # is "not sent today" rather than "tried again every minute
+                # until midnight".
+                #
+                # A quiet day still goes out to everybody: no alerts and no
+                # digest is indistinguishable from a bot that has stopped, and
+                # the usual cause is a filter that is too tight, which is the
+                # one thing worth saying then.
+                if (
+                    share >= 100
+                    and int(row["matched"]) > 0
+                    and str(row["channel"]) == "telegram"
+                ):
+                    stage.count("digest_nothing_to_say")
+                    continue
+
                 # Three taps, each useful to the person and each an inbound
                 # message — the only thing that reopens WhatsApp's free window.
                 # "Keep searching" is the one most people want and is worth
