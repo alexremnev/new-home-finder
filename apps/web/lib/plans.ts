@@ -244,10 +244,29 @@ export const START_TTL_MINUTES = 60;
 // link, and two answers to how long it lasts is one too many.
 export const UPGRADE_TTL_MINUTES = 36 * 60;
 
-// An edit link is followed straight away, from a chat the person is already in.
-// Long enough to fill the form without rushing, short enough that one left in a
-// screenshot stops working.
-export const EDIT_TTL_MINUTES = 60;
+// A week.
+//
+// This was an hour, on the reasoning that an edit link is followed straight
+// away from a chat the person is already in. True of the one `/update` mints —
+// somebody types the command and taps the answer — and false of every other
+// link carrying this token, which is most of them: `withSite` bolts "Open the
+// site" onto every reply the WhatsApp bot sends, and those messages stay in the
+// conversation for weeks. A chat is a durable medium. An hour-old credential
+// inside a month-old message is dead almost every time anybody taps it, and
+// what they got for tapping it was the sign-up page offering them a free trial
+// they are three plans past.
+//
+// An hour was not buying much, either. `issueToken` extends the live token
+// rather than minting a second, so the newest message in the chat always holds
+// a working one — the short life expired the *old* copies of a token the
+// person still has, which is the opposite of a threat model.
+//
+// What it does grant is worth keeping in proportion: the form, opened on this
+// person's criteria, and the ability to replace them. No payment, no address,
+// no history. Set against a link that only ever existed inside a private
+// conversation, a week is the trade — and a stale one now says what it is
+// rather than pretending to be a stranger's first visit.
+export const EDIT_TTL_MINUTES = 7 * 24 * 60;
 
 export function newToken(): string {
   return randomBytes(TOKEN_BYTES).toString("base64url");

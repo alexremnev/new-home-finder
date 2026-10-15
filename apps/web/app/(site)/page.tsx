@@ -2,11 +2,12 @@ import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import {
-  channelPrices, districtNames, enabledDistricts, returningFor,
-  signupPlan, trialDaysOn,
+  botChat, channelPrices, districtNames, enabledDistricts, returningFor,
+  signupPlan, trialDaysOn, whatsappChat,
 } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
+import { TelegramMark, WhatsAppMark } from "./logos";
 
 // The canonical lives here and not in the root layout: metadata is
 // inherited, so a canonical up there would have every url on the site —
@@ -86,6 +87,23 @@ export default async function Page({
   const returning = editing
     ? await returningFor(editing, tag("c")).catch(() => null)
     : null;
+
+  // A link that carried a token and no longer resolves to anybody. Its own
+  // case, because the two outcomes it used to share are opposites: somebody
+  // arriving with no `e=` at all is a new visitor and the sign-up page is the
+  // right page, while somebody arriving with a dead one is a subscriber whose
+  // link went stale — and showing them "Start free trial" above a blank form
+  // loses the filter they came to change and reads as though their plan never
+  // existed.
+  //
+  // `c=` is only a hint, which is all that is needed here: it names an app on
+  // a button and nothing more. The token itself is past proving anything, and
+  // deliberately not looked up — `issueToken` clears dead rows, so most of the
+  // time there is nothing behind it to find, and a page that authenticated an
+  // expired credential would make the expiry decorative.
+  const stale = Boolean(editing) && returning === null;
+  const staleChannel = tag("c") === "whatsapp" ? "whatsapp" : "telegram";
+  const staleChat = staleChannel === "whatsapp" ? whatsappChat() : botChat();
 
   const site = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
     /\/+$/,
@@ -176,7 +194,40 @@ export default async function Page({
       />
 
       <div className="hero">
-        {returning ? (
+        {stale ? (
+          /* Nothing underneath it. A blank sign-up form below this message is
+             the trap it exists to close: filling it in opens a second account,
+             which the bot then has to merge back on reconnect, and in the
+             meantime the person has been told to start a trial they are long
+             past. The one thing they need is a working link, and the only
+             place that can mint one is the chat. */
+          <div className="panel">
+            <h1>That link has gone stale</h1>
+            <p className="lede">
+              Links from the bot stop working after a week, and this one has.
+              Nothing has changed — your filter is running exactly as it was,
+              and your plan is untouched.
+            </p>
+            <p className="lede">
+              Send <strong>/update</strong> in{" "}
+              {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"} and the
+              next link arrives straight away, opening on your current search.
+            </p>
+            {staleChat && (
+              <a
+                href={staleChat}
+                className={
+                  staleChannel === "whatsapp"
+                    ? "cta cta-whatsapp"
+                    : "cta cta-telegram"
+                }
+              >
+                {staleChannel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}{" "}
+                Open {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"}
+              </a>
+            )}
+          </div>
+        ) : returning ? (
           <>
             <h1>Change what you are looking for</h1>
             <p className="lede">
@@ -195,7 +246,7 @@ export default async function Page({
           </>
         )}
 
-        {codes.length === 0 ? (
+        {stale ? null : codes.length === 0 ? (
           <p className="panel">
             No districts are being covered right now, so there is nothing to
             subscribe to yet.

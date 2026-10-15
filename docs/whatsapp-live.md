@@ -174,15 +174,22 @@ the rollback, because the old name is still there:
 ```sh
 curl -s -X POST "https://graph.facebook.com/v21.0/$WABA_ID/message_templates" \
   -H "Authorization: Bearer $WA_ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"name":"plan_notice_tap","language":"en","category":"UTILITY",
+  -d '{"name":"plan_notice_reply","language":"en","category":"UTILITY",
    "components":[
      {"type":"BODY",
       "text":"Your alerts have stopped — your plan has run out.\n\nYour filter is kept exactly as it is. Tap below and everything turns back on, with nothing to set up again."},
      {"type":"BUTTONS","buttons":[{"type":"QUICK_REPLY","text":"Get full access"}]}]}'
 ```
 
-Then, in one go: `WA_NOTICE_TEMPLATE=plan_notice_tap` **and**
+Then, in one go: `WA_NOTICE_TEMPLATE=plan_notice_reply` **and**
 `WA_NOTICE_BUTTON=reply`, then restart. Either variable alone is 132000.
+
+**The name is free to be anything** — nothing in the code knows it, the worker
+reads it out of `WA_NOTICE_TEMPLATE` and posts whatever it finds. Pick a name
+that has never existed on this WABA, though: Meta holds a deleted template's
+name for 30 days and refuses it in the meantime, which looks exactly like the
+name being invalid. `plan_ended_reply` and `plan_notice_qr` are equally good if
+this one is taken.
 
 ### By hand, in WhatsApp Manager
 
@@ -191,7 +198,7 @@ template**, not Edit:
 
 | Field | Value |
 | --- | --- |
-| Name | `plan_notice_tap` |
+| Name | `plan_notice_reply` |
 | Category | Utility |
 | Language | **English** — not English (UK), which is `en_GB` and 132001 |
 | Header | None |
