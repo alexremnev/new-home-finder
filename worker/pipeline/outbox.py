@@ -803,25 +803,45 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                     stage.count("digest_nothing_to_say")
                     continue
 
-                # Three taps, each useful to the person and each an inbound
-                # message — the only thing that reopens WhatsApp's free window.
-                # "Keep searching" is the one most people want and is worth
-                # answering on its own terms, which is why it gets tapped; a
-                # button that only serves us would not be.
+                # Two taps that change something: the search, or whether there
+                # is one.
                 #
-                # "I found a place" used to sit here, in the middle, where it
-                # was the easiest of the three to hit by accident — and hitting
-                # it stops the alerts. The two that change something now share
-                # the top row and the harmless one has the row below to itself.
-                # `row` is Telegram's layout; WhatsApp stacks all three.
+                # "I found a place" used to sit between them, where it was the
+                # easiest of the three to hit by accident — and hitting it
+                # stops the alerts. `row` is Telegram's layout; WhatsApp stacks
+                # whatever it is given and ignores the number.
                 actions = [
                     Action(label="✏️ Change search", short="Change search",
                            callback="change", row=0),
                     Action(label="⏸️ Pause alerts", short="Pause alerts",
                            callback="pause", row=0),
-                    Action(label="🔔 Keep searching", short="Keep searching",
-                           callback="continue", row=1),
                 ]
+
+                # "Keep searching" is a WhatsApp button, and on WhatsApp it is
+                # the reason this message is worth its own charge: the tap is an
+                # inbound message, and an inbound message reopens the 24-hour
+                # window.
+                #
+                # On Telegram it answers a question nobody reading this has.
+                # The alerts are not stopped and nothing is being asked — the
+                # share keeps delivering its part of what matches, which is what
+                # the line above has just counted — so "keep searching" offers to
+                # resume something that is still running. It changed nothing to
+                # match: `keepSearching` in the Telegram webhook replies with the
+                # criteria card, and pausing has its own button here and its own
+                # /resume. A third of the keyboard spent saying "yes, carry on"
+                # is a third taken from the one button that does something.
+                #
+                # The webhook still answers `continue`, deliberately: every
+                # digest already sent carries the button, and a tap on last
+                # week's that fell through to "that message is out of date"
+                # would be this change breaking the past.
+                if str(row["channel"]) == "whatsapp":
+                    actions.append(
+                        Action(label="🔔 Keep searching", short="Keep searching",
+                               callback="continue", row=1)
+                    )
+
                 # Only when something is actually being withheld. `paid` was the
                 # wrong test: a live trial is not paid but is not restricted
                 # either, so the button turned up next to a report that said

@@ -333,9 +333,12 @@ async function pressed(
     if (press.id) await answerCallback(press.id).catch(() => undefined);
     return sendToForm(chatId, true);
   }
-  // The digest's third button. It changes nothing, which is the point — so the
-  // reply has to exist, or the tap looks like a tap that failed. Shared with
-  // WhatsApp, where the same button also reopens the 24-hour window.
+  // Kept for the digests that already carry it. The button is WhatsApp's now —
+  // there the tap reopens the 24-hour window, which is what it was always for,
+  // and `notify_plan_changes` no longer offers it on Telegram, where the alerts
+  // were never stopped and so there was nothing to keep. Every Telegram digest
+  // sent before that still has it, and a tap answered with "that message is out
+  // of date" followed by the sign-up form is worse than the reply it had.
   if (data === "continue") {
     if (press.id) await answerCallback(press.id).catch(() => undefined);
     return keepSearching(chatId);

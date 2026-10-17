@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Criteria } from "../criteria";
 import {
+  ALERTS_STOPPED,
+  FULL_ACCESS_BUTTON,
   alertsBackOn,
   criteriaCard,
   criteriaSet,
@@ -260,6 +262,33 @@ describe("the upgrade invitation", () => {
     const text = await upgradeInvitation(account as never, "abc");
     expect(text).toContain("There is nothing to upgrade to at the moment.");
     expect(text).not.toContain("\n\n");
+  });
+
+});
+
+describe("the answer to \"keep searching\" after the plan has run out", () => {
+  it("says the alerts have stopped rather than that they are back on", async () => {
+    // The button is tapped on a digest or a check-in that may be days old, and
+    // the reply it used to get promised a delivery a finished plan never gets.
+    expect(ALERTS_STOPPED).toContain("Your alerts have stopped");
+    expect(ALERTS_STOPPED).not.toContain("back on — anything held");
+  });
+
+  it("names no date and no allowance, because either can be the one that ran out", () => {
+    // A WhatsApp period ends on its days or on its alerts. Somebody with three
+    // weeks left on the month, told their plan expired, reads that as a fault.
+    expect(ALERTS_STOPPED).toContain("your plan has run out");
+    expect(ALERTS_STOPPED).not.toMatch(/\d/);
+  });
+
+  it("keeps the filter and sends them to the button, and writes no url out", () => {
+    expect(ALERTS_STOPPED).toContain("Your filter is kept exactly as it is");
+    expect(ALERTS_STOPPED).toContain("Tap below");
+    expect(ALERTS_STOPPED).not.toContain("http");
+    expect(FULL_ACCESS_BUTTON).toBe("Get full access");
+    // Under WhatsApp's twenty-character cut for a cta_url label, with no emoji
+    // spending any of them.
+    expect(FULL_ACCESS_BUTTON.length).toBeLessThanOrEqual(20);
   });
 });
 

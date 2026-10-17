@@ -760,6 +760,51 @@ def test_a_throttled_telegram_plan_is_still_sent_its_digest(
     assert alert.actions[0].url is not None
 
 
+def test_the_telegram_digest_does_not_offer_to_keep_searching(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Nothing on Telegram was stopped, so there is nothing to keep searching
+    # for: the share goes on delivering its part of what matches, which is the
+    # number this message has just given. The button offered to resume
+    # something that was still running, and `keepSearching` in the webhook
+    # changed nothing to match — it replies with the criteria card.
+    #
+    # Asserted as the whole list and in order: the upgrade button is the one
+    # thing on this keyboard worth tapping, and what this test is really about
+    # is that it is not one of three.
+    user_id = make_user(conn, plan="free", plan_days=None)
+    make_subscription(conn, user_id)
+    digest_day(conn, user_id, sent=0, withheld=2)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert [a.callback for a in alert.actions] == [None, "change", "pause"]
+    assert alert.actions[0].url is not None
+
+
+def test_the_whatsapp_digest_still_offers_to_keep_searching(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The other half of the rule above, and the reason the button exists at
+    # all: on WhatsApp the tap is an inbound message, an inbound message
+    # reopens the 24-hour window, and that is what this message earns its
+    # charge by doing whatever its text says. A live paid plan, so there is no
+    # upgrade button to find it next to.
+    user_id = wa_subscriber(conn, used=10)
+    make_subscription(conn, user_id)
+    digest_day(conn, user_id, sent=2)
+    monkeypatch.setattr(outbox, "digest_due", lambda: True)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    _, alert = notifier.sent[0]
+    assert [a.callback for a in alert.actions] == ["change", "pause", "continue"]
+
+
 def test_a_quiet_day_is_reported_to_full_access_too(
     conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
 ) -> None:

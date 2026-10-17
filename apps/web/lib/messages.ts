@@ -258,6 +258,10 @@ export function planLine(name: string, until: Date | null, live: boolean): strin
 
 export const CHOOSE_PLAN_BUTTON = "\ud83d\udc8e Choose a plan";
 
+// The words on the plan notice's approved quick reply, reused on the url button
+// under `ALERTS_STOPPED` so the one offer in the product is worded one way.
+export const FULL_ACCESS_BUTTON = "Get full access";
+
 // What the button on the upgrade offer points at. One function, because the two
 // webhooks draw the same button and a checkout page reached without a token
 // does not know whose plan is being bought.
@@ -318,4 +322,30 @@ export async function upgradeInvitation(account: Account, token?: string): Promi
   }
   return lines.join("\n");
 }
+
+/**
+ * The answer to a tap that offered to carry on, from somebody who cannot.
+ *
+ * "Keep searching" sits on the evening digest and on the check-in sent before
+ * WhatsApp's window shuts, and both stay on screen long after they were sent —
+ * a plan can run out in between. Answering such a tap with "alerts are back on,
+ * anything held is on its way" promises a delivery that will not happen: the
+ * worker sends nothing at all to a finished WhatsApp plan.
+ *
+ * "Run out" and not a date, which is what makes this one message rather than
+ * two. A WhatsApp period ends on its days or on its included alerts, whichever
+ * goes first, and naming the wrong one is worse than naming neither: somebody
+ * with three weeks left on a month, told their plan expired, is being told the
+ * product is broken. Both are "run out", and both are undone by the same tap.
+ *
+ * No prices and no criteria card. The filter is kept, which is the part worth
+ * saying, and the price list belongs to `upgradeInvitation` — here it would sit
+ * between the person and `FULL_ACCESS_BUTTON`, which is the only thing on this
+ * message that does anything.
+ */
+export const ALERTS_STOPPED = [
+  "Your alerts have stopped — your plan has run out.",
+  "",
+  "Your filter is kept exactly as it is. Tap below and everything turns back on, with nothing to set up again.",
+].join("\n");
 

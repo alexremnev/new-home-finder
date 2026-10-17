@@ -20,6 +20,8 @@ import {
   LINK_EXPIRED,
   criteriaSet,
   alertsBackOn,
+  ALERTS_STOPPED,
+  FULL_ACCESS_BUTTON,
   planLine,
   upgradeInvitation,
   upgradeUrl,
@@ -369,6 +371,18 @@ async function pressed(number: string, id: string): Promise<Reply | null> {
   if (id === "continue") {
     const account = await accountForChat(number, "whatsapp").catch(() => null);
     if (!account || account.subscription_id === null) return NO_FILTER_YET;
+
+    // The button outlives the message it is on. A digest from last week and a
+    // check-in from yesterday both still carry it, and a plan can have run out
+    // in between — at which point "anything held is on its way" is a promise of
+    // a delivery the worker will not make, because a finished WhatsApp plan is
+    // sent nothing at all. The tap still reopened the window, so there is one
+    // thing worth doing with it: say the plan has ended and offer the plan.
+    if (!planIsLive(account)) {
+      const token = await issueToken(account.user_id, "upgrade", UPGRADE_TTL_MINUTES);
+      return linked(ALERTS_STOPPED, FULL_ACCESS_BUTTON, upgradeUrl(token));
+    }
+
     return [
       "✅ Alerts are back on — anything held while it was quiet is on its way.",
       "",
