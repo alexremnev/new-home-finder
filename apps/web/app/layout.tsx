@@ -62,11 +62,17 @@ export const metadata: Metadata = {
     title: "Real-time alerts for new London rentals — Telegram & WhatsApp bot",
     description: PITCH,
     locale: "en_GB",
-    images: [{ url: "/opengraph-image", width: 1200, height: 630,
-               alt: "London Home Finder" }],
+    // No `images` here on purpose. app/opengraph-image.jpg is picked up by
+    // file convention, which reads the real width, height and mime type off
+    // the file itself; the hand-written entry that used to sit here claimed
+    // 1200x630 for an image that is square, and a declared size an unfurler
+    // cannot match is a preview it may decline to draw.
   },
   twitter: {
-    card: "summary_large_image",
+    // "summary", not "summary_large_image": the large card is 1.91:1 and crops
+    // whatever it is given to fit, which on a square mark takes the wordmark
+    // off the bottom. The small card shows it whole.
+    card: "summary",
     title: "Real-time alerts for new London rentals",
     description: PITCH,
   },
