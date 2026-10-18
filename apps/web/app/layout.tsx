@@ -64,15 +64,16 @@ export const metadata: Metadata = {
     locale: "en_GB",
     // No `images` here on purpose. app/opengraph-image.jpg is picked up by
     // file convention, which reads the real width, height and mime type off
-    // the file itself; the hand-written entry that used to sit here claimed
-    // 1200x630 for an image that is square, and a declared size an unfurler
-    // cannot match is a preview it may decline to draw.
+    // the file itself, so the declared size cannot drift from the image the
+    // way a hand-written entry does — and a declared size an unfurler cannot
+    // match is a preview it may decline to draw. The file is built by
+    // scripts/make-og-image.py; regenerate it there, do not crop it by hand.
   },
   twitter: {
-    // "summary", not "summary_large_image": the large card is 1.91:1 and crops
-    // whatever it is given to fit, which on a square mark takes the wordmark
-    // off the bottom. The small card shows it whole.
-    card: "summary",
+    // Safe again now the image is itself 1.91:1: the large card crops whatever
+    // it is given to that ratio, which on the square original took the
+    // "HOME FINDER" line off the bottom. There is nothing left to crop.
+    card: "summary_large_image",
     title: "Real-time alerts for new London rentals",
     description: PITCH,
   },
