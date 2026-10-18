@@ -44,10 +44,23 @@ export default function Image() {
           </span>
         </div>
 
-        <div style={{ fontSize: 68, fontWeight: 800, lineHeight: 1.1, marginTop: 40 }}>
-          Every new London rental,
-          <br />
-          minutes after it lists.
+        {/* Two stacked lines rather than one div with a <br/>. Satori throws on
+            any node holding more than one child without an explicit display,
+            and a throw here is invisible: the route has already sent its
+            headers, so the reply is a 200 of type image/png and zero bytes —
+            which every unfurler reads as "no image" rather than as an error. */}
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            fontSize: 68,
+            fontWeight: 800,
+            lineHeight: 1.1,
+            marginTop: 40,
+          }}
+        >
+          <div>Every new London rental,</div>
+          <div>minutes after it lists.</div>
         </div>
 
         <div style={{ fontSize: 30, marginTop: 28, opacity: 0.9 }}>
