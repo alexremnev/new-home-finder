@@ -4,9 +4,11 @@ import type { Criteria } from "../criteria";
 import {
   ALERTS_STOPPED,
   FULL_ACCESS_BUTTON,
+  GIFT_USED,
   alertsBackOn,
   criteriaCard,
   criteriaSet,
+  extraDayOn,
   paymentReceived,
   refundIssued,
   upgradeInvitation,
@@ -318,5 +320,41 @@ describe("the answer to the receipt's button on WhatsApp", () => {
 
   it("says a plan with no end date without inventing one", () => {
     expect(alertsBackOn("Lifetime", null, {})).toContain("Plan: Lifetime");
+  });
+});
+
+describe("the extra free day", () => {
+  it("says what the tap did and shows what is about to arrive", () => {
+    const said = extraDayOn({ bedrooms: { min: 2 } });
+    expect(said).toContain("✅ Your extra day is on");
+    expect(said).toContain("🛏 Bedrooms: 2 or more");
+  });
+
+  it("names a length and never a date", () => {
+    // `plan_until` is UTC and the hour on somebody's phone is not that hour
+    // for half the year, so a date here would name a moment an hour off the
+    // one the button promised. The offer says "another 24 hours"; this says
+    // "your extra day"; neither needs a timezone to be right about.
+    const said = extraDayOn({});
+    expect(said).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(said).not.toContain("Plan:");
+  });
+
+  it("offers the two commands that change something and not the price list", () => {
+    // /pay belongs on a message about a plan ending; this one is about a plan
+    // starting again, and /current is the card printed directly above it.
+    const said = extraDayOn({});
+    expect(said).toContain("/update — change my search");
+    expect(said).toContain("/stop — delete my filter");
+    expect(said).not.toContain("/pay");
+    expect(said).not.toContain("/current");
+  });
+
+  it("answers a second tap without pretending it did something", () => {
+    // A reply button stays in the chat for ever, so this is read by somebody
+    // tapping last week's offer — and a button that visibly does nothing is
+    // worse than no button.
+    expect(GIFT_USED).toContain("already been used");
+    expect(GIFT_USED).not.toContain("extra day is on");
   });
 });

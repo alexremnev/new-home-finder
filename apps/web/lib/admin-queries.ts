@@ -482,6 +482,11 @@ export type Person = {
   plan_display: string | null;
   plan_until: string | null;
   plan_from: string | null;
+  // When this account was given its one free extra day of the WhatsApp trial
+  // — 0071. NULL is every account that never had it, which is nearly all of
+  // them. Here because a trial running a second day looks exactly like a trial
+  // running its first from every other column on this page.
+  trial_gift_at: string | null;
   // Why alerts stopped, when the date alone does not explain it: a WhatsApp
   // month ends at thirty days or at nine hundred messages. Without these two
   // the commonest support question — "my subscription has weeks left and
@@ -538,7 +543,7 @@ export type Person = {
 export async function person(userId: number): Promise<Person | null> {
   const rows = await query<Person>(
     `SELECT u.id AS user_id, u.status, u.plan, p.display_name AS plan_display,
-            u.plan_until::text, u.plan_from::text,
+            u.plan_until::text, u.plan_from::text, u.trial_gift_at::text,
             e.message_allowance, e.messages_used, e.live AS plan_live,
             -- int, not bigint: node-postgres hands bigints back as strings,
             -- and one subscriber's period is bounded by the allowance times
@@ -1251,6 +1256,8 @@ export type SubscriberRow = {
   status: string;
   plan: string;
   plan_until: string | null;
+  /** When the one free extra day of the trial was granted, if ever. See 0071. */
+  trial_gift_at: string | null;
   /** Whether the plan is live — days AND allowance. See 0057. */
   plan_live: boolean;
   message_allowance: number | null;
@@ -1274,6 +1281,7 @@ export async function subscriberPage(
     query<SubscriberRow>(
       `SELECT u.id AS user_id, u.status, u.plan,
               u.plan_until::text AS plan_until,
+              u.trial_gift_at::text AS trial_gift_at,
               e.live AS plan_live, e.message_allowance, e.messages_used,
               uc.channel,
               uc.last_inbound_at::text AS last_inbound_at,

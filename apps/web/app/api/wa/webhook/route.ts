@@ -16,7 +16,9 @@ import {
   STOPPED,
   CHANGE_FILTER,
   FILTERS_BUTTON,
+  GIFT_USED,
   criteriaCard,
+  extraDayOn,
   LINK_EXPIRED,
   criteriaSet,
   alertsBackOn,
@@ -31,6 +33,7 @@ import {
   UPGRADE_TTL_MINUTES,
 } from "@/lib/plans";
 import { dismiss } from "@/lib/dismiss";
+import { giftExtraDay } from "@/lib/gift";
 import { deleteFilter, resumeFilter, stopFilter } from "@/lib/stopping";
 import { SUPPORT_REPLY } from "@/lib/support";
 import { sendWhatsApp, type WaLink } from "@/lib/whatsapp";
@@ -360,6 +363,34 @@ async function pressed(number: string, id: string): Promise<Reply | null> {
       account.plan_until,
       (account.criteria ?? {}) as Criteria,
     );
+  }
+
+  // The tap that claims one more free day of the trial, offered five minutes
+  // before it ran out to somebody it had barely reached — see
+  // `owed_a_free_day` in the worker.
+  //
+  // The tap does two things at once and needs both: it reopens the 24-hour
+  // window, at the top of this route, and it grants the day. A url button
+  // would have done neither, which is why the offer carries a reply button —
+  // the same lesson 0070 records about the notice template.
+  //
+  // `giftExtraDay` is the guard as well as the grant, in one statement, so two
+  // taps a second apart cannot both read "never had it" and both grant a day.
+  // The button outlives the message it is drawn on: a first tap on last week's
+  // offer is still honoured — it was made and never taken — and every tap after
+  // that is answered instead.
+  if (id === "gift") {
+    const granted = await giftExtraDay(number);
+    if (!granted) return GIFT_USED;
+
+    // Read after the grant, so the card is the filter that is about to start
+    // delivering again. Anything queued behind the ended trial goes out on the
+    // next drain — the plan is live again, which is what `queued_notifications`
+    // asks first on WhatsApp — so "your extra day is on" is true by the time it
+    // is read.
+    const account = await accountForChat(number, "whatsapp").catch(() => null);
+    if (!account || account.subscription_id === null) return NO_FILTER_YET;
+    return extraDayOn((account.criteria ?? {}) as Criteria);
   }
 
   // The answer to the check-in sent five minutes before the window shut. The

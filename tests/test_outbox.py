@@ -9,8 +9,10 @@ import pytest
 
 from worker.contracts.notify import NOTIFIERS, SendResult, build_notifier
 from worker.notify.telegram import render_listing
-from worker.notify.plans import digest_notice, notice_for
+from worker.notify.plans import GIFT_BUTTON, digest_notice, gift_offer, notice_for
+from worker.notify.whatsapp import BUTTON_CHARS
 from worker.pipeline.outbox import (
+    GIFT_MESSAGES,
     MAX_ATTEMPTS,
     alert_for,
     digest_due,
@@ -19,6 +21,7 @@ from worker.pipeline.outbox import (
     listing_actions,
     listing_view,
     outcome_for,
+    owed_a_free_day,
 )
 
 def row(**overrides: Any) -> dict[str, Any]:
@@ -591,3 +594,101 @@ def test_running_out_of_days_still_says_the_days() -> None:
     expired = notice_for("wa_month", "expired", 100, None, allowance=900)
     assert "900" not in expired
     assert "has ended" in expired
+
+
+# ── one more free day, for a trial that barely reached anybody ────────────
+
+def notice_row(**overrides: Any) -> dict[str, Any]:
+    """A row as `claim_plan_notices` returns it, for the eligibility rule.
+
+    The shape matters more than the values: `owed_a_free_day` is asked about
+    rows built by a query in `store`, so a test that invents its own keys would
+    keep passing after that query stopped providing one of them. These are the
+    five columns it reads, named as the query names them.
+    """
+
+    values: dict[str, Any] = {
+        "user_id": 1,
+        "channel": "whatsapp",
+        "plan": "trial",
+        "stage": "hour",
+        "trial_gift_at": None,
+        "messages_used": 4,
+    }
+    values.update(overrides)
+    return values
+
+def test_the_gift_offer_is_about_the_day_and_sells_nothing() -> None:
+
+    # Its own message, with its own button, and no payment anywhere on it:
+    # WhatsApp carries one url button or up to three reply buttons and never
+    # both, and asking somebody who has seen almost nothing to pay is the half
+    # worth dropping. They were told how to pay in the message above this one.
+    text = gift_offer()
+
+    assert "1 extra free day for you!" in text
+    assert "another 24 hours" in text
+    assert "http" not in text
+    assert "/pay" not in text
+
+def test_the_gift_button_fits_the_button() -> None:
+
+    # WhatsApp cuts a reply button at twenty characters and says nothing about
+    # it, so a longer label would ship as "Extend 1 Day Fre".
+    assert len(GIFT_BUTTON) <= BUTTON_CHARS
+
+def test_the_gift_names_a_length_and_never_a_date() -> None:
+
+    # `plan_until` is UTC and the hour on somebody's phone is not that hour for
+    # half the year — the reason the warning gave up naming a clock time. A day
+    # is a day in every timezone.
+    text = gift_offer()
+
+    assert not re.search(r"\d{1,2}:\d{2}", text)
+    assert "24 hours" in text
+
+def test_a_quiet_whatsapp_trial_is_owed_a_free_day() -> None:
+
+    assert owed_a_free_day(notice_row()) is True
+    # The boundary is inclusive: ten messages is a trial that barely happened.
+    assert owed_a_free_day(notice_row(messages_used=GIFT_MESSAGES)) is True
+    assert owed_a_free_day(notice_row(messages_used=GIFT_MESSAGES + 1)) is False
+
+def test_a_trial_that_delivered_is_not_offered_another() -> None:
+
+    # The gift repairs a trial nobody saw. A trial that spent its whole
+    # allowance has shown exactly what it was for, and another day of it is a
+    # day of free service rather than an argument for the paid one.
+    assert owed_a_free_day(notice_row(messages_used=30)) is False
+
+def test_the_gift_is_offered_once_per_account_for_ever() -> None:
+
+    # The gift moves `plan_until` by a day, so the extended trial is a fresh
+    # period with its own warning at the end of it — and without this column
+    # that warning would carry another gift, and so would the one after it.
+    assert owed_a_free_day(notice_row(trial_gift_at=datetime.now(timezone.utc))) is False
+
+def test_only_the_warning_carries_the_gift_and_never_the_expiry() -> None:
+
+    # On WhatsApp the expiry notice for a trial is the one message that cannot
+    # be delivered: the window shuts as the trial ends and `worth_a_template`
+    # will not buy a template to say a free thing has finished. An offer
+    # attached to it is an offer nobody receives.
+    assert owed_a_free_day(notice_row(stage="expired")) is False
+    assert owed_a_free_day(notice_row(stage="spent")) is False
+
+def test_telegram_is_not_offered_a_day_it_does_not_need() -> None:
+
+    # The gift answers a cost that only exists on WhatsApp: the trial is one
+    # day long there because Meta bills per message. On Telegram it runs two
+    # days and what follows is the lapsed tier's share of the matches rather
+    # than silence.
+    assert owed_a_free_day(notice_row(channel="telegram")) is False
+
+def test_a_subscription_is_not_offered_a_free_day() -> None:
+
+    # A month that delivered ten messages is a filter too tight or a quiet
+    # market, and the answer to that is /update — not another month of the same
+    # filter for nothing.
+    assert owed_a_free_day(notice_row(plan="wa_month")) is False
+    assert owed_a_free_day(notice_row(plan="wa_week")) is False

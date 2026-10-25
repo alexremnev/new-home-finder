@@ -138,6 +138,47 @@ def spent_notice(
         lines.append("/pay — a payment link, and the alerts resume at once")
     return "\n".join(lines)
 
+# The words on the one button the gift carries, and the id its tap sends back.
+#
+# Seventeen characters, because WhatsApp cuts a reply button at twenty and
+# says nothing about it. "1 Day" and not a date: `plan_until` comes back from
+# Postgres in UTC and the hour on somebody's phone is not that hour for half
+# the year — see `expiring_notice`, which gave up naming a time for the same
+# reason. A length is true in every timezone.
+GIFT_BUTTON = "Extend 1 Day Free"
+GIFT_TAP = "gift"
+
+def gift_offer() -> str:
+    """One more day of the trial, free, offered to somebody it barely reached.
+
+    The second of two messages and never the only one: it follows the warning
+    that the trial is ending — see `offer_a_free_day` in the outbox — because
+    a gift arriving before the thing it is a gift about has been announced
+    reads as an upsell. Five minutes before the end, which is the last moment
+    anything can be delivered on WhatsApp at all: the trial's day and the
+    24-hour window run out together.
+
+    Its own message, with its own button, and no payment link anywhere on it.
+    WhatsApp carries one url button or up to three reply buttons and never
+    both, so "Get full access" and "Extend 1 Day Free" cannot share a message
+    — and of the two, asking a person who has seen almost nothing to pay is
+    the one worth dropping. They have just been told how to pay, in the
+    message above this one.
+
+    "Another 24 hours", because that is what the tap grants: the day runs from
+    the tap and not from whenever the trial ended, so the plan and the WhatsApp
+    window reopen together exactly as they did when the trial began.
+    """
+
+    return "\n".join(
+        [
+            "🎁 1 extra free day for you!",
+            "",
+            "Your filters are still active. Tap below to keep receiving "
+            "listing alerts for another 24 hours — free of charge.",
+        ]
+    )
+
 def notice_for(
     plan: str, stage: str, share: int | None = None,
     link: str | None = None, allowance: int | None = None,

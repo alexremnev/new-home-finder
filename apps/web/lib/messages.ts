@@ -186,6 +186,42 @@ export function alertsBackOn(
 }
 
 /**
+ * The answer to the tap that claimed one more free day of the trial.
+ *
+ * Says the one thing the tap changed and then shows the filter, like every
+ * other confirmation here: somebody who has just turned the alerts back on
+ * wants to see what is about to arrive, not to send /current and ask.
+ *
+ * No date on it, and this is the one confirmation that deliberately has none.
+ * `plan_until` is UTC and the hour on somebody's phone is not that hour for
+ * half the year, so a timestamp here would name a moment an hour off the one
+ * the button promised — the same reason `expiring_notice` in the worker gave
+ * up naming a clock time. "Your extra day" says the length, which is true
+ * wherever it is read.
+ *
+ * Two commands and not `COMMAND_HELP`. /pay belongs on a message about a plan
+ * ending, and this one is about a plan starting again; /current is the card
+ * printed directly above it.
+ */
+export function extraDayOn(criteria: Criteria): string {
+  return [
+    "✅ Your extra day is on",
+    "",
+    criteriaCard(criteria),
+    "",
+    "/update — change my search",
+    "/stop — delete my filter",
+  ].join("\n");
+}
+
+// The answer to a second tap on the same button. A reply button stays in the
+// chat for ever, so this is read by somebody tapping last week's offer — and a
+// button that visibly does nothing is worse than no button. Short, because
+// there is nothing to decide: the day is spent, and the offer of a plan has
+// its own message.
+export const GIFT_USED = "Your free day has already been used.";
+
+/**
  * What somebody is told when a refund goes through.
  *
  * Says the amount, then what it means for the alerts, then how to come back —

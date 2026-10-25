@@ -73,6 +73,20 @@ export default async function UserPage({
                 {spent ? " out of messages" : " expired"}
               </span>
             )}
+            {/* A trial running its second day is the same plan key, the same
+                share and the same thirty messages as one running its first,
+                so nothing else on this page distinguishes it — see 0071. Only
+                while they are on the trial: once something has been bought
+                the plan name is the answer to "what are we serving", and the
+                gift stays on the tile below as history. */}
+            {who.trial_gift_at && who.plan === "trial" && (
+              <span
+                className={`badge ${ended ? "warning" : "good"}`}
+                title={`extra free day granted ${at(who.trial_gift_at)}`}
+              >
+                {" extended trial"}
+              </span>
+            )}
           </h1>
           <p className="hint">
             Joined {at(who.joined)} · consent {who.consent_source ?? "—"}{" "}
@@ -101,9 +115,20 @@ export default async function UserPage({
                 note="free tier's share" />
           <Metric label="Paid in total" value={pounds(who.paid_total_pence)}
                 note={`${who.paid_count} payment${who.paid_count === 1 ? "" : "s"}, last ${ago(who.last_paid_at)}`} />
+          {/* The gift keeps its place here after the trial is over and after
+              anything bought on the back of it: the one question worth asking
+              of this feature is how many of the extra days turned into
+              payments, and this is where somebody reads it one account at a
+              time. Comped days first — those are ours to explain. */}
           <Metric label="Plan runs to"
                 value={who.plan_until ? dayOf(who.plan_until) : "no end"}
-                note={who.comped_days > 0 ? `${who.comped_days} days comped` : undefined} />
+                note={
+                  who.comped_days > 0
+                    ? `${who.comped_days} days comped`
+                    : who.trial_gift_at
+                      ? `extra free day ${dayOf(who.trial_gift_at)}`
+                      : undefined
+                } />
           {/* The other half of "is this plan live", and the half the date
               cannot show. Only for a metered plan, which is WhatsApp's: there
               is nothing to meter where delivery is free, and a tile reading

@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from worker.contracts.notify import Action, Alert, ListingView, Recipient
+from worker.notify.plans import GIFT_BUTTON, GIFT_TAP, gift_offer
 from worker.notify.telegram import render_listing as render_telegram
 from worker.notify.whatsapp import (
     WhatsAppNotifier,
@@ -854,3 +855,47 @@ def test_ops_alerts_do_not_go_to_customers_on_whatsapp() -> None:
 
     assert notifier().supports("listing")
     assert not notifier().supports("ops")
+
+
+def test_the_free_day_is_offered_with_a_button_that_sends_something_back() -> None:
+
+    # The tap has to do two things and a url button does neither: it grants the
+    # day and, being an inbound message, it reopens the 24-hour window the day
+    # is spent in. A link would have left us with a trial we had just extended
+    # and no route to the person on it — the mistake 0070 records about the
+    # notice template.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(1)),
+        Alert(
+            kind="expiring",
+            text=gift_offer(),
+            actions=[Action(label=GIFT_BUTTON, short=GIFT_BUTTON, callback=GIFT_TAP)],
+        ),
+    )
+
+    assert result.ok
+    interactive = calls[0]["payload"]["interactive"]
+    assert interactive["type"] == "button"
+    assert interactive["action"]["buttons"] == [
+        {"type": "reply", "reply": {"id": "gift", "title": "Extend 1 Day Free"}}
+    ]
+    assert "1 extra free day for you!" in interactive["body"]["text"]
+
+def test_the_free_day_cannot_be_offered_to_a_shut_window() -> None:
+
+    # Which is why it rides on the warning five minutes before the end rather
+    # than on the expiry: there is no template for it and there never will be,
+    # so outside the window there is nothing to send.
+    calls, sender = sent_through(messages=[{"id": "x"}])
+    result = notifier(sender).send(
+        Recipient(channel="whatsapp", address="447700900123", last_inbound=hours_ago(30)),
+        Alert(
+            kind="expiring",
+            text=gift_offer(),
+            actions=[Action(label=GIFT_BUTTON, short=GIFT_BUTTON, callback=GIFT_TAP)],
+        ),
+    )
+
+    assert result.ok is False
+    assert calls == []

@@ -1180,6 +1180,179 @@ def test_the_same_plan_is_not_warned_early_while_the_window_is_wide_open(
 
     assert store.claim_plan_notices(conn) == []
 
+# ── one more free day, for a trial that barely reached anybody ────────────
+
+def had_messages(conn: Any, user_id: int, count: int, *, kind: str = "listing") -> None:
+    """`count` WhatsApp messages already billed in this period."""
+
+    conn.execute(
+        """
+        INSERT INTO wa_messages (user_id, kind, cost_micros)
+        SELECT %s, %s, 0 FROM generate_series(1, %s)
+        """,
+        (user_id, kind, count),
+    )
+
+def test_a_quiet_trial_is_offered_one_more_day_after_the_warning(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Two messages and in this order. The trial is ending, and then, separately,
+    # here is another day of it: a gift that arrives before the thing it is a
+    # gift about has been announced reads as an upsell.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    had_messages(conn, user_id, 4)
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 2
+    warning, gift = (alert for _, alert in notifier.sent)
+    assert "free trial ends in a few minutes" in (warning.text or "")
+    assert "1 extra free day for you!" in (gift.text or "")
+    # One url button on the warning, one reply button on the gift. They cannot
+    # share a message — WhatsApp carries one shape or the other — which is why
+    # there are two messages and not three more lines.
+    assert [a.url is not None for a in warning.actions] == [True]
+    assert [a.callback for a in gift.actions] == ["gift"]
+    assert all(a.url is None for a in gift.actions)
+
+def test_both_messages_are_in_the_ledger(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gift is a message Meta charges for like any other, and the allowance
+    # it is counted against is the one the extra day will reset. Two notices,
+    # because that is what went out.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    kinds = conn.execute(
+        "SELECT kind, count(*) AS n FROM wa_messages WHERE user_id = %s GROUP BY kind",
+        (user_id,),
+    ).fetchall()
+    assert [(r["kind"], int(r["n"])) for r in kinds] == [("notice", 2)]
+
+def test_a_trial_that_delivered_is_warned_and_nothing_more(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Eleven is not ten. A trial that reached somebody has done its job, and
+    # another day of it is free service rather than an argument for paying.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    had_messages(conn, user_id, 11)
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+    assert "1 extra free day for you!" not in (notifier.sent[0][1].text or "")
+
+def test_a_trial_past_ten_messages_is_still_told_it_has_ended(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The old path, unchanged, for everybody the gift does not reach: the
+    # warning five minutes out and then the sentence saying the trial is over.
+    # Eleven messages is the first count that is not owed a free day, and the
+    # whole point of this test is that nothing about it moved.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    had_messages(conn, user_id, 11)
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
+        (user_id,),
+    )
+    outbox.notify_plan_changes(conn, run)
+
+    kinds = [alert.kind for _, alert in notifier.sent]
+    assert kinds == ["expiring", "expired"]
+    warning, ended = (alert for _, alert in notifier.sent)
+    assert "free trial ends in a few minutes" in (warning.text or "")
+    assert "Your free trial has ended, so alerts have stopped." in (ended.text or "")
+    # And neither of them carries the gift.
+    assert all(
+        a.callback != "gift" for alert in (warning, ended) for a in alert.actions
+    )
+
+def test_the_free_day_is_offered_once_per_account_for_ever(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The gift moves `plan_until` by a day, so the extended trial is a fresh
+    # period with a warning of its own at the end of it — and that warning must
+    # not carry a second gift, however quiet the extra day also was.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    conn.execute(
+        "UPDATE users SET trial_gift_at = now() - interval '1 day' WHERE id = %s",
+        (user_id,),
+    )
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+
+def test_a_paid_plan_ending_quietly_is_not_offered_a_free_day(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A month that delivered four messages is a filter too tight or a quiet
+    # market, and the answer to that is /update.
+    user_id = wa_plan_ending(conn, plan="paid", minutes_left=3, inbound_minutes=60)
+    had_messages(conn, user_id, 4)
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(notifier.sent) == 1
+
+def test_the_expiry_notice_carries_no_gift(
+    conn: Any, run: Run, notifier: FakeNotifier, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The stage that cannot be delivered on WhatsApp — the window shuts as the
+    # trial ends and no template is bought to tell somebody a free thing has
+    # finished. An offer attached to it is an offer nobody receives, so it is
+    # attached to the warning five minutes earlier instead.
+    user_id = wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    conn.execute(
+        "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
+        (user_id,),
+    )
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert [alert.kind for _, alert in notifier.sent] == ["expired"]
+
+def test_a_warning_that_was_not_delivered_takes_the_free_day_with_it(
+    conn: Any, run: Run, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The offer is the second of two and never the only one. A send that failed
+    # is a warning nobody read, and a gift on its own would be a gift with
+    # nothing to be about — the claim goes back instead and both are tried again.
+    wa_plan_ending(conn, plan="trial", minutes_left=3, inbound_minutes=60)
+    fake = FakeNotifier(SendResult(ok=False, error="503", retryable=True))
+    monkeypatch.setattr(outbox, "build_notifier", lambda channel: fake)
+
+    # The evening digest is a message too, and these tests count messages.
+    monkeypatch.setattr(outbox, "digest_due", lambda: False)
+
+    outbox.notify_plan_changes(conn, run)
+
+    assert len(fake.sent) == 1
+    assert [row["stage"] for row in store.claim_plan_notices(conn)] == ["hour"]
+
 def test_a_subscriber_with_weeks_left_is_not_warned_when_their_window_shuts(
     conn: Any
 ) -> None:
@@ -1568,7 +1741,6 @@ def test_the_daily_cap_counts_every_message_not_only_the_alerts(
 
     assert held_reasons(conn) == ["daily cap"]
 
-
 def test_a_paying_subscriber_is_exempt_from_the_daily_cap(
     conn: Any, run: Run
 ) -> None:
@@ -1579,7 +1751,6 @@ def test_a_paying_subscriber_is_exempt_from_the_daily_cap(
         store.record_wa_message(conn, user_id, "reply")
 
     assert held_reasons(conn) == [None]
-
 
 def test_yesterdays_messages_do_not_count_against_today(
     conn: Any, run: Run
@@ -1597,7 +1768,6 @@ def test_yesterdays_messages_do_not_count_against_today(
     )
 
     assert held_reasons(conn) == [None]
-
 
 def wa_alert_queued_while_live(
     conn: Any, run: Run, *, plan: str = "trial", plan_hours: int = 1
@@ -1628,13 +1798,11 @@ def wa_alert_queued_while_live(
     assert held_reasons(conn) == [None]
     return user_id
 
-
 def ended(conn: Any, user_id: int) -> None:
     conn.execute(
         "UPDATE users SET plan_until = now() - interval '1 minute' WHERE id = %s",
         (user_id,),
     )
-
 
 def test_a_finished_whatsapp_trial_holds_the_backlog_an_open_window_would_release(
     conn: Any, run: Run
@@ -1653,7 +1821,6 @@ def test_a_finished_whatsapp_trial_holds_the_backlog_an_open_window_would_releas
     # that is not being sent, and renewing must not find it out of them.
     assert int(notification(conn)["attempts"]) == 0
 
-
 def test_a_finished_whatsapp_subscription_is_no_different_from_a_trial(
     conn: Any, run: Run
 ) -> None:
@@ -1663,7 +1830,6 @@ def test_a_finished_whatsapp_subscription_is_no_different_from_a_trial(
     ended(conn, user_id)
 
     assert held_reasons(conn) == ["plan ended"]
-
 
 def test_a_spent_whatsapp_allowance_holds_the_backlog_with_days_still_left(
     conn: Any, run: Run
@@ -1687,7 +1853,6 @@ def test_a_spent_whatsapp_allowance_holds_the_backlog_with_days_still_left(
 
     assert held_reasons(conn) == ["plan ended"]
 
-
 def test_paying_again_releases_what_the_ended_plan_was_holding(
     conn: Any, run: Run
 ) -> None:
@@ -1707,7 +1872,6 @@ def test_paying_again_releases_what_the_ended_plan_was_holding(
     assert held_reasons(conn) == [None]
     assert len(store.claim_queued(conn, limit=10, max_attempts=3)) == 1
 
-
 def test_a_lapsed_telegram_plan_keeps_receiving_its_share(
     conn: Any, run: Run
 ) -> None:
@@ -1726,7 +1890,6 @@ def test_a_lapsed_telegram_plan_keeps_receiving_its_share(
     claimed = store.claim_queued(conn, limit=10, max_attempts=3)
     assert len(claimed) == 1
     assert outbox.withheld_share(claimed[0]) == 10
-
 
 def test_nothing_holds_a_telegram_message(conn: Any, run: Run) -> None:
     # Which is what keeps `Oldest queued` honest: it ages the rows with no
@@ -1916,7 +2079,6 @@ def test_renewing_starts_the_alerts_again(conn: Any, run: Run) -> None:
     outbox.queue_matches(conn, run, source_key="openrent", listing_ids=[make_listing(conn, "2")])
     assert counts(conn) == {"queued": 1}
 
-
 # ── the starter batch is the other way a listing reaches somebody ────────
 #
 # `queue_matches` asks `sources.announces` of the reader handing its catch
@@ -1927,11 +2089,9 @@ def test_renewing_starts_the_alerts_again(conn: Any, run: Run) -> None:
 # `seed_new_subscriptions`, because the pool is where the rule now lives and
 # the seeding around it announces itself to ops over the network.
 
-
 def seen_by(conn: Any, listing_id: int, *readers: str) -> None:
     for reader in readers:
         store.record_sightings(conn, [listing_id], reader)
-
 
 def pool(conn: Any) -> list[str]:
     return [
@@ -1939,12 +2099,10 @@ def pool(conn: Any) -> list[str]:
         for row in store.recent_listings(conn, days=3, limit=400)
     ]
 
-
 def test_the_starter_pool_offers_what_a_scraper_saw(conn: Any) -> None:
     seen_by(conn, make_listing(conn, "scraped"), "openrent")
 
     assert pool(conn) == ["scraped"]
-
 
 def test_the_starter_pool_leaves_out_what_only_a_muted_source_saw(conn: Any) -> None:
     """The leak this closes. See 0060.
@@ -1959,7 +2117,6 @@ def test_the_starter_pool_leaves_out_what_only_a_muted_source_saw(conn: Any) -> 
 
     assert pool(conn) == []
 
-
 def test_a_flat_both_of_them_saw_is_offered_exactly_once(conn: Any) -> None:
     # Two sightings of one listing, and the filter must not turn that into two
     # rows in the pool — which is what a join in place of EXISTS would do, and
@@ -1969,14 +2126,12 @@ def test_a_flat_both_of_them_saw_is_offered_exactly_once(conn: Any) -> None:
 
     assert pool(conn) == ["both"]
 
-
 def test_the_feed_s_own_finds_are_offered_while_it_still_announces(conn: Any) -> None:
     # The rule is `announces`, not the name of the feed. Un-muting has to put
     # the welcome back along with the alerts, in one UPDATE and no deploy.
     seen_by(conn, make_listing(conn, "from_the_feed"), "tg_feed")
 
     assert pool(conn) == ["from_the_feed"]
-
 
 def test_a_listing_no_reader_recorded_is_not_offered(conn: Any) -> None:
     # The honest cost of reading the evidence rather than guessing: nothing

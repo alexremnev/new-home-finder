@@ -267,6 +267,14 @@ export async function everyonePage(
           </td>
           <td>
             {row.plan}
+            {/* A trial running its second day looks exactly like one running
+                its first from every other column here — same plan key, same
+                share, same thirty messages. Only on the trial itself: once
+                they have bought something the plan name says what is being
+                served, and the gift is history the card still carries. */}
+            {row.trial_gift_at && row.plan === "trial" && (
+              <div className="metric-note">extended trial</div>
+            )}
             {row.plan_until && (
               <div className="metric-note">until {dayOf(row.plan_until)}</div>
             )}

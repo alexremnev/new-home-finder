@@ -853,6 +853,14 @@ def claim_plan_notices(
             WITH candidate AS (
                 SELECT u.id AS user_id, u.plan, u.plan_until,
                        e.message_allowance, e.messages_used,
+                       -- Whether this account has already had its one free
+                       -- extra day, which `owed_a_free_day` reads together
+                       -- with `messages_used` to decide whether the warning
+                       -- below is followed by the offer of another. Here and
+                       -- not asked for separately because the notice is the
+                       -- only thing that offers it, and a second query would
+                       -- be a second answer to "is this person eligible".
+                       u.trial_gift_at,
                        -- Out of days outranks out of messages: when both are
                        -- true the period is over either way, and "you have
                        -- used all 900" would be answering the smaller
@@ -995,7 +1003,7 @@ def claim_plan_notices(
                    -- which has no template, was dropped even for the trial
                    -- whose window was still open.
                    uc.last_inbound_at,
-                   d.message_allowance, d.messages_used,
+                   d.message_allowance, d.messages_used, d.trial_gift_at,
                    -- What the alerts fall back to, so the notice can say so
                    -- rather than guessing. Read from the entitlement view and
                    -- not from the lapsed plan directly: the fallback depends on

@@ -20,9 +20,12 @@ from worker.contracts.notify import (
 from worker.notify import build_notifier
 from worker.notify.ops import tell_ops
 from worker.notify.plans import (
+    GIFT_BUTTON,
+    GIFT_TAP,
     checkin_notice,
     checkout_link,
     digest_notice,
+    gift_offer,
     notice_for,
 )
 from worker.notify.whatsapp import window_open
@@ -731,6 +734,113 @@ def worth_a_template(row: Row) -> bool:
 
     return str(row["stage"]) in ("expired", "spent") and str(row["plan"]) != "trial"
 
+# How little a trial has to have delivered for another day of it to be worth
+# offering. Ten messages, counting everything Meta charged us for in the
+# period — the same number `user_entitlement.messages_used` reports and the
+# same thing the thirty is an allowance of. See 0071 for why one definition of
+# "a message" and not two.
+#
+# A constant and not a row in `plans`, for the reason `NOTICE_LEAD_MINUTES`
+# and `CHECKIN_MINUTES` are: it is a rule about when to say something, read by
+# the one function that says it, and nothing outside this file asks.
+GIFT_MESSAGES = 10
+
+def owed_a_free_day(row: Row) -> bool:
+    """Whether this notice is followed by the offer of one more free day.
+
+    Four questions, and all four have to be yes.
+
+    WhatsApp, because the gift answers a cost that only exists there: the
+    trial is one day long because Meta bills per message — 0038 — and one
+    quiet day is how somebody ends up having seen nothing. On Telegram the
+    trial runs two days and what follows it is the lapsed tier's share of the
+    matches rather than silence, so there is nothing here to repair.
+
+    The trial, and not a subscription. A month that delivered ten messages is
+    a filter too tight or a quiet market, and the answer to that is /update,
+    not another month of the same filter for free.
+
+    The warning stage, `hour`, and never the expiry. On WhatsApp the expiry
+    notice for a trial is the one message that cannot be delivered — the
+    window shuts as the trial ends and `worth_a_template` will not buy a
+    template to tell somebody a free thing has finished — so an offer attached
+    to it would be an offer nobody receives. The warning is five minutes
+    earlier and inside the window by construction; see `claim_plan_notices`.
+
+    And once per account for ever, which is `trial_gift_at`. The gift moves
+    `plan_until` by a day, so the extended trial is a fresh period with its own
+    `hour` warning at the end of it — without this column that warning would
+    carry another gift, and so would the one after it.
+    """
+
+    return (
+        str(row["channel"]) == "whatsapp"
+        and str(row["plan"]) == "trial"
+        and str(row["stage"]) == "hour"
+        and row.get("trial_gift_at") is None
+        and int(row["messages_used"] or 0) <= GIFT_MESSAGES
+    )
+
+def offer_a_free_day(conn: Conn, row: Row, notifier: Any, stage: Any) -> None:
+    """Send the gift offer, after the warning it follows.
+
+    A second message rather than two more lines on the first, because the two
+    cannot be one: WhatsApp carries a url button or reply buttons and never
+    both, and the warning's button is the checkout link. Splitting them is also
+    what makes the order readable — the trial is ending, and then, separately,
+    here is another day of it.
+
+    No claim of its own. It rides on the `hour` notice's claim, which the
+    warning has already spent, so a send that fails here is an offer nobody
+    hears: `trial_gift_at` stays NULL but the stage does not come round again
+    while `plan_until` stands. That is the cost of not giving one message two
+    claims to coordinate, and the window is open — the warning has just gone
+    through it — so the failures this leaves on the table are the rare ones.
+
+    Billed like any other message in the period. It is the second of two and it
+    is sent to somebody who has had almost nothing, so the two together are
+    still inside the day's thirty.
+    """
+
+    user_id = int(row["user_id"])
+    result = notifier.send(
+        Recipient(
+            channel=str(row["channel"]),
+            address=str(row["address"]),
+            last_inbound=row.get("last_inbound_at"),
+        ),
+        Alert(
+            kind="expiring",
+            text=gift_offer(),
+            # A reply button and not a link: the tap is an inbound message,
+            # which is both how the gift is claimed and what reopens the
+            # 24-hour window it is spent in. A url button would send us
+            # nothing and leave the window shut on a trial we had just
+            # extended — the mistake 0070 records about the notice template.
+            actions=[
+                Action(label=GIFT_BUTTON, short=GIFT_BUTTON, callback=GIFT_TAP)
+            ],
+        ),
+    )
+    if result.ok:
+        store.record_wa_message(
+            conn, user_id, "notice",
+            provider_msg_id=result.provider_msg_id,
+            billed_as=result.billed_as or "service",
+        )
+        stage.count("free_day_offered")
+        return
+
+    # Info and not warn. The offer is a kindness on top of a notice that was
+    # delivered, so a refusal here costs somebody a day they did not know was
+    # coming — worth counting, and not worth waking anybody.
+    stage.count("free_day_not_offered")
+    stage.log(
+        "info",
+        f"the free extra day was not offered to user {user_id}: {result.error}",
+        user_id=user_id,
+    )
+
 def reachable_later(row: Row) -> bool:
     """Whether handing a plan notice back is a retry with somewhere to land.
 
@@ -989,6 +1099,16 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                         billed_as=result.billed_as or "service",
                     )
                 stage.count(f"sent_{notice_stage}")
+
+                # And, for a trial that barely reached anybody, one more day of
+                # it. After the warning and never instead of it: the person is
+                # told their trial is ending and then offered another day,
+                # which is an order that only works in that direction. Only
+                # once the warning was actually delivered, too — an offer that
+                # arrives on its own is an offer with nothing to be about. See
+                # `owed_a_free_day`.
+                if owed_a_free_day(row):
+                    offer_a_free_day(conn, row, notifier, stage)
             else:
                 # The claim is given back only when the same send could work
                 # later, which on WhatsApp means the window is open and
@@ -1056,6 +1176,7 @@ __all__ = [
     "in_share", "interleave_by_user",
     "listing_view",
     "notify_plan_changes",
-    "outcome_for", "queue_matches", "seed_new_subscriptions", "signup_notice",
+    "offer_a_free_day", "outcome_for", "owed_a_free_day",
+    "queue_matches", "seed_new_subscriptions", "signup_notice",
     "withheld_share",
 ]
