@@ -1165,6 +1165,14 @@ class Fetcher:
         """
 
         self._seen[host] = url
+        pool = self._pool(via)
+        if pool is not None and pool.memory is not None:
+            # The exit that carried it. Worth recording for two different
+            # readers of the same fact: this address is holding a live
+            # `__cf_bm` and so should be drawn before a cold one, and it is an
+            # address something has been served on and so is a session the
+            # next run may resume. See `session.Session.warmed`.
+            pool.memory.warmed(pool.port)
         if via == DIRECT and host in self.blocked:
             self.blocked.discard(host)
             self._memory.forget(host)

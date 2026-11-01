@@ -96,6 +96,25 @@ from pathlib import Path
 #: off cooldown is starting a fresh session rather than resuming a scored one.
 COOLDOWN = 3600.0
 
+#: How long an exit is treated as holding a warm session, in seconds.
+#:
+#: 1800, which is not a judgement: it is the measured lifetime of `__cf_bm`,
+#: the one cookie that makes a repeat request cheap. See the module note —
+#: Zoopla answers a cold request with four Set-Cookie headers and a warm one
+#: with one, and a challenge is what the cold request gets.
+#:
+#: What this buys is the draw. `_fresh` used to pick uniformly at random from
+#: whatever was not on cooldown, so every address after the first refusal was
+#: a cold session from a datacentre address — which is the most challengeable
+#: thing this module can send. Preferring an exit whose token is still alive
+#: costs no extra request and starts the attempt one step further along.
+#:
+#: Deliberately shorter than `COOLDOWN`: an exit that refused us is cooled for
+#: an hour, so it can never come back round still counting as warm. The two
+#: are not in competition — cooldown says "not this one", warmth only orders
+#: what is left.
+WARM_FOR = 1800.0
+
 #: How long one exit address may serve a reader before it is retired, seconds.
 #:
 #: Not needed for correctness — a dead sticky session answers with a refusal
@@ -195,6 +214,18 @@ class Session:
     since: float = 0.0
     #: Exit port → the moment it may be drawn again.
     cooldown: dict[int, float] = field(default_factory=dict)
+    #: Exit port → the moment its warm session stops counting. See WARM_FOR.
+    warm: dict[int, float] = field(default_factory=dict)
+    #: Whether `port` has actually served a page since it was drawn.
+    #:
+    #: The distinction this exists for: a run that gives up on a pool burns
+    #: the exit it finished on and draws a replacement it then never uses. The
+    #: replacement is a guess, and `since` is set when it is drawn — so to the
+    #: next run it looked exactly like a session that had been working for
+    #: seconds. Measured on the degraded `zoopla_london` runs of 27-30 October
+    #: 2026: every run's recorded `exit_port` turns up as the *first refusal*
+    #: of the run after it, sixteen consecutive pairs of it.
+    proven: bool = False
     #: Host → the moment its direct address is worth probing again.
     blocked: dict[str, float] = field(default_factory=dict)
     #: Whether anything changed and `save` has work to do.
@@ -224,6 +255,17 @@ class Session:
             for key, value in _mapping(raw.get("cooldown")).items()
             if str(key).isdigit()
         }
+        session.warm = {
+            int(str(key)): _float(value)
+            for key, value in _mapping(raw.get("warm")).items()
+            if str(key).isdigit()
+        }
+        # Absent in a file written before this field existed, and read as
+        # False there rather than True: the old code kept its port whether or
+        # not anything had been served on it, so an old file cannot say which
+        # of the two it holds. The cost of guessing low is one extra draw, on
+        # the first run after a deploy, per reader.
+        session.proven = raw.get("proven") is True
         session.blocked = {
             str(key).lower(): _float(value)
             for key, value in _mapping(raw.get("blocked")).items()
@@ -236,10 +278,14 @@ class Session:
     def pick(self, ports: tuple[int, ...]) -> int | None:
         """The exit port to use. The remembered one whenever it still serves.
 
-        "Still serves" is three conditions, and the third is the one worth
-        naming: a port that is not in `ports` at all is a leftover from a
-        different `SCRAPE_PROXY`, and reconnecting to it would send the run at
-        a port on the new proxy that nobody is listening on.
+        "Still serves" is four conditions, and two are worth naming. A port
+        that is not in `ports` at all is a leftover from a different
+        `SCRAPE_PROXY`, and reconnecting to it would send the run at a port on
+        the new proxy that nobody is listening on. And a port nothing has been
+        served on is not a session to resume — it is the replacement the last
+        run drew on its way out and never tried, so resuming it means opening
+        on an address whose only measured property is that it is cold. See
+        `proven`.
         """
 
         if not ports:
@@ -249,6 +295,7 @@ class Session:
         if (
             self.port in ports
             and self.port not in self.cooldown
+            and self.proven
             and now - self.since < MAX_AGE
         ):
             return self.port
@@ -301,10 +348,37 @@ class Session:
         ]
         if not free:
             free = [one for one in ports if one != self.port] or list(ports)
-        self.port = random.choice(free)
+        # Warm first, and only as an ordering: `free` has already decided
+        # which addresses may be drawn at all, and this chooses among them.
+        # Random within the warm set for the same reason the whole draw is
+        # random — two readers burning an exit at the same moment should not
+        # walk the range in step.
+        warm = [one for one in free if self.warm.get(one, 0.0) > now]
+        self.port = random.choice(warm or free)
         self.since = now
+        # Drawn, not proven. Nothing has been served on it yet, and until
+        # something is this port is not a session for the next run to resume.
+        self.proven = False
         self.dirty = True
         return self.port
+
+    def warmed(self, port: int | None) -> None:
+        """Record that this exit completed an exchange. See WARM_FOR.
+
+        Two things at once, because one 2xx establishes both: this address is
+        holding a live `__cf_bm` and so is worth drawing again over a cold
+        one, and it is an address something has actually been served on — the
+        difference between a session to resume and a guess to discard.
+
+        Not saved here. A write per page would be a file write per page, and
+        `Fetcher.close` already saves every pool for exactly this case.
+        """
+
+        if port is None:
+            return
+        self.warm[port] = time.time() + WARM_FOR
+        self.proven = True
+        self.dirty = True
 
     # ── the host that will not serve this machine ──────────────────────────
 
@@ -384,18 +458,30 @@ class Session:
         for port in [one for one, until in self.cooldown.items() if until <= when]:
             del self.cooldown[port]
             self.dirty = True
+        for port in [one for one, until in self.warm.items() if until <= when]:
+            del self.warm[port]
+            self.dirty = True
         for host in [one for one, until in self.blocked.items() if until <= when]:
             del self.blocked[host]
             self.dirty = True
 
     def _trim(self) -> None:
-        """Keep `cooldown` bounded. See REMEMBERED."""
+        """Keep `cooldown` and `warm` bounded. See REMEMBERED.
 
-        if len(self.cooldown) <= REMEMBERED:
-            return
-        order = sorted(self.cooldown.items(), key=lambda pair: pair[1])
-        self.cooldown = dict(order[-REMEMBERED:])
-        self.dirty = True
+        Both, because both are keyed by port against a 501-port range and
+        both are written from the same place. `warm` cannot in practice reach
+        the ceiling — an entry lives half as long as a cooldown one and only
+        a served page makes one — but a bound that holds for one of two
+        identical dicts is a bound somebody will be surprised by.
+        """
+
+        for which in ("cooldown", "warm"):
+            kept: dict[int, float] = getattr(self, which)
+            if len(kept) <= REMEMBERED:
+                continue
+            order = sorted(kept.items(), key=lambda pair: pair[1])
+            setattr(self, which, dict(order[-REMEMBERED:]))
+            self.dirty = True
 
     def save(self) -> bool:
         """Write it out if anything changed. Never raises; may do nothing.
@@ -415,6 +501,8 @@ class Session:
         payload = {
             "port": self.port,
             "since": round(self.since, 3),
+            "proven": self.proven,
+            "warm": {str(key): round(value, 3) for key, value in self.warm.items()},
             "cooldown": {str(key): round(value, 3) for key, value in self.cooldown.items()},
             "blocked": {key: round(value, 3) for key, value in self.blocked.items()},
         }
@@ -441,6 +529,6 @@ def _mapping(raw: object) -> dict[object, object]:
 
 
 __all__ = [
-    "BLOCK_FOR", "COOLDOWN", "JAR_FOR", "MAX_AGE", "REMEMBERED",
+    "BLOCK_FOR", "COOLDOWN", "JAR_FOR", "MAX_AGE", "REMEMBERED", "WARM_FOR",
     "Session", "state_dir",
 ]

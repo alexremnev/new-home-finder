@@ -24,11 +24,60 @@ PORTS = tuple(range(10000, 10010))
 def test_the_chosen_exit_survives_a_new_session_object() -> None:
     # Which is the whole purpose: a run is a process, and two Session objects
     # a few minutes apart are two runs.
+    #
+    # Something has to have been *served* on it for that to hold, which is the
+    # condition `warmed` records and the one this test grew: an exit nothing
+    # has been served on is covered by the test below instead.
     first = mem.Session.load("zoopla")
     chosen = first.pick(PORTS)
+    first.warmed(chosen)
     assert first.save() is True
 
     assert mem.Session.load("zoopla").pick(PORTS) == chosen
+
+
+def test_an_exit_nothing_was_served_on_is_not_resumed() -> None:
+    # The replacement a failing run draws on its way out of a pool. `_rotate`
+    # burns the exit it finished on and draws another, and that other one is
+    # never tried — so `since` says "drawn seconds ago" about an address whose
+    # only measured property is that it is cold.
+    #
+    # Measured on the degraded `zoopla_london` runs of 27-30 October 2026:
+    # every run's recorded `exit_port` turned up as the *first refusal* of the
+    # run after it, sixteen consecutive pairs of it. See `Session.proven`.
+    first = mem.Session.load("zoopla")
+    drawn = first.pick(PORTS)
+    assert first.proven is False
+    assert first.save() is True
+
+    assert mem.Session.load("zoopla").pick(PORTS) != drawn
+
+
+def test_a_warm_exit_is_drawn_before_a_cold_one() -> None:
+    # Only an ordering: `burn` has already decided which addresses may be
+    # drawn at all. But the attempt after a refusal used to be a uniformly
+    # random cold session from a datacentre address, which is the single most
+    # challengeable thing this module can send — so when there is a live
+    # `__cf_bm` to be had, it is had. See WARM_FOR.
+    kept = mem.Session.load("zoopla")
+    kept.pick(PORTS)
+    warm = next(one for one in PORTS if one != kept.port)
+    kept.warm[warm] = time.time() + mem.WARM_FOR
+
+    assert kept.burn(PORTS) == warm
+
+
+def test_warmth_outlives_the_token_it_stands_for_by_nothing() -> None:
+    # An entry past `WARM_FOR` is a cookie that has expired, so preferring the
+    # address it names would be preferring a cold session that merely used to
+    # be warm — and `expire` is what every other dated thing here goes through.
+    kept = mem.Session.load("zoopla")
+    kept.pick(PORTS)
+    stale = next(one for one in PORTS if one != kept.port)
+    kept.warm[stale] = time.time() - 1.0
+    kept.expire()
+
+    assert stale not in kept.warm
 
 
 def test_two_readers_do_not_see_each_other_s_exit() -> None:
