@@ -1,0 +1,33 @@
+[Unit]
+Description=Keep a Cloudflare clearance token warm for zoopla_london
+
+[Timer]
+Unit=london-home-finder-clearance.service
+
+# Weekday working hours only, and that is a decision rather than an oversight.
+#
+# The promise this exists to keep is "no more than thirty minutes without
+# data", and it only applies while `zoopla_london` runs every six minutes:
+# Mon..Fri 08:00-18:00. Outside that band the reader's own schedule is what
+# bounds the delay — twelve minutes in the evenings, and hourly overnight,
+# which breaks thirty minutes by itself on a completely healthy Zoopla. Running
+# a browser through the night would spend memory to improve a number that the
+# night timer has already decided.
+#
+# :05, :30 and :55 — about every twenty-five minutes, which is under the 1800
+# second life of `__cf_bm`, so the jar is never older than the token in it.
+#
+# The minutes are chosen to miss the reader's: `zoopla_london` fires at :01,
+# :07, :14, :20, :27, :33, :40, :46, :53 and :59, so each mint lands two to
+# four minutes clear of the next scrape — long enough to finish, which matters
+# because libcurl rewrites this jar when a reader's handle closes. See the
+# module note in worker/sources/clearance.py on why there is no lock.
+OnCalendar=Mon..Fri 08..17:05/25 Europe/London
+
+# Small, for the same reason the readers' is: the spacing above is the point,
+# and a wide draw would undo it.
+RandomizedDelaySec=15s
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

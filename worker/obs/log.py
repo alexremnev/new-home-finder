@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 import psycopg
 
+from worker.obs import host
+
 Level = Literal["debug", "info", "warn", "error"]
 Row = dict[str, Any]
 
@@ -38,7 +40,11 @@ class Run:
 
         self.trigger = trigger
         self.dry_run = dry_run
-        self.counters: dict[str, int] = {}
+        # `float` rather than `int` since the host sample joined them: a load
+        # average is the one counter here that is not a count. Ints go into a
+        # float-valued dict without complaint, and `json.dumps` writes 2 as 2
+        # either way, so nothing downstream reads differently.
+        self.counters: dict[str, float] = {}
         # The worst thing any stage of this run reported.
         #
         # Without it a run was recorded as whatever the job function returned,
@@ -167,6 +173,15 @@ class Run:
             status = self.worst
             if error is None:
                 error = f"{self._stage_note} stage was {self.worst}"
+
+        # What the box looked like, taken here rather than at the start: by
+        # now the run has been through whatever it was going to do, so this is
+        # the reading that says whether it had the room — a sample taken
+        # before the work is a sample of the machine at rest. One per run and
+        # never more, which is all the admin console's Host tab asks for. See
+        # `worker.obs.host` for why this lives in the run log at all, and why
+        # a field it could not read is absent rather than zero.
+        self.counters.update(host.snapshot().counters())
 
         self.conn.execute(
             """

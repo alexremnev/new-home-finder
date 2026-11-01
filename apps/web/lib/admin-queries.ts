@@ -2328,3 +2328,130 @@ export async function proxySpend(win: Win, jobs: string[]): Promise<ProxySpend[]
     [Math.round(win.mins), Math.round(win.endMins), jobs],
   ).catch(() => []);
 }
+
+export type HostHealth = {
+  /** When the most recent sample was taken, or null if nothing sampled. */
+  at: string | null;
+  cpus: number | null;
+  load1: number | null;
+  mem_total: number | null;
+  mem_available: number | null;
+  disk_total: number | null;
+  disk_free: number | null;
+  /** The worst the window saw, which is what a tile of "now" cannot show. */
+  load1_peak: number | null;
+  mem_low: number | null;
+  samples: number;
+};
+
+// What the worker's own machine looked like, read out of the run log.
+//
+// ── why this is not a metrics agent ──────────────────────────────────────
+//
+// Every run writes one sample of the box into its own counters when it
+// finishes — see `worker.obs.host` for why there. So "the box now" is "the
+// newest run's sample", and "the box at its worst" is an aggregate over the
+// same rows. No table, no agent, no scrape endpoint on a machine whose
+// firewall deliberately allows nothing in.
+//
+// The cost is honest and worth stating: resolution is one sample per run, so
+// a spike between two runs is invisible here. On this box the readers run
+// every six to twelve minutes through the working day, which is enough to
+// answer "was it short of memory this afternoon" and not enough to profile
+// anything.
+//
+// `host_mem_total` is the marker for "this run sampled at all": a run from
+// before that code existed, or one on a host with no /proc, has none of these
+// keys and must not be counted as a sample reading zero.
+export async function hostHealth(win: Win): Promise<HostHealth> {
+  const rows = await query<HostHealth>(
+    `WITH sampled AS (
+       SELECT r.started_at, r.counters
+         FROM job_runs r
+        WHERE r.started_at >  now() - make_interval(mins => $1::int)
+          AND r.started_at <= now() - make_interval(mins => $2::int)
+          AND r.counters ? 'host_mem_total'
+     ), latest AS (
+       SELECT * FROM sampled ORDER BY started_at DESC LIMIT 1
+     )
+     SELECT (SELECT started_at FROM latest)                            AS at,
+            (SELECT (counters->>'host_cpus')::int FROM latest)         AS cpus,
+            (SELECT (counters->>'host_load1')::float8 FROM latest)      AS load1,
+            (SELECT (counters->>'host_mem_total')::bigint FROM latest)  AS mem_total,
+            (SELECT (counters->>'host_mem_available')::bigint
+               FROM latest)                                            AS mem_available,
+            (SELECT (counters->>'host_disk_total')::bigint FROM latest) AS disk_total,
+            (SELECT (counters->>'host_disk_free')::bigint FROM latest)  AS disk_free,
+            -- The window's worst, which is the number a tile showing "now"
+            -- cannot give: a box that ran out of memory at 14:00 and recovered
+            -- looks healthy in the latest sample and is not.
+            max((counters->>'host_load1')::float8)
+              FILTER (WHERE jsonb_typeof(counters->'host_load1') = 'number')
+              AS load1_peak,
+            min((counters->>'host_mem_available')::bigint)
+              FILTER (WHERE jsonb_typeof(counters->'host_mem_available') = 'number')
+              AS mem_low,
+            count(*)::int AS samples
+       FROM sampled`,
+    [win.mins, win.endMins],
+  );
+  return (
+    rows[0] ?? {
+      at: null, cpus: null, load1: null, mem_total: null, mem_available: null,
+      disk_total: null, disk_free: null, load1_peak: null, mem_low: null, samples: 0,
+    }
+  );
+}
+
+export type BrowserUse = {
+  runs: number;
+  /** Runs that came away with a token. The rest spent the memory for nothing. */
+  minted: number;
+  degraded: number;
+  failed: number;
+  /** Largest RSS any one run's browser reached, in bytes. */
+  peak_bytes: number | null;
+  avg_seconds: number | null;
+  total_seconds: number | null;
+  last_at: string | null;
+};
+
+// What the headless browser cost, and whether it bought anything.
+//
+// One row, because there is exactly one job that launches it. The two numbers
+// that decide whether this whole arrangement stays are `peak_bytes` against
+// the slice's `MemoryMax`, and `minted` against `runs` — a browser that burns
+// 500 MB and comes away without a token is the worst of both worlds, and in
+// the combined "the box is fine" view it is invisible.
+export async function browserUse(win: Win, job = "clearance"): Promise<BrowserUse> {
+  const rows = await query<BrowserUse>(
+    `SELECT count(*)::int AS runs,
+            count(*) FILTER (
+              WHERE jsonb_typeof(counters->'clearance_minted') = 'number'
+                AND (counters->>'clearance_minted')::int > 0
+            )::int AS minted,
+            count(*) FILTER (WHERE status = 'degraded')::int AS degraded,
+            count(*) FILTER (WHERE status = 'failed')::int   AS failed,
+            max((counters->>'browser_peak_bytes')::bigint)
+              FILTER (WHERE jsonb_typeof(counters->'browser_peak_bytes') = 'number')
+              AS peak_bytes,
+            avg((counters->>'browser_seconds')::float8)
+              FILTER (WHERE jsonb_typeof(counters->'browser_seconds') = 'number')
+              AS avg_seconds,
+            sum((counters->>'browser_seconds')::float8)
+              FILTER (WHERE jsonb_typeof(counters->'browser_seconds') = 'number')
+              AS total_seconds,
+            max(started_at) AS last_at
+       FROM job_runs
+      WHERE job = $3
+        AND started_at >  now() - make_interval(mins => $1::int)
+        AND started_at <= now() - make_interval(mins => $2::int)`,
+    [win.mins, win.endMins, job],
+  );
+  return (
+    rows[0] ?? {
+      runs: 0, minted: 0, degraded: 0, failed: 0,
+      peak_bytes: null, avg_seconds: null, total_seconds: null, last_at: null,
+    }
+  );
+}

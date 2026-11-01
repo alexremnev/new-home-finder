@@ -127,6 +127,17 @@ def run_job(
         run_purge(conn, run, dry_run=cfg.dry_run)
         return "ok"
 
+    if job == "clearance":
+        # The headless browser, and the only job that launches one. Imported
+        # inside the branch for the same reason the portal readers are built
+        # through thunks: the delivery host installs neither the scraping extra
+        # nor the browser one, and `import worker.pipeline.run` must still work
+        # there. See worker.sources.clearance for what it does and why it is
+        # not the transport.
+        from worker.sources.clearance import mint
+
+        return mint(run, dry_run=cfg.dry_run)
+
     if job == "drain":
 
         seed_new_subscriptions(conn, run, dry_run=cfg.dry_run)

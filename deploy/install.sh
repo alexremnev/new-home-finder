@@ -47,7 +47,13 @@ cd "$DIR"
 # `scrape` brings curl_cffi, which the portal readers need: Rightmove and
 # Zoopla both answer a plain client 403 and the same request 200 once the TLS
 # handshake looks like a browser's. Without it the portal readers cannot import.
-uv sync --frozen --no-dev --extra ingest --extra scrape
+uv sync --frozen --no-dev --extra ingest --extra scrape --extra browser
+
+# The browser binary, which is not a Python package and so is not in the lock.
+# `--with-deps` pulls the shared libraries Chromium needs from apt; without it
+# the launch fails at runtime with a missing .so rather than at install time.
+# Idempotent: a second run finds the browser already there and does nothing.
+.venv/bin/playwright install --with-deps chromium
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
 echo "== settings"
@@ -76,7 +82,7 @@ for extra in /etc/london-home-finder/readers/*.env; do
 done
 
 echo "== timers"
-cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
+cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer "$DIR"/deploy/systemd/*.slice /etc/systemd/system/
 systemctl daemon-reload
 
 # The OpenRent sitemap reader, gone. It discovered from the nationwide sitemap,
@@ -109,7 +115,7 @@ systemctl disable --now london-home-finder-openrent_v2.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-openrent_v2.timer
 
 systemctl daemon-reload
-for job in ingest rightmove zoopla_london onthemarket spareroom drain rollup report purge; do
+for job in ingest rightmove zoopla_london onthemarket spareroom clearance drain rollup report purge; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 
