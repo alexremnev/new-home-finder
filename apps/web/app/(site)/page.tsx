@@ -2,12 +2,13 @@ import { FURNISHED, PROPERTY_TYPES } from "@/lib/criteria";
 import { headers } from "next/headers";
 
 import {
-  botChat, channelPrices, districtNames, enabledDistricts, returningFor,
-  signupPlan, trialDaysOn, whatsappChat,
+  botChat, channelPrices, districtNames, enabledDistricts, giftDaysOn,
+  returningFor, signupPlan, trialDaysOn, whatsappChat,
 } from "@/lib/plans";
 import { recordVisit } from "@/lib/visits";
 import { SubscribeForm } from "./form";
 import { TelegramMark, WhatsAppMark } from "./logos";
+import { Faq, HowItWorks, Plans, portalSentence, QUESTIONS } from "./sections";
 
 // The canonical lives here and not in the root layout: metadata is
 // inherited, so a canonical up there would have every url on the site —
@@ -45,10 +46,14 @@ export default async function Page({
   const offers = {
     telegram: {
       trialDays: plan ? trialDaysOn(plan, "telegram") : null,
+      giftDays: plan ? giftDaysOn(plan, "telegram") : null,
       prices: telegramPrices,
     },
     whatsapp: {
       trialDays: plan ? trialDaysOn(plan, "whatsapp") : null,
+      // The day a quiet trial can be given back, said beside the plan's own
+      // rather than added to it — see `giftDaysOn`.
+      giftDays: plan ? giftDaysOn(plan, "whatsapp") : null,
       prices: whatsappPrices,
     },
   };
@@ -105,6 +110,12 @@ export default async function Page({
   const staleChannel = tag("c") === "whatsapp" ? "whatsapp" : "telegram";
   const staleChat = staleChannel === "whatsapp" ? whatsappChat() : botChat();
 
+  // The same test the layout and the form both make: a WhatsApp button on a
+  // deployment with no WhatsApp number configured is a button that cannot work.
+  const whatsappReady = Boolean(
+    process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
+  );
+
   const site = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
     /\/+$/,
     "",
@@ -134,7 +145,7 @@ export default async function Page({
         operatingSystem: "Telegram, WhatsApp",
         url: `${site}/`,
         description:
-          "Watches Rightmove, Zoopla, OpenRent and SpareRoom for London rentals " +
+          `Watches ${portalSentence()} for London rentals ` +
           "matching your filter and sends each one within minutes.",
         areaServed: { "@type": "City", name: "London", addressCountry: "GB" },
         offers: {
@@ -147,28 +158,15 @@ export default async function Page({
       {
         "@type": "FAQPage",
         "@id": `${site}/#faq`,
+        // The questions on the page, not a second set written for the crawler:
+        // Google's own guidance is that a FAQPage has to be visible on the page
+        // it is on, and two copies is one copy to forget to update.
         mainEntity: [
-          {
+          ...QUESTIONS.map(({ q, a }) => ({
             "@type": "Question",
-            name: "How quickly do alerts arrive?",
-            acceptedAnswer: {
-              "@type": "Answer",
-              text:
-                "Minutes. New listings are read continuously and matched against " +
-                "your filter as they appear.",
-            },
-          },
-          {
-            "@type": "Question",
-            name: "Which sites does it cover?",
-            acceptedAnswer: {
-              "@type": "Answer",
-              text:
-                "Rightmove, Zoopla, OpenRent and SpareRoom, in one stream of " +
-                "alerts. SpareRoom is where the rooms in shared flats are, " +
-                "which the other three barely carry.",
-            },
-          },
+            name: q,
+            acceptedAnswer: { "@type": "Answer", text: a },
+          })),
           {
             "@type": "Question",
             name: "How do I stop the alerts?",
@@ -193,79 +191,108 @@ export default async function Page({
         dangerouslySetInnerHTML={{ __html: JSON.stringify(structured) }}
       />
 
-      <div className="hero">
-        {stale ? (
-          /* Nothing underneath it. A blank sign-up form below this message is
-             the trap it exists to close: filling it in opens a second account,
-             which the bot then has to merge back on reconnect, and in the
-             meantime the person has been told to start a trial they are long
-             past. The one thing they need is a working link, and the only
-             place that can mint one is the chat. */
-          <div className="panel">
-            <h1>That link has gone stale</h1>
-            <p className="lede">
-              Links from the bot stop working after a week, and this one has.
-              Nothing has changed — your filter is running exactly as it was,
-              and your plan is untouched.
-            </p>
-            <p className="lede">
-              Send <strong>/update</strong> in{" "}
-              {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"} and the
-              next link arrives straight away, opening on your current search.
-            </p>
-            {staleChat && (
-              <a
-                href={staleChat}
-                className={
-                  staleChannel === "whatsapp"
-                    ? "cta cta-whatsapp"
-                    : "cta cta-telegram"
-                }
-              >
-                {staleChannel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}{" "}
-                Open {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"}
-              </a>
-            )}
-          </div>
-        ) : returning ? (
-          <>
-            <h1>Change what you are looking for</h1>
-            <p className="lede">
-              Your current filter is below. Saving replaces it — until you do, it
-              carries on exactly as it is.
-            </p>
-          </>
-        ) : (
-          <>
-            <h1>Beat the London Rental Race. Get Instant Alerts.</h1>
-            <p className="lede">
-              Never miss a listing on Rightmove, Zoopla, OpenRent or
-              SpareRoom. Set your criteria and receive instant notifications
-              directly in your preferred messenger.
-            </p>
-          </>
-        )}
+      <section id="search" className="hero">
+        <div className="hero-inner">
+          {stale ? (
+            /* Nothing underneath it. A blank sign-up form below this message is
+               the trap it exists to close: filling it in opens a second account,
+               which the bot then has to merge back on reconnect, and in the
+               meantime the person has been told to start a trial they are long
+               past. The one thing they need is a working link, and the only
+               place that can mint one is the chat. */
+            <div className="panel">
+              <h1>That link has gone stale</h1>
+              <p className="lede">
+                Links from the bot stop working after a week, and this one has.
+                Nothing has changed — your filter is running exactly as it was,
+                and your plan is untouched.
+              </p>
+              <p className="lede">
+                Send <strong>/update</strong> in{" "}
+                {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"} and the
+                next link arrives straight away, opening on your current search.
+              </p>
+              {staleChat && (
+                <a
+                  href={staleChat}
+                  className={
+                    staleChannel === "whatsapp"
+                      ? "cta cta-whatsapp"
+                      : "cta cta-telegram"
+                  }
+                >
+                  {staleChannel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}{" "}
+                  Open {staleChannel === "whatsapp" ? "WhatsApp" : "Telegram"}
+                </a>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="hero-say">
+                {returning ? (
+                  <>
+                    <h1>Change what you are looking for</h1>
+                    <p className="lede">
+                      Your current filter is below. Saving replaces it — until
+                      you do, it carries on exactly as it is.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    {/* The live dot and the list of portals, which is also the
+                        one place the marquee's names are said in words rather
+                        than as decoration — the strip itself is hidden from a
+                        screen reader. */}
+                    <p className="hero-badge">
+                      <span className="hero-pulse" aria-hidden="true" />
+                      Watching {portalSentence()}
+                    </p>
+                    <h1>
+                      Beat the London Rental Race.{" "}
+                      <span className="hero-grad">Get Instant Alerts.</span>
+                    </h1>
+                    <p className="lede">
+                      Never miss a listing on {portalSentence("or")}. Set your
+                      criteria and receive instant notifications directly in
+                      your preferred messenger.
+                    </p>
+                  </>
+                )}
+              </div>
 
-        {stale ? null : codes.length === 0 ? (
-          <p className="panel">
-            No districts are being covered right now, so there is nothing to
-            subscribe to yet.
-          </p>
-        ) : (
-          <SubscribeForm
-            districts={codes}
-            maxDistricts={plan?.max_districts ?? 1}
-            furnished={[...FURNISHED]}
-            types={[...PROPERTY_TYPES]}
-            whatsappReady={Boolean(
-              process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
-            )}
-            offers={offers}
-            returning={returning}
-            names={names}
-          />
-        )}
-      </div>
+              {codes.length === 0 ? (
+                <p className="panel">
+                  No districts are being covered right now, so there is nothing
+                  to subscribe to yet.
+                </p>
+              ) : (
+                <SubscribeForm
+                  districts={codes}
+                  maxDistricts={plan?.max_districts ?? 1}
+                  furnished={[...FURNISHED]}
+                  types={[...PROPERTY_TYPES]}
+                  whatsappReady={whatsappReady}
+                  offers={offers}
+                  returning={returning}
+                  names={names}
+                />
+              )}
+            </>
+          )}
+        </div>
+      </section>
+
+      {/* Only for somebody who has not signed up. A subscriber arriving on an
+          `?e=` link came to change one field, and three screens of pitch below
+          the form is three screens between them and the save button — the same
+          argument the sign-up offer is dropped on. */}
+      {!stale && !returning && (
+        <>
+          <HowItWorks />
+          <Plans offers={offers} whatsappReady={whatsappReady} />
+          <Faq />
+        </>
+      )}
     </>
   );
 }

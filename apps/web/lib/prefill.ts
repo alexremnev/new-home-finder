@@ -28,6 +28,35 @@ export const ROOMS_MAX = 5;
 export const DAY_WINDOW = 10;
 export const DAY_WINDOW_MAX = 90;
 
+/**
+ * The windows the form offers, in days either side of the chosen date.
+ *
+ * Four choices in a list rather than a number box. A box invites a figure
+ * nobody has a reason to prefer — eleven days rather than ten — and every one
+ * of them has to be validated, clamped and explained. A week, a fortnight and
+ * a month are the three answers people actually have, and "any date" is the
+ * fourth, which the box could only express by being emptied.
+ *
+ * `DAY_WINDOW_MAX` still guards what arrives at the API: the list is what the
+ * page offers, not what the endpoint trusts.
+ */
+export const FLEX_DAYS = [7, 14, 30] as const;
+
+/**
+ * The offered window nearest to a saved one.
+ *
+ * A filter saved before the list existed — or by a later version of it — can
+ * hold any number of days, and the select has to open on one of its options.
+ * Nearest rather than nothing: showing "any date" for a filter that has a date
+ * would offer to drop a constraint nobody asked to drop, and the note under
+ * the control says which window is in force either way.
+ */
+export function nearestFlex(days: number): number {
+  return FLEX_DAYS.reduce((best, one) =>
+    Math.abs(one - days) < Math.abs(best - days) ? one : best,
+  );
+}
+
 // The size slider is in square metres, and so is everything the person reads.
 // The database keeps square feet, because that is the unit British listings
 // quote — so the conversion happens twice, both times here: on the way out of

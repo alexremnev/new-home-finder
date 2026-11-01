@@ -1,6 +1,16 @@
 import { query } from "@/lib/db";
 
 /**
+ * How many days the gift adds.
+ *
+ * Exported because the landing page quotes it: the WhatsApp trial is one day
+ * on the plan and one more here, and a page that said "two days" as a figure
+ * of its own would be a page that keeps promising two after this becomes one.
+ * The grant below reads the same constant, so the two cannot drift.
+ */
+export const GIFT_DAYS = 1;
+
+/**
  * One more day of the WhatsApp trial, free, and once per account for ever.
  *
  * Offered five minutes before a trial that delivered ten messages or fewer
@@ -41,8 +51,11 @@ import { query } from "@/lib/db";
  */
 export async function giftExtraDay(number: string): Promise<boolean> {
   const rows = await query<{ id: number }>(
+    // `make_interval` rather than an interpolated literal: the length is a
+    // parameter like any other, and `interval '$2 day'` is not a thing
+    // Postgres will substitute into.
     `UPDATE users u
-        SET plan_until = now() + interval '1 day',
+        SET plan_until = now() + make_interval(days => $2),
             plan_from = now(),
             trial_gift_at = now()
        FROM user_channels uc
@@ -52,7 +65,7 @@ export async function giftExtraDay(number: string): Promise<boolean> {
         AND u.plan = 'trial'
         AND u.trial_gift_at IS NULL
       RETURNING u.id`,
-    [number],
+    [number, GIFT_DAYS],
   );
   return rows.length > 0;
 }

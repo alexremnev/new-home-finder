@@ -47,5 +47,42 @@ export function WhatsAppMark() {
   );
 }
 
-// The badge from the favicon, at a size a header can use. Same three shapes:
-// the teal disc, the orange roof, the monogram as rectangles.
+// ── the marks that are ours rather than a messenger's ──────────────────────
+
+/**
+ * The house, drawn as a line in whatever colour it is given.
+ *
+ * The brand badge in the header and the footer, and the avatar on the phone's
+ * chat header. A flat glyph rather than the photographic logo because it sits
+ * on the dark bar at 20px, where the badge's own lettering is unreadable — the
+ * full mark is still what the favicon and the link preview use.
+ */
+export function HomeMark() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M3 11.5 12 4l9 7.5" />
+      <path d="M5.5 10v9.5h13V10" />
+      <circle cx="12" cy="14" r="2.2" />
+    </svg>
+  );
+}
+
+// One claim, ticked. On every list of what a plan includes, and on the two
+// lines a saved filter gets back.
+export function Tick() {
+  return (
+    <svg className="tick" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" strokeWidth="2.2"
+            strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}

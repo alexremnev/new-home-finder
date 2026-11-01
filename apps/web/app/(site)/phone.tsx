@@ -1,6 +1,4 @@
-"use client";
-
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 
 import sample from "@/lib/sample-alert.json";
 
@@ -200,37 +198,31 @@ function TelegramChat() {
   );
 }
 
-// One phone, switched between the two messengers. Two phones side by side would
-// make the page twice as tall to say the same thing, and the point is that the
-// same alert arrives either way.
-export function PhonePreview() {
-  const [channel, setChannel] = useState<Channel>("whatsapp");
+/**
+ * One phone, showing the messenger the form is pointed at.
+ *
+ * Two phones side by side would make the page twice as tall to say the same
+ * thing, and the point is that the same alert arrives either way. Which one is
+ * drawn is not this component's decision any more: it used to carry a switch
+ * of its own, which could be left on WhatsApp while the form below it was
+ * signing somebody up on Telegram. The choice lives next to the button that
+ * acts on it, and arrives here as a prop.
+ */
+export function PhonePreview({ channel }: { channel: Channel }) {
+  const app = channel === "whatsapp" ? "WhatsApp" : "Telegram";
 
   return (
     <div className="preview">
-      <div
-        className="switch"
-        role="radiogroup"
-        aria-label="Which messenger to preview"
-      >
-        <span className={`switch-thumb switch-thumb-${channel}`} aria-hidden="true" />
-        {(["whatsapp", "telegram"] as const).map((one) => (
-          <label key={one} className={channel === one ? "switch-on" : undefined}>
-            <input
-              type="radio"
-              name="preview-channel"
-              value={one}
-              checked={channel === one}
-              onChange={() => setChannel(one)}
-            />
-            {one === "whatsapp" ? "WhatsApp" : "Telegram"}
-          </label>
-        ))}
+      <div className="phone-stage">
+        <div className="phone" aria-label={`An alert as it arrives in ${app}`}>
+          {channel === "whatsapp" ? <WhatsAppChat /> : <TelegramChat />}
+        </div>
       </div>
 
-      <div className="phone" aria-label={`An alert as it arrives in ${channel}`}>
-        {channel === "whatsapp" ? <WhatsAppChat /> : <TelegramChat />}
-      </div>
+      <p className="phone-caption">
+        A live preview of how a new listing lands in{" "}
+        <strong>{app}</strong>.
+      </p>
     </div>
   );
 }

@@ -1,16 +1,30 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { Inter } from "next/font/google";
+import { Bricolage_Grotesque, Manrope } from "next/font/google";
 
 import "./globals.css";
 
-// One face, loaded by next/font so it is self-hosted and never a flash of
-// fallback. Tabular figures matter more than the face does: a dashboard whose
-// numbers change width jitters on every refresh.
-const inter = Inter({
+// Two faces, both loaded by next/font so they are self-hosted and never a
+// flash of fallback.
+//
+// Manrope is the interface: everything that is read rather than looked at,
+// including the whole dashboard. Tabular figures matter more there than the
+// face does — a column of numbers that changes width jitters on every refresh
+// — and Manrope carries them.
+const body = Manrope({
   subsets: ["latin"],
   display: "swap",
   variable: "--font-sans",
+});
+
+// And one for display sizes only: the headlines, the prices, the step numbers.
+// A second face earns its download by being used where type is looked at
+// rather than read, which is the one place a neutral grotesque has nothing to
+// say. Never set on body — see `--font-heading` in globals.css.
+const heading = Bricolage_Grotesque({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-heading",
 });
 
 const SITE = (process.env.SITE_URL ?? "https://londonhomefinder.co.uk").replace(
@@ -85,10 +99,10 @@ export const metadata: Metadata = {
   category: "real estate",
 };
 
-// The badge's teal, so the address bar on Android and the task switcher match
-// the mark instead of defaulting to white.
+// The hero's own near-black, so the address bar on Android and the task
+// switcher continue the page rather than drawing a white line above it.
 export const viewport = {
-  themeColor: "#4f9aa4",
+  themeColor: "#101215",
 };
 
 // No wrapper here. The marketing pages wrap themselves in <Site>, which carries
@@ -96,7 +110,7 @@ export const viewport = {
 // into both.
 export default function Layout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${body.variable} ${heading.variable}`}>
       <body>{children}</body>
     </html>
   );

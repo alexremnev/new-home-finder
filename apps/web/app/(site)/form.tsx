@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { Criteria } from "@/lib/criteria";
-import { pounds } from "@/lib/money";
 import { matchAreas, neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
 // Every bound of every control on this form — the rent floor, the room
 // ceiling, the size stops — lives there, next to the code that reads a saved
@@ -17,7 +16,8 @@ import {
   asSqft,
   BATHS_MIN,
   BEDS_MIN,
-  DAY_WINDOW_MAX,
+  FLEX_DAYS,
+  nearestFlex,
   prefill,
   RENT_MAX,
   RENT_MIN,
@@ -26,7 +26,7 @@ import {
   SQFT_PER_SQM,
 } from "@/lib/prefill";
 
-import { TelegramMark, WhatsAppMark } from "./logos";
+import { TelegramMark, Tick, WhatsAppMark } from "./logos";
 import { PhonePreview } from "./phone";
 
 type Props = {
@@ -65,6 +65,16 @@ type Props = {
 
 export type Offer = {
   trialDays: number | null;
+  /**
+   * The extra free day a quiet first day can be given, on top of `trialDays`,
+   * or null where there is none. WhatsApp only — see `giftDaysOn`.
+   *
+   * Said as a second line rather than added to the first. A day on the plan
+   * plus a day for a trial that delivered almost nothing is two days for some
+   * people and one for the rest, and "2 days free" on the card would be the
+   * version of that sentence we cannot keep.
+   */
+  giftDays: number | null;
   /**
    * Every price this messenger is sold at, cheapest first, and what each one
    * includes. Both channels have two — a week and a month — so the band is a
@@ -115,6 +125,15 @@ export function SubscribeForm({
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Channel | null>(null);
+  // Which messenger the alerts are going to. One piece of state for two jobs:
+  // it is what the submit button posts, and it is what the phone beside the
+  // card is drawn as — the preview used to own a switch of its own, which left
+  // somebody looking at a WhatsApp screenshot while signing up on Telegram.
+  //
+  // Telegram first because delivery there is free, which is why it is the one
+  // the plans below recommend. Somebody editing an existing filter is already
+  // on a messenger, and that one is not up for discussion here.
+  const [channel, setChannel] = useState<Channel>(returning?.channel ?? "telegram");
   const [chosen, setChosen] = useState<Area[]>(() =>
     // The district code is the whole of what was saved — a neighbourhood name
     // is a way of choosing one, not part of the filter — so the chip says the
@@ -164,14 +183,13 @@ export function SubscribeForm({
   // meaningless for a room, and the date's window only matters with a date.
   const [wantedTypes, setWantedTypes] = useState<string[]>(start.types);
   const [availableOn, setAvailableOn] = useState(start.availableOn);
-  // Held as text, not a number, so the box can be emptied while it is being
-  // retyped: coercing every keystroke to a number leaves a 0 sitting in front
-  // of whatever is typed next. The number below is what the rest of the form
-  // reads; an empty box counts as 0.
-  const [dayWindowText, setDayWindowText] = useState(String(start.dayWindow));
-  const dayWindow = Math.min(
-    DAY_WINDOW_MAX,
-    Number.parseInt(dayWindowText, 10) || 0,
+  // How far either side of that date a listing may be available, in days, as
+  // one of the four the select offers. Nought is "any date", which is the same
+  // state as an empty date box — choosing it clears the date, and clearing the
+  // date puts it back — so the two controls can never disagree about whether
+  // the date is being filtered on at all.
+  const [dayWindow, setDayWindow] = useState(() =>
+    start.availableOn === "" ? 0 : nearestFlex(start.dayWindow),
   );
   const [area, setArea] = useState<[number, number]>(start.size);
   // Controlled, and the only control on the form whose default is "on": an
@@ -301,24 +319,33 @@ export function SubscribeForm({
     // every six-bedroom house from somebody who asked for no maximum.
     // Nothing from a slider that is switched off: a bedroom count filed against
     // a rooms-only search would quietly match nothing.
+    // Nothing from the three controls a rooms-only search does not show. They
+    // are not on the screen, so whatever they are still holding is a filter
+    // nobody set — and a floor area filed against a room in a shared flat
+    // quietly matches nothing, because a room is advertised by its own size
+    // and rarely by any size at all.
     if (!roomsOnly) {
       if (bedrooms[0] > BEDS_MIN) payload.bedrooms_min = String(bedrooms[0]);
       if (bedrooms[1] < ROOMS_MAX) payload.bedrooms_max = String(bedrooms[1]);
       if (bathrooms[0] > BATHS_MIN) payload.bathrooms_min = String(bathrooms[0]);
       if (bathrooms[1] < ROOMS_MAX) payload.bathrooms_max = String(bathrooms[1]);
+      // Metres on the slider, feet in the database — converted here, once. The
+      // top handle at its ceiling means "and above", so no maximum is sent.
+      if (area[0] > AREA_MIN) payload.area_min = String(asSqft(area[0]));
+      if (area[1] < AREA_MAX) payload.area_max = String(asSqft(area[1]));
     }
-    // Metres on the slider, feet in the database — converted here, once. The
-    // top handle at its ceiling means "and above", so no maximum is sent.
-    if (area[0] > AREA_MIN) payload.area_min = String(asSqft(area[0]));
-    if (area[1] < AREA_MAX) payload.area_max = String(asSqft(area[1]));
 
     // Only when the toggle is off, because the stored field means "send the
     // copies" and its absence is the suppressing default — see `Criteria`.
     if (!oneAlertPerFlat) payload.send_duplicates = "on";
 
+    // A date and a window, or neither. `dayWindow` is nought only while the
+    // date box is empty, so the second test is a guard rather than a case —
+    // but a date that reached here with no window would be sent as a single
+    // day, which is the one reading nobody chose.
     const wanted = String(data.get("available_on") ?? "").trim();
     delete payload.available_on;
-    if (wanted) {
+    if (wanted && dayWindow > 0) {
       const day = new Date(`${wanted}T00:00:00Z`);
       if (!Number.isNaN(day.getTime())) {
         const shift = (days: number) =>
@@ -380,8 +407,12 @@ export function SubscribeForm({
   const shown = matchAreas(options, typed, chosen.map((one) => one.code));
 
   return (
-    <form onSubmit={submit} className="hero-form">
-      <div className="filter-card">
+    <div className="hero-grid">
+      <form onSubmit={submit} className="filter-card">
+        <div className="filter-head">
+          <h2>Your alert</h2>
+          <span>Criteria</span>
+        </div>
       <fieldset aria-labelledby="search-by-label">
         <span id="search-by-label" className="field-label">
           How would you like to search?
@@ -581,8 +612,10 @@ export function SubscribeForm({
       </div>
 
       {/* Gone, not greyed out, when only rooms are wanted: a room is one room
-          in somebody else's flat, so neither count says anything about it and
-          a disabled slider only invites a second look. */}
+          in somebody else's flat, so none of these three says anything about
+          it — not the counts, and not the floor area, which a room ad gives as
+          the room rather than the flat and usually does not give at all. A
+          disabled slider only invites a second look. */}
       {!roomsOnly && (
         <>
           <div>
@@ -618,80 +651,79 @@ export function SubscribeForm({
               </small>
             )}
           </div>
+
+          <div>
+            <span className="field-label">Desired property size</span>
+            <RangeSlider
+              min={AREA_MIN}
+              max={AREA_MAX}
+              step={1}
+              stops={AREA_STOPS}
+              value={area}
+              onChange={setArea}
+              format={sqm}
+              openTop="+"
+            />
+            {/* The same numbers in feet, under the metres. Not a second
+                control: one slider, read twice. */}
+            <p className="range2-metric">
+              {area[0] === AREA_MIN && area[1] === AREA_MAX
+                ? "Any size"
+                : `${sqft(area[0])} — ${sqft(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
+            </p>
+          </div>
         </>
       )}
-
-      <div>
-        <span className="field-label">Desired property size</span>
-        <RangeSlider
-          min={AREA_MIN}
-          max={AREA_MAX}
-          step={1}
-          stops={AREA_STOPS}
-          value={area}
-          onChange={setArea}
-          format={sqm}
-          openTop="+"
-        />
-        {/* The same numbers in feet, under the metres. Not a second control:
-            one slider, read twice. */}
-        <p className="range2-metric">
-          {area[0] === AREA_MIN && area[1] === AREA_MAX
-            ? "Any size"
-            : `${sqft(area[0])} — ${sqft(area[1])}${area[1] === AREA_MAX ? "+" : ""}`}
-        </p>
-      </div>
 
       <div>
         <span className="field-label">Desired let available date</span>
         <div className="date-row">
           <label className="date-on">
-            <span className="sr-only">Date</span>
+            <span>Available from</span>
             <input
               type="date"
               name="available_on"
               value={availableOn}
-              onChange={(event) => setAvailableOn(event.target.value)}
+              onChange={(event) => {
+                setAvailableOn(event.target.value);
+                // A date with "any date" beside it filters on nothing, so the
+                // first date typed brings the narrowest window with it. Any
+                // window already chosen is left alone.
+                if (event.target.value !== "" && dayWindow === 0) {
+                  setDayWindow(FLEX_DAYS[0]);
+                }
+              }}
             />
           </label>
           {/* Second in the markup as well as on the screen, so tabbing goes
               date then window — the order they are decided in. */}
           <label className="date-days">
-            <span>± days</span>
-            <input
-              type="number"
-              inputMode="numeric"
-              min={0}
-              max={DAY_WINDOW_MAX}
-              step={1}
-              value={dayWindowText}
-              // Off until there is a date to be either side of.
-              disabled={availableOn === ""}
+            <span>Flexibility</span>
+            <select
+              value={dayWindow}
               onChange={(event) => {
-                // Digits only, and no zero in front of them, so typing into a
-                // box showing 0 reads 7 rather than 07. A lone 0 survives.
-                const digits = event.target.value
-                  .replace(/\D/g, "")
-                  .replace(/^0+(?=\d)/, "");
-                setDayWindowText(
-                  digits === ""
-                    ? ""
-                    : String(Math.min(DAY_WINDOW_MAX, Number(digits))),
-                );
+                const next = Number(event.target.value);
+                setDayWindow(next);
+                // "Any date" is the empty date box, so choosing it empties the
+                // box. The alternative — a date sitting above a window that
+                // says the date is not being used — is a control contradicting
+                // the one beside it.
+                if (next === 0) setAvailableOn("");
               }}
-              // An empty box already counts as 0; blurring says so out loud.
-              onBlur={() => {
-                if (dayWindowText === "") setDayWindowText("0");
-              }}
-            />
+            >
+              <option value={0}>Any date</option>
+              {FLEX_DAYS.map((days) => (
+                <option key={days} value={days}>
+                  ± {days} days
+                </option>
+              ))}
+            </select>
           </label>
         </div>
         <small className="note">
           {availableOn === ""
             ? "Leave blank for any date — a listing that gives no date is sent either way."
-            : dayWindow === 0
-              ? "Only listings available on exactly that day."
-              : `Listings available within ${dayWindow} day${dayWindow === 1 ? "" : "s"} either side of it.`}
+            : `Listings available within ${dayWindow} days either side of it.`}
         </small>
       </div>
 
@@ -758,66 +790,107 @@ export function SubscribeForm({
         </p>
       </label>
 
-      </div>
+        {/* What the header's buttons and the plans below scroll to: the last
+            thing in the card, which is the button and the one question left to
+            answer before it. The filter above is the part read on the way
+            down. */}
+        <div className="send-to" id="start">
+          {error && <p className="error">{error}</p>}
 
-      <div className="hero-aside">
-        <PhonePreview />
-      </div>
-
-      {/* What the header's buttons scroll to. On the actions rather than on the
-          form, because the thing somebody pressing "Start free trial" is
-          looking for is the button, and the filter above it is the part they
-          read on the way down. */}
-      <div className="hero-actions" id="start">
-      {error && <p className="error">{error}</p>}
-
-      {returning ? (
-        <Save
-          channel={returning.channel}
-          full={returning.full}
-          upgradeUrl={returning.upgradeUrl}
-          busy={busy}
-          ready={chosen.length > 0}
-        />
-      ) : (
-        <>
-          <p className="offers-lead">
-            Start with a free trial. Cancel anytime. No credit card required to
-            start.
-          </p>
-
-          <div className={whatsappReady ? "offers" : "offers offers-one"}>
-            <Choice
-              channel="telegram"
-              // Nobody has connected anything yet, so the button names what
-              // happens rather than the plumbing. Which messenger is already
-              // said by the logo on the button and the colour of the card.
-              label="Start free trial"
-              mark={<TelegramMark />}
-              offer={offers.telegram}
+          {returning ? (
+            <Save
+              channel={returning.channel}
+              full={returning.full}
+              upgradeUrl={returning.upgradeUrl}
               busy={busy}
               ready={chosen.length > 0}
-              // Free to deliver on, so it is the one we would rather people use
-              // — and saying so is more honest than pricing them towards it
-              // quietly.
-              flag="Highly recommended"
             />
+          ) : (
+            <>
+              <span className="field-label">Where should we send alerts?</span>
 
-            {whatsappReady && (
-              <Choice
-                channel="whatsapp"
-                label="Start free trial"
-                mark={<WhatsAppMark />}
-                offer={offers.whatsapp}
-                busy={busy}
-                ready={chosen.length > 0}
-              />
-            )}
-          </div>
-        </>
-      )}
-      </div>
-    </form>
+              {/* The one decision the form cannot make for anybody, asked
+                  where it is acted on. Buttons rather than radios because the
+                  answer also redraws the phone beside the card — so pressing
+                  one shows what it buys as well as choosing it. With no
+                  WhatsApp number configured there is nothing to choose
+                  between, and the pair is not drawn at all. */}
+              {whatsappReady && (
+                <div className="send-pick" role="group" aria-label="Messenger">
+                  {(
+                    [
+                      ["telegram", "Telegram", <TelegramMark key="t" />],
+                      ["whatsapp", "WhatsApp", <WhatsAppMark key="w" />],
+                    ] as const
+                  ).map(([one, name, mark]) => (
+                    <button
+                      key={one}
+                      type="button"
+                      className={
+                        channel === one ? `pick pick-${one} on` : `pick pick-${one}`
+                      }
+                      aria-pressed={channel === one}
+                      onClick={() => setChannel(one)}
+                    >
+                      {mark}
+                      {name}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* One submit, carrying whichever messenger is chosen: `submit`
+                  reads the pressed button's value, so the choice above travels
+                  with the press and nothing else has to be posted. Lit even
+                  with no area chosen — see the note underneath. */}
+              <button
+                type="submit"
+                name="channel"
+                value={channel}
+                className={`cta cta-${channel}`}
+                disabled={busy !== null}
+                aria-describedby={chosen.length > 0 ? undefined : "needs-area"}
+              >
+                {channel === "whatsapp" ? <WhatsAppMark /> : <TelegramMark />}
+                {busy === channel ? "One moment…" : "Start free trial"}
+              </button>
+
+              {chosen.length === 0 && (
+                <p className="offer-needs" id="needs-area">
+                  Pick at least one area above first.
+                </p>
+              )}
+
+              {/* The length comes from `plans`, so the line cannot promise a
+                  trial the bot will not grant — and it is omitted rather than
+                  guessed at where no plan is configured. */}
+              {offers[channel].trialDays !== null && (
+                <p className="send-note">
+                  {offers[channel].trialDays}{" "}
+                  {offers[channel].trialDays === 1 ? "day" : "days"} free on{" "}
+                  {channel === "whatsapp" ? "WhatsApp" : "Telegram"}
+                  {offers[channel].giftDays !== null && (
+                    <>
+                      , plus {offers[channel].giftDays} more free{" "}
+                      {offers[channel].giftDays === 1 ? "day" : "days"} if the
+                      first one is quiet
+                    </>
+                  )}
+                  . No card required, cancel anytime.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </form>
+
+      {/* A picture of the product rather than the product, which is why it is
+          outside the form and why a narrow screen does not draw it: there it
+          would sit between somebody and the button they came for. */}
+      <aside className="hero-aside">
+        <PhonePreview channel={channel} />
+      </aside>
+    </div>
   );
 }
 
@@ -887,115 +960,6 @@ function Save({
         )}
       </div>
     </div>
-  );
-}
-
-// One messenger's offer: what it costs to try, then the button that starts it.
-//
-// The four points are the same on both cards except the trial length, which is
-// the only thing that differs — so they are written once and the length is
-// passed in.
-function Choice({
-  channel, label, mark, offer, busy, ready, flag,
-}: {
-  channel: Channel;
-  label: string;
-  mark: React.ReactNode;
-  offer: Offer;
-  busy: Channel | null;
-  /** Whether an area has been chosen. Not what disables the button — see below. */
-  ready: boolean;
-  flag?: string;
-}) {
-  const { trialDays, prices } = offer;
-  // What is metered, said per period, because a week and a month do not
-  // include the same number. Nothing metered at all is "unlimited", which is
-  // every Telegram plan.
-  const metered = prices.filter((price) => price.allowance !== null);
-
-  return (
-    <div className={flag ? "offer offer-best" : "offer"}>
-      {flag && <span className="offer-flag">{flag}</span>}
-
-      {/* What it costs once the trial ends, on the messenger's own colour and
-          at the top of the card — the first thing worth knowing, and the thing
-          that differs most between the two. Absent until a plan is priced for
-          this channel, rather than invented. */}
-      {prices.length > 0 && (
-        <div className={`offer-prices offer-prices-${channel}`}>
-          {prices.map((price) => (
-            <span key={price.unit} className="offer-rate">
-              <strong>{pounds(price.pence)}</strong>
-              <span className="offer-unit">{price.unit}</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <ul className="offer-points">
-        {/* Omitted rather than guessed at when no plan is configured: a trial
-            this page invented is a promise the bot would not keep. */}
-        {trialDays !== null && (
-          <li>
-            <Tick /> {trialDays} {trialDays === 1 ? "day" : "days"} free trial
-          </li>
-        )}
-        <li>
-          <Tick /> Cancel anytime
-        </li>
-        <li>
-          <Tick /> Real-time alerts
-        </li>
-        {/* Metered or not, said either way. "Unlimited" is worth a line of its
-            own next to a messenger that is not — and where it is metered, each
-            period says its own figure: the WhatsApp week includes two hundred
-            messages and the month nine hundred, and one number standing for
-            both would be wrong about one of them. */}
-        <li>
-          <Tick />{" "}
-          {metered.length === 0
-            ? "Unlimited alerts"
-            : metered
-                .map((price) => `${price.allowance} alerts a ${price.unit}`)
-                .join(", ")}
-        </li>
-      </ul>
-
-      {/* Lit, not greyed out, even with no area chosen yet.
-          A disabled button is the one thing on the page that cannot say why it
-          is disabled: it does not take a click, so it cannot answer one. The
-          button stays live, the line under it says what is missing, and
-          pressing it puts the cursor in the area box — which is the whole of
-          what a disabled button was trying to prevent, done where somebody can
-          read it. Still disabled while a submission is in flight, because that
-          is about this button rather than about the form. */}
-      <button
-        type="submit"
-        name="channel"
-        value={channel}
-        className={`cta cta-${channel}`}
-        disabled={busy !== null}
-        aria-describedby={ready ? undefined : `needs-area-${channel}`}
-      >
-        {mark}
-        {busy === channel ? "One moment…" : label}
-      </button>
-
-      {!ready && (
-        <p className="offer-needs" id={`needs-area-${channel}`}>
-          Pick at least one area above first.
-        </p>
-      )}
-    </div>
-  );
-}
-
-function Tick() {
-  return (
-    <svg className="tick" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
-      <path d="M3 8.5l3.5 3.5L13 5" fill="none" stroke="currentColor" strokeWidth="2.2"
-            strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
   );
 }
 

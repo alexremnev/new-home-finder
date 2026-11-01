@@ -3,11 +3,12 @@ import { Suspense, type ReactNode } from "react";
 
 import { SUPPORT_EMAIL } from "@/lib/support";
 
-import { HeadCta } from "./head-cta";
+import { HomeMark } from "./logos";
+import { SiteNav } from "./site-nav";
 
 // Everything that is the public site rather than the product: the two pieces of
 // chrome every page needs, and nothing else. The width belongs to the page —
-// the landing page is two columns wide and the rest are one.
+// the landing page is full-bleed bands and the rest are one narrow column.
 export default function SiteLayout({ children }: { children: ReactNode }) {
   const year = new Date().getFullYear();
   // The same test the form makes, for the same reason: a WhatsApp button on a
@@ -16,17 +17,28 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
     process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
   );
 
+  const brand = (
+    <>
+      <span className="brand-badge" aria-hidden="true">
+        <HomeMark />
+      </span>
+      London Home Finder
+    </>
+  );
+
   return (
     <div className="site">
+      {/* Sticky, so the way back to the form is never more than a glance away
+          on a page this tall. Translucent over the hero's own dark, which is
+          why the bar has no fill of its own below the blur. */}
       <header className="site-head">
         <div className="site-head-row">
           <Link href="/" className="brand">
-            <img src="/logo-mark.png" alt="" width={36} height={36} />
-            London Home Finder
+            {brand}
           </Link>
 
           <Suspense fallback={null}>
-            <HeadCta whatsappReady={whatsappReady} />
+            <SiteNav whatsappReady={whatsappReady} />
           </Suspense>
         </div>
       </header>
@@ -35,11 +47,17 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
 
       <footer className="site-foot">
         <div className="site-foot-row">
-          <span>
-            Questions or ideas — <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
-          </span>
+          <Link href="/" className="brand brand-foot">
+            {brand}
+          </Link>
+          <p>
+            Questions or ideas —{" "}
+            <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
+          </p>
+          <p className="site-foot-fine">
+            © {year} London Home Finder. All rights reserved.
+          </p>
         </div>
-        <p className="site-foot-fine">© {year} London Home Finder. All rights reserved.</p>
       </footer>
     </div>
   );

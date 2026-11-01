@@ -1061,19 +1061,10 @@ form p.error {
 
 .plan .cta { margin-top: 0; }
 
-/* The two ways out of the form, side by side where there is room and stacked
-   where there is not. Each keeps .cta's full width inside its own column. */
-/* One line above both cards, because it is true of either and repeating it on
-   each would read as two different promises. */
-.offers-lead {
-  margin: 1.5rem 0 0.75rem;
-  color: var(--ink-soft);
-  font-size: 0.9375rem;
-  text-align: center;
-}
-
-/* The two ways out of the form, side by side. They stack only when the card is
-   too narrow to hold two of them. */
+/* What is left of the two sign-up cards: the one card somebody editing a
+   filter gets, with "save and go back" on it. The prices, the trial flag and
+   the two-up grid moved to the plans band, which is where a price belongs now
+   that it is not a submit button. */
 .offers {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
@@ -1097,22 +1088,6 @@ form p.error {
   background: var(--surface, #fff);
 }
 
-/* What it costs, on the messenger's own colour, at the top of the card. Pulled
-   out to the card's edges with a negative margin so the colour reaches the
-   border rather than floating inside the padding. */
-.offer-prices {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.35rem 1.25rem;
-  margin: 0 -1.1rem 0.9rem;
-  padding: 0.6rem 1rem;
-  /* Matches the card's own radius at the top, square where it meets the list. */
-  border-radius: calc(var(--radius-card, 12px) - 1px)
-                 calc(var(--radius-card, 12px) - 1px) 0 0;
-  color: #fff;
-}
-
 /* Only for somebody whose plan ran out while they were editing their filter.
    Quiet, not alarming: the alerts are still arriving, just not all of them. */
 .offer-lapsed {
@@ -1121,58 +1096,6 @@ form p.error {
   font-size: 0.8125rem;
   line-height: 1.45;
 }
-
-.offer-prices-telegram { background: #229ed9; }
-.offer-prices-whatsapp { background: var(--wa); }
-
-/* One price: the figure and what it buys, read as a unit. */
-.offer-rate {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.3rem;
-  font-size: 1.125rem;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.offer-rate strong { font-weight: 700; }
-
-.offer-unit {
-  opacity: 0.85;
-  font-size: 0.8125rem;
-  font-weight: 500;
-}
-
-/* The one we would rather people use, said out loud. Accented rather than
-   enlarged: two cards of different sizes look like a layout mistake. */
-.offer-best {
-  border-color: #229ed9;
-  box-shadow: 0 0 0 1px #229ed9 inset;
-}
-
-.offer-flag {
-  position: absolute;
-  /* Above the card's edge, so it reads as a label on the card rather than a
-     word inside the coloured price band. */
-  top: -0.65rem;
-  left: 1.1rem;
-  z-index: 1;
-  padding: 0.15rem 0.5rem;
-  border-radius: 999px;
-  /* White on the card's own colour, not the colour again: the band behind it is
-     now Telegram blue, and a blue pill on it was legible only by its text. */
-  background: #fff;
-  border: 1px solid #229ed9;
-  color: #1b87ba;
-  font-size: 0.6875rem;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-}
-
-/* Room for the pill that sits on this card's top edge, so it never lands on
-   top of the first price. */
-.offer-best .offer-prices { padding-top: 0.95rem; }
 
 /* One claim per line, so the trial length is read rather than scanned past. */
 .offer-points {
@@ -2245,23 +2168,91 @@ form p.error {
   opacity: 0.7;
 }
 
-/* ── the site header ──────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════════
+   The public site: a dark bar over a dark hero, cream bands under it.
+   ════════════════════════════════════════════════════════════════════════ */
 
-.site-head {
-  flex: none;
-  /* No fill and no rule: a white bar would cut a hard line across the sky. */
-  background: none;
+/* The palette lives on the wrapper rather than on :root, so the admin keeps
+   the one it was built against. Everything public is inside `.site`; nothing
+   else is. */
+.site {
+  --ink: #1c1917;
+  --ink-soft: #57534e;
+  --ink-faint: #a8a29e;
+  --line: #e7e5e4;
+  --line-strong: #d6d3d1;
+  --bg: #f4f1ea;
+  /* Half a shade off the band behind it, which is the whole reason a card on
+     this page reads as a card without a border. */
+  --paper: #f7f5f0;
+  --card: #fff;
+  --accent: #059669;
+  --accent-dim: #047857;
+  --accent-lift: #10b981;
+  --accent-wash: #ecfdf5;
+  --night: #101215;
+  --sky: #38bdf8;
+  --sky-soft: #7dd3fc;
+  --mint: #6ee7b7;
+  --radius: 16px;
+  --radius-lg: 28px;
+  --radius-cta: 999px;
+  --shadow: 0 30px 80px -40px rgb(0 0 0 / 55%);
+  --gutter: 1.25rem;
+  --band: 80rem;
+
+  background: var(--bg);
+  color: var(--ink);
 }
 
-/* The bar runs the full width; what is inside it lines up with the page. */
+/* The skyline and the sunset are gone with the redesign: the hero draws its
+   own light now, and a dusk gradient behind a near-black band only showed up
+   as a stripe at the edges. */
+.site::before { content: none; }
+
+/* Display type. Set on the things that are looked at rather than read —
+   headlines, figures, prices — and never on body: a whole page of a display
+   grotesque is a page that is harder to read for nothing. */
+.site h1,
+.site h2,
+.site h3,
+.site .brand,
+.site .stat-figure,
+.site .step-number,
+.site .plan-prices strong,
+.site .marquee {
+  font-family: var(--font-heading, var(--font-sans)), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* ── the site header ──────────────────────────────────────────────────────── */
+
+/* Sticky, because the page is now long enough that the way back to the form
+   has to travel with you. Translucent over the hero's own dark rather than
+   filled, so the bar reads as part of the hero until the cream bands scroll
+   under it. */
+.site-head {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  flex: none;
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(16 18 21 / 85%);
+  backdrop-filter: blur(16px);
+  color: #e7e5e4;
+}
+
 .site-head-row {
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
   width: 100%;
-  max-width: 1200px;
-  height: 64px;
+  max-width: var(--band);
   margin: 0 auto;
-  padding: 0 1.25rem;
+  padding: 0.85rem var(--gutter);
 }
 
 .site-head svg { flex: none; }
@@ -2269,173 +2260,467 @@ form p.error {
 .brand {
   display: flex;
   align-items: center;
+  gap: 0.65rem;
+  font-size: 1rem;
+  color: #f5f5f4;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.brand:hover { text-decoration: none; color: #fff; }
+
+/* The house on a tile of the accent colour: at 20px the photographic badge is
+   a smudge, and the one shape people scan a header for is the silhouette. */
+.brand-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.75rem;
+  background: var(--accent-lift);
+  color: var(--night);
+  box-shadow: 0 8px 24px -8px rgb(16 185 129 / 80%);
+}
+
+.brand-badge svg { width: 1.25rem; height: 1.25rem; }
+
+.site-nav {
+  display: none;
+  align-items: center;
+  gap: 2rem;
+  font-size: 0.875rem;
+}
+
+.site-nav a {
+  color: #a8a29e;
+  text-decoration: none;
+  transition: color 300ms ease;
+}
+
+.site-nav a:hover { color: #fff; }
+
+.site-head-cta {
+  display: none;
+  align-items: center;
   gap: 0.5rem;
-  font-size: 1.0625rem;
-  font-weight: 700;
-  letter-spacing: -0.015em;
-  color: var(--ink);
+}
+
+/* Shorter and lighter than the form's own `.cta`: this is the way to the
+   decision, not the decision. One per messenger, in that messenger's colour,
+   so the logo is not carrying the distinction on its own. */
+.head-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 300ms ease, transform 200ms ease;
+}
+
+.head-cta:hover { text-decoration: none; transform: translateY(-1px); }
+.head-cta:focus-visible { outline: 2px solid var(--sky-soft); outline-offset: 2px; }
+.head-cta svg { width: 16px; height: 16px; }
+
+.head-cta-telegram {
+  border-color: rgb(56 189 248 / 30%);
+  background: rgb(14 165 233 / 10%);
+  color: #bae6fd;
+}
+
+.head-cta-telegram:hover { background: rgb(14 165 233 / 20%); color: #e0f2fe; }
+
+.head-cta-whatsapp {
+  background: var(--accent-lift);
+  color: var(--night);
+}
+
+.head-cta-whatsapp:hover { background: var(--mint); color: var(--night); }
+
+/* ── the narrow-screen menu ──────────────────────────────────────────────── */
+
+.nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / 15%);
+  border-radius: 999px;
+  background: none;
+  color: #e7e5e4;
+  cursor: pointer;
+}
+
+.nav-toggle svg { width: 1.25rem; height: 1.25rem; }
+.nav-toggle:active { transform: scale(0.95); }
+
+/* Absolutely placed rather than a third row in the bar: the bar is sticky, and
+   a panel that pushed it taller would move the page under the finger that
+   opened it. */
+.nav-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem var(--gutter) 1.5rem;
+  border-bottom: 1px solid rgb(255 255 255 / 10%);
+  background: rgb(16 18 21 / 97%);
+  backdrop-filter: blur(16px);
+}
+
+.nav-panel a {
+  padding: 0.85rem 0;
+  border-bottom: 1px solid rgb(255 255 255 / 6%);
+  color: #e7e5e4;
+  font-size: 0.9375rem;
   text-decoration: none;
 }
 
-.brand:hover { text-decoration: none; }
+.nav-panel-cta {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1.25rem;
+  border: none;
+}
 
-/* ── the site footer ──────────────────────────────────────────────────────── */
+.nav-panel-cta .head-cta { justify-content: center; padding: 0.8rem 1rem; }
+.nav-panel-cta .head-cta span { display: inline; }
 
-.site-foot {
-  flex: none;
+@media (min-width: 64rem) {
+  .site-nav,
+  .site-head-cta { display: flex; }
+  .nav-toggle,
+  .nav-panel { display: none; }
+}
+
+@media (min-width: 40rem) {
+  .site-head-row { padding-left: 2rem; padding-right: 2rem; }
+  .nav-panel { padding-left: 2rem; padding-right: 2rem; }
+}
+
+/* ── the shell ───────────────────────────────────────────────────────────── */
+
+/* No width and no padding of its own any more: the landing page is full-bleed
+   bands that each carry their own gutter, and a shell with a max-width would
+   have to be opted out of by every one of them. Prose opts *in*, with
+   `.column`. */
+.shell {
+  /* Explicitly unset, because the rule this overrides gave the shell the
+     1200px column every page used to live in. */
   width: 100%;
-  max-width: 1200px;
+  max-width: none;
+  padding: 0;
+  flex: 1;
+}
+
+.shell:has(.admin) { max-width: 64rem; margin: 0 auto; }
+
+/* Anything that is prose rather than a landing page: one column, kept narrow
+   enough to read, with the gutter the bands have. */
+.column {
+  width: 100%;
+  max-width: 40rem;
   margin: 0 auto;
-  padding: 1.5rem 1.25rem 2.5rem;
-  border-top: 1px solid var(--line);
-  color: var(--ink-soft);
+  padding: 3rem var(--gutter) 4rem;
+}
+
+/* ── the hero ────────────────────────────────────────────────────────────── */
+
+/* Near-black, with its own light: two soft radials for the colour and a 56px
+   grid for the texture. The grid is what stops a flat dark band from reading
+   as an unstyled background. */
+.hero {
+  position: relative;
+  overflow-x: clip;
+  padding: 4rem 0 5rem;
+  background-color: var(--night);
+  background-image:
+    radial-gradient(55% 45% at 85% 0%, rgb(16 185 129 / 20%), transparent 70%),
+    radial-gradient(40% 40% at 0% 25%, rgb(14 165 233 / 10%), transparent 70%),
+    linear-gradient(rgb(255 255 255 / 3.5%) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 3.5%) 1px, transparent 1px);
+  background-size: auto, auto, 56px 56px, 56px 56px;
+  color: #e7e5e4;
+}
+
+.hero-inner {
+  width: 100%;
+  max-width: var(--band);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.hero-say { max-width: 56rem; }
+
+/* The portals, said in words, with a dot that says the watching is happening
+   now. Also the accessible version of the marquee below, which is decoration
+   and hidden from a screen reader. */
+.hero-badge {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 5%);
+  color: #d6d3d1;
   font-size: 0.75rem;
-  line-height: 1.6;
+  font-weight: 500;
+}
+
+.hero-pulse {
+  position: relative;
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--mint);
+}
+
+.hero-pulse::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--mint);
+  opacity: 0.6;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-pulse::before { animation: hero-ping 1.6s cubic-bezier(0, 0, 0.2, 1) infinite; }
+}
+
+@keyframes hero-ping {
+  75%, 100% { transform: scale(2.4); opacity: 0; }
+}
+
+.hero-say h1 {
+  margin: 1.5rem 0 0;
+  font-size: clamp(2.25rem, 6vw, 4.5rem);
+  font-weight: 600;
+  line-height: 1.02;
+  letter-spacing: -0.03em;
+  overflow-wrap: break-word;
+}
+
+/* The second sentence of the headline, in the two accent colours. Clipped to
+   the text, so it is the letters that carry the gradient and not a box behind
+   them. */
+.hero-grad {
+  background-image: linear-gradient(90deg, var(--mint), var(--sky-soft));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero-say .lede {
+  max-width: 42rem;
+  margin: 1.5rem 0 0;
+  color: #a8a29e;
+  font-size: 1.0625rem;
+  line-height: 1.65;
+}
+
+/* What is on the hero instead of the form — a stale link, or no districts to
+   subscribe to. Paper, like the card it stands in for, and narrow: a sentence
+   stretched across the full band is a sentence nobody finishes. Its own
+   colours, because the hero's are for text on near-black. */
+.hero .panel {
+  max-width: 40rem;
+  margin-top: 3rem;
+  padding: 2rem;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 0 40px 100px -40px rgb(0 0 0 / 80%);
+}
+
+.hero .panel h1 { margin-bottom: 0.75rem; font-size: 1.875rem; }
+.hero .panel .lede { color: var(--ink-soft); }
+.hero .panel .cta { margin-top: 1.5rem; }
+
+/* The filter on the left, the phone on the right. One column until there is
+   room for both — a 320px phone beside a form is a phone squeezing the form. */
+.hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3rem;
+  margin-top: 3.5rem;
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .hero { padding: 6rem 0 7rem; }
+  .hero-inner { padding: 0 2rem; }
+  .hero-grid {
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    gap: 3.5rem;
+  }
+  .hero-say .lede { font-size: 1.125rem; }
+}
+
+/* ── the card the filter is on ───────────────────────────────────────────── */
+
+/* Paper on near-black: the one lit surface on the hero, which is what makes
+   the form the thing to do rather than one panel among several. */
+.site form,
+.filter-card {
+  padding: 1.5rem;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow:
+    0 40px 100px -40px rgb(0 0 0 / 80%),
+    0 0 0 1px rgb(255 255 255 / 10%);
+}
+
+@media (min-width: 40rem) {
+  .site form,
+  .filter-card { padding: 2.5rem; }
+}
+
+.filter-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.filter-head h2 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.filter-head span {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+/* Each field is a row with a rule under it, which is what holds a form this
+   long together without a box around every question. */
+.filter-card > div,
+.filter-card > label,
+.filter-card > fieldset {
+  padding: 1.75rem 0;
+}
+
+/* ── where the alerts are going ──────────────────────────────────────────── */
+
+.send-to { padding-top: 1.5rem; }
+
+/* The two messengers, as buttons rather than radios: pressing one also redraws
+   the phone beside the card, so it shows what it buys as well as choosing it.
+   Equal halves, because neither is the default answer. */
+.send-pick {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-bottom: 1.25rem;
+}
+
+.pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.8rem 0.5rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 200ms ease, background 200ms ease, color 200ms ease;
+}
+
+.pick svg { width: 18px; height: 18px; flex: none; }
+.pick:hover { border-color: var(--ink-faint); }
+
+.pick-telegram.on {
+  border-color: #229ed9;
+  background: #e8f5fc;
+  color: #0b5e86;
+}
+
+.pick-whatsapp.on {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--accent-dim);
+}
+
+.pick:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px rgb(5 150 105 / 10%);
+}
+
+.send-note {
+  margin: 0.75rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.8125rem;
   text-align: center;
 }
 
-.site-foot-row {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 0.35rem 1.25rem;
-  margin-bottom: 0.6rem;
-}
-
-.site-foot a {
-  color: var(--ink-soft);
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-underline-offset: 2px;
-}
-
-.site-foot a:hover { color: var(--ink); }
-
-.site-foot-fine { opacity: 0.8; }
-
-/* ════════════════════════════════════════════════════════════════════════
-   The landing page: the filter on the left, an alert where it is read on the
-   right, and the two ways out underneath both.
-   ════════════════════════════════════════════════════════════════════════ */
-
-.hero h1 {
-  margin: 0 0 0.75rem;
-  font-size: clamp(2rem, 4.4vw, 2.75rem);
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: -0.025em;
-}
-
-.hero .lede {
-  margin: 0 0 1.75rem;
-  font-size: 1.125rem;
-  line-height: 1.55;
-}
-
-/* The form is the layout: the buttons have to stay inside it to submit it, and
-   they belong under both columns rather than under the fields. */
-.hero-form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 1.75rem;
-  padding: 0;
-  border: none;
-  background: none;
-  box-shadow: none;
-}
-
-.filter-card {
-  padding: 1.5rem 1.75rem;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  background: var(--card);
-  box-shadow: var(--shadow);
-}
-
-.hero-actions { min-width: 0; }
+/* ── the messenger preview ───────────────────────────────────────────────── */
 
 /* A phone is a picture of the product, not the product. On a narrow screen it
-   is between somebody and the button they came for, so it is not drawn at all. */
+   is between somebody and the button they came for, so it is not drawn. */
 .hero-aside { display: none; }
 
-@media (min-width: 62rem) {
-  .hero-form {
-    /* The card is capped rather than elastic: a rent slider stretched across
-       700px is harder to aim at, not easier. */
-    grid-template-columns: minmax(0, 34rem) auto;
-    justify-content: start;
-    align-items: start;
-    column-gap: 3.5rem;
-  }
-
+@media (min-width: 64rem) {
   .hero-aside {
     display: block;
     position: sticky;
-    top: 2rem;
-  }
-
-  /* Under both columns. */
-  .hero-actions {
-    grid-column: 1 / -1;
-    max-width: 34rem;
+    top: 6.5rem;
   }
 }
 
-/* ── the messenger switch ───────────────────────────────────────────────── */
+.preview { display: flex; flex-direction: column; align-items: center; }
 
-.switch {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  width: 300px;
-  margin: 0 auto 1rem;
-  padding: 4px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--card);
+/* The tilt is the perspective on this wrapper, not a transform on a flat
+   picture: it straightens up on hover, which is the one piece of motion on the
+   page that is worth the bytes — it says the phone is an object. */
+.phone-stage { perspective: 1400px; }
+
+.phone-stage .phone {
+  transform: rotateY(-10deg) rotateX(6deg);
+  transition: transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* The moving part. Transformed rather than repositioned so it slides on the
-   compositor and cannot nudge the labels while it travels. */
-.switch-thumb {
-  position: absolute;
-  top: 4px;
-  left: 4px;
-  width: calc(50% - 4px);
-  height: calc(100% - 8px);
-  border-radius: 999px;
-  background: var(--accent);
-  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1), background 220ms ease;
+.phone-stage:hover .phone { transform: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .phone-stage .phone { transform: none; transition: none; }
 }
 
-.switch-thumb-whatsapp { transform: translateX(0); background: var(--wa); }
-.switch-thumb-telegram { transform: translateX(100%); background: #229ed9; }
-
-.switch label {
-  position: relative;
-  z-index: 1;
-  padding: 0.45rem 0;
-  color: var(--ink-soft);
+.phone-caption {
+  max-width: 20rem;
+  margin: 2rem 0 0;
+  color: #a8a29e;
   font-size: 0.875rem;
-  font-weight: 600;
   text-align: center;
-  cursor: pointer;
-  transition: color 160ms ease;
-  user-select: none;
 }
 
-.switch label.switch-on { color: #fff; }
-
-/* Reachable by keyboard, invisible on screen: the label is the control. */
-.switch input {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  opacity: 0;
-}
-
-.switch input:focus-visible + * { outline: none; }
-.switch:focus-within { box-shadow: 0 0 0 3px var(--accent-wash); }
+.phone-caption strong { color: #e7e5e4; font-weight: 600; }
 
 /* ── the phone ──────────────────────────────────────────────────────────── */
 
@@ -2859,65 +3144,667 @@ form p.error {
   text-align: center;
 }
 
-/* ── the header's call to action ──────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════════
+   The public site, continued: the controls on the card, the bands under the
+   hero, and the footer.
 
-.site-head-row {
-  justify-content: space-between;
-  gap: 1rem;
-}
+   Everything here is scoped to `.site` so the admin keeps the controls it was
+   built against — same markup, same classes, a different palette and a
+   different shape.
+   ════════════════════════════════════════════════════════════════════════ */
 
-.site-head-cta {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
+/* ── where to stop when a link lands on a section ─────────────────────────── */
 
-/* Shorter and lighter than the form's own `.cta`: this is the way to the
-   decision, not the decision. Making it the same size would set up two buttons
-   of equal weight saying the same words on one screen. */
-.head-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.45rem;
-  height: 38px;
-  padding: 0 0.9rem;
-  border-radius: 999px;
-  color: #fff;
-  font-size: 0.875rem;
-  font-weight: 600;
-  text-decoration: none;
-  white-space: nowrap;
-  transition: background 140ms ease, transform 140ms ease;
-}
-
-.head-cta:hover { color: #fff; text-decoration: none; transform: translateY(-1px); }
-.head-cta:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-
-.head-cta svg { width: 16px; height: 16px; }
-
-.head-cta-telegram { background: #229ed9; }
-.head-cta-telegram:hover { background: #1b87ba; }
-.head-cta-whatsapp { background: var(--wa); }
-.head-cta-whatsapp:hover { background: var(--wa-dim); }
-
-/* The anchor sits under a 64px bar, so the browser is told to stop short of it
-   rather than scrolling the button out of sight. */
-#start { scroll-margin-top: 84px; }
+/* The bar is sticky, so an anchor that scrolled to the top of a section would
+   put its first line underneath it. */
+.site #search,
+.site #how,
+.site #pricing,
+.site #faq,
+.site #start { scroll-margin-top: 6rem; }
 
 @media (prefers-reduced-motion: no-preference) {
   html { scroll-behavior: smooth; }
 }
 
-/* Narrow screens: the logos alone. Both buttons still fit beside the brand,
-   and each link carries its own aria-label, so the words are only missing from
-   the screen and not from the page. */
-@media (max-width: 44rem) {
-  .head-cta span { display: none; }
-  .head-cta { padding: 0 0.75rem; }
+/* ── the controls ────────────────────────────────────────────────────────── */
+
+.site .field-label,
+.site legend,
+.site label > span:first-child {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
-@media (max-width: 24rem) {
-  /* No room for the brand and two buttons at once; the brand is the thing that
-     says where you are. */
-  .site-head-cta { display: none; }
+.site input[type="text"],
+.site input[type="date"],
+.site input[type="number"],
+.site select {
+  height: auto;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--card);
+  font-size: 0.875rem;
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+
+.site input:focus-visible,
+.site select:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px rgb(5 150 105 / 10%);
+}
+
+/* `appearance: none` took the browser's chevron with it, so the control has to
+   draw its own or read as a text box that cannot be typed in. */
+.site select {
+  padding-right: 2.5rem;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%2357534e' stroke-width='1.8' stroke-linecap='round'%3E%3Cpath d='m4 6.5 4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.9rem center;
+  background-size: 1rem;
+  cursor: pointer;
+}
+
+/* The area box has a magnifier in it, which is a background image rather than
+   an icon element: an element would have to be positioned over an input it is
+   not inside, and the input already owns the space. */
+.site .combo input[type="text"] {
+  padding-left: 2.75rem;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a8a29e' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: left 1rem center;
+  background-size: 1rem;
+}
+
+/* ── the choices, as pills ───────────────────────────────────────────────── */
+
+/* The checkbox itself goes away and the label becomes the control: a row of
+   ticked boxes is a list to read, and these are a set to choose from. The
+   input is still in the markup, still focusable and still what the form posts
+   — `:has()` is only how the pill knows it is on. */
+.site .choices { gap: 0.5rem; }
+
+.site .choices label {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: border-color 300ms ease, background 300ms ease, color 300ms ease;
+}
+
+.site .choices input[type="checkbox"],
+.site .choices input[type="radio"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.site .choices label:hover { border-color: var(--ink-faint); }
+
+.site .choices label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* How you are searching is not a property you want — it is which list the box
+   below offers — so it is ticked in ink rather than in the accent colour. */
+.site .choices label:has(input[type="radio"]:checked) {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.site .choices label:has(input:focus-visible) {
+  box-shadow: 0 0 0 4px rgb(5 150 105 / 15%);
+}
+
+/* ── the sliders ─────────────────────────────────────────────────────────── */
+
+.site .range2-value {
+  color: var(--accent-dim);
+  font-family: var(--font-heading, var(--font-sans)), system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.site .range2-track::before,
+.site .range2-fill { height: 6px; margin-top: -3px; border-radius: 999px; }
+.site .range2-track::before { background: var(--line); }
+.site .range2-fill { background: var(--accent-lift); }
+
+/* White with a thick accent ring, rather than a filled dot: on a 6px track a
+   solid thumb reads as a bulge in the track and not as the thing to drag. */
+.site .range2-input::-webkit-slider-thumb {
+  width: 1.375rem;
+  height: 1.375rem;
+  border: 6px solid var(--accent);
+  background: #fff;
+  box-shadow: 0 4px 12px rgb(5 150 105 / 35%);
+}
+
+.site .range2-input::-moz-range-thumb {
+  width: 0.75rem;
+  height: 0.75rem;
+  border: 6px solid var(--accent);
+  background: #fff;
+  box-shadow: 0 4px 12px rgb(5 150 105 / 35%);
+}
+
+/* ── the date and how flexible it is ─────────────────────────────────────── */
+
+/* The date is the decision and the window qualifies it, so they are one row
+   with the window given a fixed, narrower share. Each carries its own small
+   label above it, because "Flexibility" over a list of four reads where "±
+   days" beside a number box had to be worked out. */
+.site .date-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: end;
+  margin-top: 1rem;
+}
+
+.site .date-row > label { display: block; }
+
+.site .date-row > label > span:first-child {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.site .date-row input,
+.site .date-row select {
+  width: 100%;
+  height: 3.125rem;
+}
+
+@media (min-width: 30rem) {
+  .site .date-row { grid-template-columns: minmax(0, 1fr) 10rem; }
+}
+
+/* ── the notes under a field ─────────────────────────────────────────────── */
+
+/* The one note that is an answer rather than an aside — what happens when the
+   date is left blank — on the accent's own wash, which is also how the page
+   says "this is fine" without a word. */
+.site .note {
+  display: block;
+  margin-top: 0.85rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius);
+  background: var(--accent-wash);
+  box-shadow: 0 0 0 1px rgb(5 150 105 / 10%);
+  color: #064e3b;
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+.site .note::before { content: none; }
+
+.site .hint {
+  margin-top: 0.75rem;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.6;
+}
+
+/* ── the buttons ─────────────────────────────────────────────────────────── */
+
+.site .cta {
+  height: auto;
+  margin-top: 0;
+  padding: 1rem 1.5rem;
+  border-radius: var(--radius-cta);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  transition: background 300ms ease, transform 200ms ease;
+}
+
+.site .cta:active:not(:disabled) { transform: scale(0.985); }
+
+.site .cta-telegram { background: var(--sky); color: var(--night); }
+.site .cta-telegram:hover:not(:disabled),
+.site .cta-telegram:focus-visible { background: var(--sky-soft); color: var(--night); }
+
+.site .cta-whatsapp { background: var(--accent); color: #fff; }
+.site .cta-whatsapp:hover:not(:disabled),
+.site .cta-whatsapp:focus-visible { background: var(--accent-lift); color: #fff; }
+
+.site .cta:disabled { background: var(--line-strong); color: var(--ink-soft); }
+
+/* ════════════════════════════════════════════════════════════════════════
+   The bands under the hero: how it works, the plans, the questions.
+   ════════════════════════════════════════════════════════════════════════ */
+
+.band { padding: 5rem 0; }
+
+.band-grid,
+.band-head,
+.plan-cards,
+.faq-list {
+  width: 100%;
+  max-width: var(--band);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.band h2 {
+  margin: 1rem 0 0;
+  font-size: clamp(1.75rem, 3.6vw, 3rem);
+  line-height: 1.1;
+}
+
+/* The word above the heading that says which part of the page this is. Small,
+   spaced and in the accent colour — it is a label, not a sentence. */
+.eyebrow {
+  margin: 0;
+  color: var(--accent-dim);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+}
+
+.band-lede {
+  margin: 1.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: 1rem;
+  line-height: 1.7;
+}
+
+.band-head {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.band-head .band-lede { max-width: 24rem; }
+
+@media (min-width: 64rem) {
+  .band { padding: 7rem 0; }
+  .band-grid,
+  .band-head,
+  .plan-cards,
+  .faq-list { padding: 0 2rem; }
+  .band-head { flex-direction: row; align-items: flex-end; justify-content: space-between; }
+}
+
+/* ── how it works ────────────────────────────────────────────────────────── */
+
+.band-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3rem;
+  align-items: start;
+}
+
+@media (min-width: 64rem) {
+  .band-grid { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 3.5rem; }
+  .how-side { position: sticky; top: 6.5rem; }
+}
+
+.how-side .band-lede { max-width: 28rem; }
+
+/* Three figures in one strip, divided by the background showing through a 1px
+   grid gap — cheaper than three borders that then have to not double up. */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  margin-top: 2.5rem;
+  border-radius: var(--radius);
+  background: var(--line-strong);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.stats > div { padding: 1.25rem; background: var(--paper); }
+
+.stat-figure {
+  margin: 0;
+  font-size: 1.875rem;
+  line-height: 1.1;
+}
+
+.stat-of {
+  margin: 0.25rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.steps li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  padding: 2.25rem 0;
+  border-top: 1px solid var(--line-strong);
+}
+
+.steps li:last-child { border-bottom: 1px solid var(--line-strong); }
+
+@media (min-width: 40rem) {
+  .steps li { grid-template-columns: 6rem minmax(0, 1fr); gap: 1rem; }
+}
+
+.step-number {
+  font-size: 2.75rem;
+  line-height: 1;
+  color: var(--line-strong);
+}
+
+/* The last step is the point of the product — being first — so its number is
+   the one that is lit. */
+.steps li:last-child .step-number { color: var(--accent); }
+
+.steps h3 { margin: 0; font-size: 1.25rem; }
+
+.steps p {
+  margin: 0.5rem 0 0;
+  color: var(--ink-soft);
+  line-height: 1.7;
+}
+
+/* ── the portals, scrolling ──────────────────────────────────────────────── */
+
+/* Decoration, and marked as such: the same names are in the badge over the
+   headline, in words, which is what a screen reader reads.
+   The strip holds two identical sets and travels exactly half its own width,
+   so when the animation loops the second set is standing where the first one
+   started and the join cannot be seen. */
+.marquee {
+  overflow: hidden;
+  margin-top: 4rem;
+  padding: 1.5rem 0;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  color: var(--ink-faint);
+  font-size: clamp(1.5rem, 3vw, 1.875rem);
+}
+
+.marquee-run { display: flex; width: max-content; }
+
+.marquee-set { display: flex; }
+
+.marquee-set > span { display: inline-flex; gap: 2rem; padding-right: 2rem; }
+
+.marquee-set i { color: var(--accent); font-style: normal; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .marquee-run { animation: marquee 34s linear infinite; }
+}
+
+@keyframes marquee {
+  to { transform: translateX(-50%); }
+}
+
+/* ── the plans ───────────────────────────────────────────────────────────── */
+
+.plans-band { padding-top: 0; }
+
+.plan-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 3rem;
+}
+
+/* The recommended one is wider as well as darker: the two cards are not the
+   same offer at two prices, and a 50/50 split would say they were. */
+@media (min-width: 64rem) {
+  .plan-cards { grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); }
+  .plan-cards-one { grid-template-columns: minmax(0, 7fr); }
+}
+
+.plan-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 2rem;
+  border-radius: var(--radius-lg);
+  background: var(--paper);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+@media (min-width: 40rem) {
+  .plan-card { padding: 2.5rem; }
+}
+
+/* Dark, with its own glow, because it is the one we would rather people used:
+   free to deliver on, so it is the one that stays cheap. */
+.plan-card-telegram {
+  background: var(--night);
+  color: #e7e5e4;
+  box-shadow: 0 40px 80px -40px rgb(14 165 233 / 55%);
+}
+
+.plan-card-telegram::before {
+  content: "";
+  position: absolute;
+  top: -6rem;
+  right: -6rem;
+  width: 18rem;
+  height: 18rem;
+  border-radius: 999px;
+  background: rgb(14 165 233 / 20%);
+  filter: blur(48px);
+  pointer-events: none;
+}
+
+.plan-card > * { position: relative; }
+
+.plan-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.plan-app {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.plan-card-telegram .plan-app { color: var(--sky-soft); }
+.plan-card-whatsapp .plan-app { color: var(--accent-dim); }
+.plan-app svg { width: 20px; height: 20px; }
+
+.plan-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  background: var(--sky);
+  color: var(--night);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+}
+
+.plan-prices {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 2.5rem;
+  margin-top: 2rem;
+}
+
+.plan-prices p { margin: 0; }
+
+.plan-prices strong {
+  font-size: 3rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+/* The second price is the same offer over a longer period, so it is said in a
+   smaller voice than the headline figure rather than in an equal one. */
+.plan-prices p + p strong { font-size: 1.875rem; opacity: 0.75; }
+
+.plan-prices span { margin-left: 0.35rem; color: var(--ink-soft); font-size: 0.9375rem; }
+.plan-card-telegram .plan-prices span { color: #a8a29e; }
+
+/* What the figure above includes, in the smallest type on the card: it
+   qualifies the price rather than being a feature beside it. */
+.plan-allowance {
+  margin: 0.75rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+}
+
+.plan-card-telegram .plan-allowance { color: #a8a29e; }
+
+/* Deliberately not `.plan-points`, which is the list on /upgrade's cards and
+   draws its own tick as a ::before — two ticks per line was what sharing the
+   name bought. */
+.plan-feats {
+  display: grid;
+  gap: 0.75rem;
+  margin: 2rem 0 2.5rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+
+/* Two columns on the wide card only. Four claims down one side of a card that
+   is seven twelfths of the row leaves a column of nothing beside them. */
+@media (min-width: 40rem) {
+  .plan-card-telegram .plan-feats { grid-template-columns: 1fr 1fr; }
+}
+
+.plan-feats li { display: flex; align-items: center; gap: 0.75rem; }
+
+.plan-feats .tick { width: 1.25rem; height: 1.25rem; flex: none; }
+.plan-card-telegram .plan-feats .tick { color: var(--sky-soft); }
+.plan-card-whatsapp .plan-feats .tick { color: var(--accent); }
+
+/* Pushed to the bottom of the card, so the two buttons sit on one line even
+   though one card carries its claims in two columns and the other in one. */
+.plan-card > .cta { margin-top: auto; }
+
+/* ── the questions ───────────────────────────────────────────────────────── */
+
+.faq-list { margin-top: 3rem; }
+
+/* `<details>`, so it opens, closes, prints, answers find-in-page and is
+   reachable by keyboard without a line of JavaScript. */
+.faq-list details {
+  border-top: 1px solid var(--line-strong);
+}
+
+.faq-list details:last-of-type { border-bottom: 1px solid var(--line-strong); }
+
+.faq-list summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  padding: 1.75rem 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+
+.faq-list summary::-webkit-details-marker { display: none; }
+.faq-list summary:hover { color: var(--accent-dim); }
+
+.faq-list summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* A plus that becomes a minus, which is the one affordance a styled summary
+   loses when the browser's own triangle is taken away. */
+.faq-list summary svg {
+  flex: none;
+  width: 1.25rem;
+  height: 1.25rem;
+  color: var(--accent);
+  transition: transform 300ms ease;
+}
+
+.faq-list details[open] summary svg { transform: rotate(135deg); }
+
+.faq-list details > p {
+  max-width: 48rem;
+  margin: 0;
+  padding: 0 0 1.75rem;
+  color: var(--ink-soft);
+  line-height: 1.75;
+}
+
+/* ── the site footer ─────────────────────────────────────────────────────── */
+
+.site-foot {
+  flex: none;
+  padding: 3.5rem 0;
+  border: none;
+  background: var(--night);
+  color: #a8a29e;
+  font-size: 0.875rem;
+  text-align: left;
+}
+
+.site-foot-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1.5rem;
+  width: 100%;
+  max-width: var(--band);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+}
+
+.site-foot p { margin: 0; }
+
+.site-foot a {
+  color: #e7e5e4;
+  text-decoration: underline;
+  text-decoration-color: rgb(16 185 129 / 60%);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+}
+
+.site-foot a:hover { color: #fff; }
+
+.site-foot a.brand-foot { text-decoration: none; }
+
+.site-foot-fine { color: #78716c; font-size: 0.75rem; }
+
+.brand-foot { font-size: 1rem; }
+
+@media (min-width: 48rem) {
+  .site-foot-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+}
+
+@media (min-width: 64rem) {
+  .site-foot-row { padding: 0 2rem; }
 }

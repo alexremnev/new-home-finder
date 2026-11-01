@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import type { Criteria, Limits } from "./criteria";
 import { query } from "./db";
+import { GIFT_DAYS } from "./gift";
 import { stripeMode } from "./stripe";
 
 export type Channel = "telegram" | "whatsapp";
@@ -83,6 +84,24 @@ export function trialDaysOn(plan: SignupPlan, channel: Channel): number | null {
       ? plan.duration_days_whatsapp ?? plan.duration_days
       : plan.duration_days;
   return days && days > 0 ? days : null;
+}
+
+/**
+ * The extra free day a quiet trial can be given on top of the plan's own, or
+ * null where there is none to give.
+ *
+ * WhatsApp only, and that is not a rule this function invented: the gift exists
+ * because the WhatsApp trial is a single day and a single quiet day shows
+ * nobody anything — see `giftExtraDay` and `owed_a_free_day` in the worker. The
+ * Telegram trial has no equivalent and gets null.
+ *
+ * Read by the sign-up page so it can say what the trial really is — a day on
+ * the plan, and a second one if the first was quiet — rather than adding the
+ * two up into a figure that is only true for some people.
+ */
+export function giftDaysOn(plan: SignupPlan, channel: Channel): number | null {
+  if (channel !== "whatsapp") return null;
+  return trialDaysOn(plan, channel) === null ? null : GIFT_DAYS;
 }
 
 // What somebody on this messenger may buy. A plan with no channel is for
