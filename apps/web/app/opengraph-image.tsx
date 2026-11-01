@@ -31,19 +31,31 @@ export const alt =
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
-// The badge itself rather than a glyph like it, read off disk and inlined:
-// Satori has no access to /public and no network here, and this image is
-// generated once at build time, where the file is there to read.
-const MARK =
-  "data:image/png;base64," +
-  readFileSync(join(process.cwd(), "public", "logo-mark.png")).toString("base64");
-
 const NIGHT = "#101215";
 const MINT = "#6ee7b7";
 const EMERALD = "#10b981";
 const WA_HEAD = "#0f5a47";
 
+/**
+ * The badge itself rather than a glyph like it, read off disk and inlined:
+ * Satori has no access to /public and no network here.
+ *
+ * Read inside the function and never at module scope. This module is imported
+ * by every page that resolves `openGraph` metadata — that is how Next learns
+ * the image's size and alt text — so anything at the top level runs in the
+ * page's own request, and in a serverless function `public/` is not there to
+ * read. A `readFileSync` up there took the whole landing page down with an
+ * ENOENT on `/var/task/public/logo-mark.png`. Down here it runs only when the
+ * image itself is being drawn, which is at build time.
+ */
+function mark(): string {
+  const file = readFileSync(join(process.cwd(), "public", "logo-mark.png"));
+  return `data:image/png;base64,${file.toString("base64")}`;
+}
+
 export default function OpengraphImage() {
+  const MARK = mark();
+
   return new ImageResponse(
     (
       <div
