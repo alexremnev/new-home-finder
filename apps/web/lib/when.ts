@@ -8,8 +8,18 @@
 // arithmetic below is right whatever the server's own clock is set to.
 const LONDON = "Europe/London";
 
-function parse(stamp: string | null | undefined): Date | null {
+function parse(stamp: string | Date | null | undefined): Date | null {
   if (!stamp) return null;
+
+  // A timestamp that was never cast to text arrives as a Date, because `pg`
+  // parses `timestamptz` for us. The column types here all say `string`, so
+  // such a query typechecks and then throws `replace is not a function` on
+  // the first render — which is how the Host tab went down. Accepted rather
+  // than asserted: a missing `::text` is a bug worth fixing in the query, and
+  // not one worth taking a page down over.
+  if (stamp instanceof Date) {
+    return Number.isNaN(stamp.getTime()) ? null : stamp;
+  }
 
   // Postgres writes the offset as `+00` or `+01`; ISO 8601 — and therefore
   // Date.parse — wants `+00:00`. Without this every timestamp from the database

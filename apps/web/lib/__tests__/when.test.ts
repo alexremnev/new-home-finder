@@ -74,3 +74,21 @@ describe("relative time", () => {
     expect(olderThan(null, 24)).toBe(false);
   });
 });
+
+// A query that forgot `::text` hands back a Date, because `pg` parses
+// `timestamptz` itself. The column types all say `string`, so it typechecks
+// and then threw on render — the Host tab's two timestamps did exactly this.
+describe("a timestamp that arrived as a Date", () => {
+  it("formats rather than throwing", () => {
+    const when = new Date(summer) as unknown as string;
+    expect(at(when)).toBe("17 Jul 11:39");
+    expect(clockOf(when)).toBe("11:39");
+    expect(ago(new Date(Date.now() - 12 * 60_000) as unknown as string)).toBe(
+      "12 min ago",
+    );
+  });
+
+  it("treats an unparseable one as absent", () => {
+    expect(at(new Date("nonsense") as unknown as string)).toBe("—");
+  });
+});

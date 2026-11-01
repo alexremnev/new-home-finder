@@ -2374,7 +2374,7 @@ export async function hostHealth(win: Win): Promise<HostHealth> {
      ), latest AS (
        SELECT * FROM sampled ORDER BY started_at DESC LIMIT 1
      )
-     SELECT (SELECT started_at FROM latest)                            AS at,
+     SELECT (SELECT started_at::text FROM latest)                      AS at,
             (SELECT (counters->>'host_cpus')::int FROM latest)         AS cpus,
             (SELECT (counters->>'host_load1')::float8 FROM latest)      AS load1,
             (SELECT (counters->>'host_mem_total')::bigint FROM latest)  AS mem_total,
@@ -2441,7 +2441,7 @@ export async function browserUse(win: Win, job = "clearance"): Promise<BrowserUs
             sum((counters->>'browser_seconds')::float8)
               FILTER (WHERE jsonb_typeof(counters->'browser_seconds') = 'number')
               AS total_seconds,
-            max(started_at) AS last_at
+            max(started_at)::text AS last_at
        FROM job_runs
       WHERE job = $3
         AND started_at >  now() - make_interval(mins => $1::int)
