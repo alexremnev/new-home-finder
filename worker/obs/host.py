@@ -23,17 +23,27 @@ below returns None rather than raising, and None means "not measured" all the
 way up — the console prints "—" for it rather than a zero, because a zero here
 would read as "no memory free".
 
-This is also what makes the module importable on the development Macs, where
-/proc does not exist at all.
+This is also what makes the module importable on the development machines,
+where /proc does not exist at all and — on Windows — neither does half the
+standard library this file would otherwise reach for.
 """
 
 from __future__ import annotations
 
 import os
-import resource
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+#: `resource` is Unix-only and simply absent on Windows, where the scraper
+#: gets run by hand during development. A missing module is not an error
+#: here for the same reason an unreadable /proc is not: `peak_child_bytes`
+#: returns None, and None already means "not measured" all the way up.
+try:
+    import resource
+except ModuleNotFoundError:  # pragma: no cover - Windows only
+    resource = None  # type: ignore[assignment]
 
 #: Where the kernel publishes it on Linux. A constant so the tests can point
 #: the readers at a fixture directory instead of mocking `open`.
@@ -43,7 +53,11 @@ PROC = Path("/proc")
 #: figure is ever reported — the development Macs do not run the browser — but
 #: multiplying by 1024 on both would make a local run print gigabytes and
 #: somebody would believe it.
-_MAXRSS_UNIT = 1 if os.uname().sysname == "Darwin" else 1024
+#:
+#: Read off `sys.platform` rather than `os.uname()`, which does not exist on
+#: Windows: this is module-level, so raising here would take the import with
+#: it and no amount of guarding further down would help.
+_MAXRSS_UNIT = 1 if sys.platform == "darwin" else 1024
 
 
 @dataclass(frozen=True)
@@ -115,6 +129,8 @@ def peak_child_bytes() -> int | None:
     children it would understate them, which is why nothing else calls this.
     """
 
+    if resource is None:
+        return None
     try:
         used = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     except (OSError, ValueError):
