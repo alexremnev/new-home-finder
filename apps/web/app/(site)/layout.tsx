@@ -3,7 +3,6 @@ import { Suspense, type ReactNode } from "react";
 
 import { SUPPORT_EMAIL } from "@/lib/support";
 
-import { HomeMark } from "./logos";
 import { SiteNav } from "./site-nav";
 
 // Everything that is the public site rather than the product: the two pieces of
@@ -17,11 +16,12 @@ export default function SiteLayout({ children }: { children: ReactNode }) {
     process.env.WHATSAPP_NUMBER && process.env.WA_PHONE_NUMBER_ID,
   );
 
+  // The real mark, in both places it appears. Written once because the footer
+  // repeats the header: two copies would be two chances for one of them to be
+  // the old logo.
   const brand = (
     <>
-      <span className="brand-badge" aria-hidden="true">
-        <HomeMark />
-      </span>
+      <img className="brand-badge" src="/logo-mark.png" alt="" width={36} height={36} />
       London Home Finder
     </>
   );

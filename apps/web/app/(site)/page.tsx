@@ -245,7 +245,11 @@ export default async function Page({
                         screen reader. */}
                     <p className="hero-badge">
                       <span className="hero-pulse" aria-hidden="true" />
-                      Watching {portalSentence()}
+                      {/* The sentence is its own element rather than a bare
+                          text node: as an anonymous flex item it wrapped as a
+                          block, which on a phone put the dot on a line of its
+                          own above six portal names. */}
+                      <span>Watching {portalSentence()}</span>
                     </p>
                     <h1>
                       Beat the London Rental Race.{" "}

@@ -180,13 +180,10 @@ function PlanCard({
 }) {
   const { trialDays, giftDays, prices } = offer;
   const app = channel === "whatsapp" ? "WhatsApp" : "Telegram";
-  // What is metered, said per period: the WhatsApp week includes two hundred
-  // messages and the month nine hundred, and one figure standing for both
-  // would be wrong about one of them. Nothing metered at all is "unlimited",
-  // which is every Telegram plan — delivery there is free, so there is nothing
-  // to count.
-  const metered = prices.filter((price) => price.allowance !== null);
-
+  // The plan's own days plus the one a quiet first day is given back, added up
+  // rather than listed: on WhatsApp that is one and one. Added here and not
+  // written as a two, so a change to either part moves the card with it.
+  const freeDays = trialDays === null ? null : trialDays + (giftDays ?? 0);
   return (
     <div className={`plan-card plan-card-${channel}`}>
       <div className="plan-card-head">
@@ -201,39 +198,36 @@ function PlanCard({
         <div className="plan-prices">
           {prices.map((price) => (
             <p key={price.unit}>
-              <strong>{pounds(price.pence)}</strong>
-              <span>/ {price.unit}</span>
+              <span className="plan-rate">
+                <strong>{pounds(price.pence)}</strong>
+                <span>/ {price.unit}</span>
+              </span>
+              {/* Under the figure it belongs to, in the smallest type on the
+                  card: the week includes two hundred messages and the month
+                  nine hundred, and one line under both could only ever be
+                  right about one of them. */}
+              {price.allowance !== null && (
+                <small>up to {price.allowance} alerts</small>
+              )}
             </p>
           ))}
         </div>
       )}
 
-      {/* Under the price and in small type, because it qualifies the figure
-          above it rather than being a feature beside it. */}
-      <p className="plan-allowance">
-        {metered.length === 0
-          ? "Unlimited alerts — every match is sent."
-          : `Up to ${metered
-              .map((price) => `${price.allowance} alerts a ${price.unit}`)
-              .join(" · ")}.`}
-      </p>
-
       <ul className="plan-feats">
         {/* Omitted rather than guessed at when no plan is configured: a trial
             this page invented is a promise the bot would not keep. */}
-        {trialDays !== null && (
+        {freeDays !== null && (
           <li>
-            <Tick /> {trialDays} {trialDays === 1 ? "day" : "days"} free trial
+            <Tick /> {freeDays} {freeDays === 1 ? "day" : "days"} free trial
           </li>
         )}
-        {/* The extra day, as its own claim. It is a day the bot offers at the
-            end of a trial that delivered almost nothing, so it belongs next to
-            the trial and not inside it: added together they would read as a
-            length everybody gets. */}
-        {giftDays !== null && (
+        {/* Unmetered delivery, which is every Telegram plan and the thing that
+            makes it the cheap one. On a metered card the figures are under the
+            prices they belong to instead. */}
+        {prices.length > 0 && prices.every((price) => price.allowance === null) && (
           <li>
-            <Tick /> + {giftDays} extra free{" "}
-            {giftDays === 1 ? "day" : "days"} if the first is quiet
+            <Tick /> Unlimited alerts
           </li>
         )}
         <li>

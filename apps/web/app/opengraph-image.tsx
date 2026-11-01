@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { ImageResponse } from "next/og";
 
 /**
@@ -28,6 +31,13 @@ export const alt =
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
+// The badge itself rather than a glyph like it, read off disk and inlined:
+// Satori has no access to /public and no network here, and this image is
+// generated once at build time, where the file is there to read.
+const MARK =
+  "data:image/png;base64," +
+  readFileSync(join(process.cwd(), "public", "logo-mark.png")).toString("base64");
+
 const NIGHT = "#101215";
 const MINT = "#6ee7b7";
 const EMERALD = "#10b981";
@@ -55,24 +65,7 @@ export default function OpengraphImage() {
         {/* The promise, in the words the page opens with. */}
         <div style={{ display: "flex", flexDirection: "column", width: 660 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 44,
-                height: 44,
-                borderRadius: 14,
-                backgroundColor: EMERALD,
-              }}
-            >
-              <svg width="26" height="26" viewBox="0 0 24 24" fill="none"
-                   stroke={NIGHT} strokeWidth="2.4" strokeLinecap="round"
-                   strokeLinejoin="round">
-                <path d="M3 11.5 12 4l9 7.5" />
-                <path d="M5.5 10v9.5h13V10" />
-              </svg>
-            </div>
+            <img src={MARK} width={44} height={44} alt="" />
             <div style={{ color: "#f5f5f4", fontSize: 26, fontWeight: 600 }}>
               London Home Finder
             </div>
@@ -146,24 +139,7 @@ export default function OpengraphImage() {
                 backgroundColor: WA_HEAD,
               }}
             >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  width: 34,
-                  height: 34,
-                  borderRadius: 999,
-                  backgroundColor: MINT,
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
-                     stroke={NIGHT} strokeWidth="2.4" strokeLinecap="round"
-                     strokeLinejoin="round">
-                  <path d="M3 11.5 12 4l9 7.5" />
-                  <path d="M5.5 10v9.5h13V10" />
-                </svg>
-              </div>
+              <img src={MARK} width={34} height={34} alt="" style={{ borderRadius: 999 }} />
               <div style={{ display: "flex", flexDirection: "column" }}>
                 <div style={{ color: "#fff", fontSize: 17, fontWeight: 600 }}>
                   London Home Finder

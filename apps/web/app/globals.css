@@ -2269,21 +2269,16 @@ form p.error {
 
 .brand:hover { text-decoration: none; color: #fff; }
 
-/* The house on a tile of the accent colour: at 20px the photographic badge is
-   a smudge, and the one shape people scan a header for is the silhouette. */
+/* The badge itself, not a glyph standing in for it: it is the mark on the
+   favicon, on the link preview and on the bot's own avatar in the chat, and a
+   header that drew something else would be the one place the brand is a
+   different shape. */
 .brand-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   width: 2.25rem;
   height: 2.25rem;
-  border-radius: 0.75rem;
-  background: var(--accent-lift);
-  color: var(--night);
-  box-shadow: 0 8px 24px -8px rgb(16 185 129 / 80%);
+  flex: none;
 }
-
-.brand-badge svg { width: 1.25rem; height: 1.25rem; }
 
 .site-nav {
   display: none;
@@ -2466,8 +2461,12 @@ form p.error {
    and hidden from a screen reader. */
 .hero-badge {
   display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
+  /* No wrapping, and aligned to the top rather than the middle: with six
+     portals the sentence runs to two lines on a phone, and a wrapping badge
+     broke between the dot and the words instead of inside the words. The dot
+     is nudged down to sit on the first line. */
+  flex-wrap: nowrap;
+  align-items: flex-start;
   gap: 0.5rem;
   margin: 0;
   padding: 0.4rem 0.8rem;
@@ -2482,6 +2481,9 @@ form p.error {
 .hero-pulse {
   position: relative;
   flex: none;
+  /* Half the difference between the dot and a line of this type, so it is
+     centred on the first line whether there is one line or two. */
+  margin-top: 0.32rem;
   width: 0.5rem;
   height: 0.5rem;
   border-radius: 999px;
@@ -2621,6 +2623,32 @@ form p.error {
 .filter-card > fieldset {
   padding: 1.75rem 0;
 }
+
+/* ── two fields to a row ─────────────────────────────────────────────────── */
+
+/* One row of the card holding two of something: the bedroom and bathroom
+   sliders, or the two switches. A row rather than two, because each half is
+   the same question asked twice — and at half width a six-stop slider is still
+   a six-stop slider, where the rent scale would lose a hundred pounds a pixel.
+   Stacked on a narrow card, where half of it is not a control. */
+/* Two classes, because the rule this has to beat is `.filter-card > div`,
+   which lays every row of the card out as a block. */
+.site .pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.75rem;
+}
+
+@media (min-width: 34rem) {
+  .site .pair { grid-template-columns: 1fr 1fr; column-gap: 2.5rem; }
+  /* The one thing in the row that belongs to both halves. */
+  .site .pair-note { grid-column: 1 / -1; }
+}
+
+/* Switches are a line of text tall, so the row that holds two of them needs
+   no more height than one — and the gap between them is the reading gap, not
+   the gap between two sliders. */
+.site .pair-switches { gap: 1rem 2.5rem; align-items: center; }
 
 /* ── where the alerts are going ──────────────────────────────────────────── */
 
@@ -3649,7 +3677,15 @@ form p.error {
   margin-top: 2rem;
 }
 
-.plan-prices p { margin: 0; }
+/* Each price is a column now: the figure, and under it what that period
+   includes. */
+.plan-prices p {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.plan-rate { display: block; }
 
 .plan-prices strong {
   font-size: 3rem;
@@ -3661,18 +3697,23 @@ form p.error {
    smaller voice than the headline figure rather than in an equal one. */
 .plan-prices p + p strong { font-size: 1.875rem; opacity: 0.75; }
 
-.plan-prices span { margin-left: 0.35rem; color: var(--ink-soft); font-size: 0.9375rem; }
-.plan-card-telegram .plan-prices span { color: #a8a29e; }
-
-/* What the figure above includes, in the smallest type on the card: it
-   qualifies the price rather than being a feature beside it. */
-.plan-allowance {
-  margin: 0.75rem 0 0;
+.plan-prices .plan-rate span {
+  margin-left: 0.35rem;
   color: var(--ink-soft);
-  font-size: 0.75rem;
+  font-size: 0.9375rem;
 }
 
-.plan-card-telegram .plan-allowance { color: #a8a29e; }
+.plan-card-telegram .plan-prices .plan-rate span { color: #a8a29e; }
+
+/* What this period includes, in the smallest type on the card: it qualifies
+   the figure directly above it — the week is two hundred messages and the
+   month nine hundred — and is not a feature standing beside it. */
+.plan-prices small {
+  margin-top: 0.35rem;
+  color: var(--ink-faint);
+  font-size: 0.6875rem;
+  letter-spacing: 0.01em;
+}
 
 /* Deliberately not `.plan-points`, which is the list on /upgrade's cards and
    draws its own tick as a ::before — two ticks per line was what sharing the

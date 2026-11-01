@@ -209,6 +209,12 @@ export function SubscribeForm({
 
   const full = chosen.length >= maxDistricts;
 
+  // The free days this messenger is good for: the plan's own, plus the one a
+  // quiet first day is given back on WhatsApp. Added up the same way the plans
+  // band adds them, so the button and the card cannot say different numbers.
+  const { trialDays, giftDays } = offers[channel];
+  const freeDays = trialDays === null ? null : trialDays + (giftDays ?? 0);
+
   // Only when rooms are the *only* thing wanted. Ticking Room beside Flat still
   // leaves bedrooms meaningful, for the flats.
   const roomsOnly = wantedTypes.length > 0 && wantedTypes.every((one) => one === "room");
@@ -618,34 +624,43 @@ export function SubscribeForm({
           disabled slider only invites a second look. */}
       {!roomsOnly && (
         <>
-          <div>
-            <span className="field-label">Bedrooms</span>
-            <RangeSlider
-              min={BEDS_MIN}
-              max={ROOMS_MAX}
-              step={1}
-              value={bedrooms}
-              onChange={setBedrooms}
-              ticks
-              format={beds}
-              openTop="+"
-            />
-          </div>
+          {/* Side by side, at half the rent slider's width: they are the two
+              halves of one question — how many rooms — and six stops each
+              still reads at half the width. Rent and floor area keep the full
+              row, because those are the scales where a pixel is a hundred
+              pounds or ten square metres. */}
+          <div className="pair">
+            <div>
+              <span className="field-label">Bedrooms</span>
+              <RangeSlider
+                min={BEDS_MIN}
+                max={ROOMS_MAX}
+                step={1}
+                value={bedrooms}
+                onChange={setBedrooms}
+                ticks
+                format={beds}
+                openTop="+"
+              />
+            </div>
 
-          <div>
-            <span className="field-label">Bathrooms</span>
-            <RangeSlider
-              min={BATHS_MIN}
-              max={ROOMS_MAX}
-              step={1}
-              value={bathrooms}
-              onChange={setBathrooms}
-              ticks
-              format={rooms}
-              openTop="+"
-            />
+            <div>
+              <span className="field-label">Bathrooms</span>
+              <RangeSlider
+                min={BATHS_MIN}
+                max={ROOMS_MAX}
+                step={1}
+                value={bathrooms}
+                onChange={setBathrooms}
+                ticks
+                format={rooms}
+                openTop="+"
+              />
+            </div>
+
+            {/* Across both, because it is true of both. */}
             {roomsToo && (
-              <small className="note">
+              <small className="note pair-note">
                 Bedroom and bathroom counts only narrow the flats and houses.
                 Rooms come through regardless of where these sit.
               </small>
@@ -744,32 +759,48 @@ export function SubscribeForm({
         </div>
       </fieldset>
 
-      <label>
-        <span>Pets</span>
-        <span className="choices">
-          <label>
-            <input
-              type="checkbox"
-              name="pets_allowed"
-              defaultChecked={start.pets}
-            />{" "}
-            Must allow pets
-          </label>
-        </span>
-        <p className="hint">
-          Only leaves out listings that say pets are not allowed. Silence still comes
-          through.
-        </p>
-      </label>
+      {/* The two answers that are yes or no, as two switches on one row. Both
+          used to carry a paragraph of their own, and between them they were a
+          sixth of the card for two settings most people leave alone. The
+          paragraphs are still here as the tooltip each switch carries — on the
+          control, where somebody who wants to know goes looking, rather than
+          permanently underneath it.
 
-      {/* Last in the card, and not a filter: it narrows nothing, it says what
-          happens when two portals carry the same flat. One agent syndicates a
-          flat to Rightmove and Zoopla and it arrives twice, minutes apart,
-          which is the complaint this answers — but the second copy is a second
-          link, and somebody comparing agents wants both. */}
-      <label>
-        <span>Duplicates</span>
-        <span className="toggle">
+          Switches and not the pills the rest of the card uses: a pill says
+          "one of these", and neither of these is a set to choose from. */}
+      <div className="pair pair-switches">
+        <label
+          className="toggle"
+          title={
+            "Only leaves out listings that say pets are not allowed. " +
+            "Silence still comes through."
+          }
+        >
+          <input
+            type="checkbox"
+            role="switch"
+            name="pets_allowed"
+            defaultChecked={start.pets}
+          />
+          <span className="toggle-label">Must allow pets</span>
+        </label>
+
+        {/* Not a filter: it narrows nothing, it says what happens when two
+            portals carry the same flat. One agent syndicates a flat to
+            Rightmove and Zoopla and it arrives twice, minutes apart, which is
+            the complaint this answers — but the second copy is a second link,
+            and somebody comparing agents wants both. On by default, which is
+            why `submit` posts the inverse. */}
+        <label
+          className="toggle"
+          title={
+            oneAlertPerFlat
+              ? "The same flat on two portals is sent once — the listing " +
+                "that appeared first."
+              : "Every copy is sent, so a flat carried by two portals " +
+                "arrives twice, once per link."
+          }
+        >
           <input
             type="checkbox"
             role="switch"
@@ -779,16 +810,9 @@ export function SubscribeForm({
             checked={oneAlertPerFlat}
             onChange={(event) => setOneAlertPerFlat(event.target.checked)}
           />
-          <span className="toggle-label">Don&rsquo;t send duplicates</span>
-        </span>
-        <p className="hint">
-          {oneAlertPerFlat
-            ? "The same flat on two portals is sent once — the listing that " +
-              "appeared first."
-            : "Every copy is sent, so a flat carried by two portals arrives " +
-              "twice, once per link."}
-        </p>
-      </label>
+          <span className="toggle-label">Hide duplicates</span>
+        </label>
+      </div>
 
         {/* What the header's buttons and the plans below scroll to: the last
             thing in the card, which is the button and the one question left to
@@ -864,19 +888,11 @@ export function SubscribeForm({
               {/* The length comes from `plans`, so the line cannot promise a
                   trial the bot will not grant — and it is omitted rather than
                   guessed at where no plan is configured. */}
-              {offers[channel].trialDays !== null && (
+              {freeDays !== null && (
                 <p className="send-note">
-                  {offers[channel].trialDays}{" "}
-                  {offers[channel].trialDays === 1 ? "day" : "days"} free on{" "}
-                  {channel === "whatsapp" ? "WhatsApp" : "Telegram"}
-                  {offers[channel].giftDays !== null && (
-                    <>
-                      , plus {offers[channel].giftDays} more free{" "}
-                      {offers[channel].giftDays === 1 ? "day" : "days"} if the
-                      first one is quiet
-                    </>
-                  )}
-                  . No card required, cancel anytime.
+                  {freeDays} {freeDays === 1 ? "day" : "days"} free on{" "}
+                  {channel === "whatsapp" ? "WhatsApp" : "Telegram"}. No card
+                  required, cancel anytime.
                 </p>
               )}
             </>
