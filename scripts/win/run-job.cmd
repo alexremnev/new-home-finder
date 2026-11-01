@@ -56,13 +56,51 @@ REM that may already hold a thousand of them, and the alert can quote the actual
 REM error rather than "something went wrong".
 set OUT=%TEMP%\home-%JOB%-run.out
 
+REM ── the environment, before a run row is opened ────────────────────────────
+REM
+REM The portal readers import curl_cffi — the `scrape` extra — and the import is
+REM deliberately lazy, made at the point of use in worker/pipeline/run.py so the
+REM delivery host can run ingest, drain and rollup off a base install. The cost
+REM of that is where the failure lands: a missing extra is not found at startup
+REM but six frames into run_job, by which time the run has a row in `job_runs`
+REM and is recorded as failed. The Jobs panel then shows openrent failing for a
+REM reason that has nothing to do with openrent.
+REM
+REM So the check is made here, and scoped to the jobs that actually need it.
+REM scrape.cmd checks unconditionally because every job it accepts is a portal.
+set PORTALS=rightmove zoopla zoopla_london openrent spareroom onthemarket portals 
+set NEEDCURL=
+REM The trailing space above and in the search term make this an exact word
+REM match, so "right" does not match "rightmove" — the same guard scrape.cmd
+REM uses on its own job list.
+echo %PORTALS% | "%WINDIR%\System32\findstr.exe" /I /C:"%JOB% " >NUL
+if not errorlevel 1 set NEEDCURL=1
+
+REM Each message below says "error" on purpose: the alert quotes lines chosen by
+REM the findstr near the bottom of this file, and a message matching none of its
+REM terms would send a notification with an empty body.
 if not exist "%PY%" (
-  echo Virtualenv missing: "%PY%"  -- run: uv sync --extra ingest --extra scrape --extra dev> "%OUT%"
+  >"%OUT%" echo Environment error: virtualenv missing at "%PY%"
+  >>"%OUT%" echo Run: uv sync --extra ingest --extra scrape --extra dev
   set CODE=1
-) else (
-  "%PY%" -m worker %JOB% --trigger schedule > "%OUT%" 2>&1
-  set CODE=!ERRORLEVEL!
+  goto :logged
 )
+
+if defined NEEDCURL (
+  "%PY%" -c "import curl_cffi" 2>NUL
+  if errorlevel 1 (
+    >"%OUT%" echo Environment error: curl_cffi is not installed in this virtualenv,
+    >>"%OUT%" echo and the portal readers cannot import without it.
+    >>"%OUT%" echo Run: uv sync --extra ingest --extra scrape --extra dev
+    set CODE=1
+    goto :logged
+  )
+)
+
+"%PY%" -m worker %JOB% --trigger schedule > "%OUT%" 2>&1
+set CODE=!ERRORLEVEL!
+
+:logged
 
 echo ==== START %DATE% %TIME% %JOB% >> "%LOG%"
 type "%OUT%" >> "%LOG%"
