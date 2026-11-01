@@ -14,6 +14,11 @@ User=finder
 Slice=london-home-finder-browser.slice
 WorkingDirectory=/opt/london-home-finder
 EnvironmentFile=/etc/london-home-finder.env
+# Where deploy/install.sh put Chromium. Stated rather than defaulted because
+# the default is the running user's cache: the browser is downloaded by root at
+# install time and launched by `finder` at run time, so the two would look in
+# two different places and only the second would complain.
+Environment=PLAYWRIGHT_BROWSERS_PATH=/opt/london-home-finder/.playwright
 ExecStart=/opt/london-home-finder/.venv/bin/python -m worker clearance --trigger schedule
 # Sixty seconds of browser plus room to start one, against the job's own
 # TIMEOUT_MS of 60s. Much shorter than the readers' 600: this unit opens one

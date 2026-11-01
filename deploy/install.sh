@@ -53,6 +53,16 @@ uv sync --frozen --no-dev --extra ingest --extra scrape --extra browser
 # `--with-deps` pulls the shared libraries Chromium needs from apt; without it
 # the launch fails at runtime with a missing .so rather than at install time.
 # Idempotent: a second run finds the browser already there and does nothing.
+#
+# PLAYWRIGHT_BROWSERS_PATH is not optional here, and the default is a trap on
+# this box: Playwright downloads to the *installing* user's cache, this script
+# runs as root, and the clearance unit runs as `finder` — so the default would
+# put 450MB in /root/.cache where the service cannot read it, and the only
+# symptom would be a launch failing at runtime with "executable doesn't exist".
+#
+# Inside $DIR so the chown below covers it, and named again in
+# london-home-finder-clearance.service so the runtime looks where this wrote.
+export PLAYWRIGHT_BROWSERS_PATH="$DIR/.playwright"
 .venv/bin/playwright install --with-deps chromium
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
