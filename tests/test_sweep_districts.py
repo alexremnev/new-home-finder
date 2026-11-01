@@ -469,3 +469,128 @@ def test_the_region_is_swept_under_the_name_the_table_holds(
     portal = region_swept(monkeypatch, {})
 
     assert portal.asked == ["LONDON"]
+
+
+# ── a reader that fits nine districts in one request ──────────────────────
+#
+# `Portal.batch` changes two things in `collect` and nothing else: the whole
+# read list is handed to `plan` up front, and `budget` is read as a number of
+# requests rather than of districts. Both are easy to get quietly wrong in the
+# direction that costs coverage — a reader told about three of its nine
+# districts silently never reads the other six — so both are pinned here rather
+# than in the reader's own tests, which cannot see the engine.
+
+
+class Batched:
+    """A portal that answers nine districts from one page, as OnTheMarket does."""
+
+    key = "onthemarket"
+    dated = True
+    batch = 9
+
+    def __init__(self) -> None:
+        self.planned: tuple[str, ...] | None = None
+        self.asked: list[str] = []
+        self.fetched: list[str] = []
+
+    def plan(self, districts: tuple[str, ...]) -> None:
+        self.planned = districts
+
+    def harvest(self, district: str, *_: object) -> Harvest:
+        self.asked.append(district)
+        # The first district of each group of nine is the one that pays.
+        planned = self.planned or ()
+        first = planned.index(district) % self.batch == 0 if district in planned else True
+        if first:
+            self.fetched.append(district)
+            return Harvest(caught=[], pages=1)
+        return Harvest(caught=[], pages=0)
+
+
+def batched(monkeypatch: Any, districts: list[str], **over: Any) -> tuple[Batched, Note]:
+    sweeping(monkeypatch, districts)
+    job = Job()
+    portal = Batched()
+    sweep.collect(
+        None,  # type: ignore[arg-type]
+        job,  # type: ignore[arg-type]
+        portal,  # type: ignore[arg-type]
+        get=Fetcher(),
+        **over,
+    )
+    return portal, job.stages[0]
+
+
+def test_a_batching_reader_is_told_every_district_before_the_first_call(
+    monkeypatch: Any,
+) -> None:
+    # The only way such a reader can know which districts may share a request:
+    # the engine works them out from the subscriber list and then asks about
+    # them one at a time.
+    nine = ["SE16", "SE8", "E14", "E1", "SE1", "SE15", "SE17", "N1", "NW1"]
+    portal, stage = batched(monkeypatch, nine, pause=0)
+    assert portal.planned is not None
+    assert sorted(portal.planned) == sorted(nine)
+    assert sorted(portal.asked) == sorted(nine)
+    assert stage.values["batch"] == 9
+
+
+def test_the_budget_buys_requests_rather_than_districts(monkeypatch: Any) -> None:
+    # Two requests' worth of budget covers eighteen districts for a reader that
+    # fits nine in one. Read as districts it would have covered two, and the
+    # other sixteen would have gone unread on every run with nothing saying so.
+    many = [f"E{n}" for n in range(1, 21)]
+    portal, stage = batched(monkeypatch, many, budget=2, pause=0)
+    assert len(portal.asked) == 18
+    assert stage.counts["over_budget"] == 2
+
+
+def test_a_reader_with_no_batch_is_unchanged(monkeypatch: Any) -> None:
+    # Every other portal here takes one location per search, so `collect` has
+    # to behave exactly as it did: budget counted in districts.
+    sweeping(monkeypatch, [f"E{n}" for n in range(1, 21)])
+    job = Job()
+    portal = Portal(refuses=set())
+    sweep.collect(
+        None,  # type: ignore[arg-type]
+        job,  # type: ignore[arg-type]
+        portal,  # type: ignore[arg-type]
+        budget=2,
+        pause=0,
+        get=Fetcher(),
+    )
+    assert len(portal.asked) == 2
+    assert job.stages[0].counts["over_budget"] == 18
+
+
+def test_no_courtesy_pause_between_two_districts_that_cost_nothing(
+    monkeypatch: Any,
+) -> None:
+    # A batch of nine answers eight of its districts from a page it already
+    # has. Pausing a second between each of those is a second spent being
+    # polite to nobody — a hundred of them on a whole-London sweep — so the
+    # pause follows a request and not a district.
+    waits: list[float] = []
+    monkeypatch.setattr(sweep.time, "sleep", waits.append)
+    nine = ["SE16", "SE8", "E14", "E1", "SE1", "SE15", "SE17", "N1", "NW1"]
+    portal, _ = batched(monkeypatch, [*nine, "SW11"], pause=1.0)
+    # Ten districts, two requests, and one pause: between the two requests.
+    assert portal.fetched and len(portal.fetched) == 2
+    assert waits == [1.0]
+
+
+def test_a_reader_that_pays_for_every_district_still_pauses_between_them(
+    monkeypatch: Any,
+) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr(sweep.time, "sleep", waits.append)
+    sweeping(monkeypatch, ["E14", "SE16", "SE8"])
+    job = Job()
+    sweep.collect(
+        None,  # type: ignore[arg-type]
+        job,  # type: ignore[arg-type]
+        Portal(refuses=set()),  # type: ignore[arg-type]
+        pause=1.0,
+        get=Fetcher(),
+    )
+    assert waits == [1.0, 1.0]

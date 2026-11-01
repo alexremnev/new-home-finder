@@ -1247,12 +1247,38 @@ class Fetcher:
         pool.memory.save()
         self.close()
 
-    def get(self, url: str, *, accept: str = "gzip, deflate") -> Reply:
+    def get(
+        self,
+        url: str,
+        *,
+        accept: str = "gzip, deflate",
+        tolerate: tuple[int, ...] = (),
+    ) -> Reply:
         """Fetch one url. Direct if that works, through the proxy if it must.
 
         Raises `Refused` when nothing served it. Every attempt is metered,
         including the refused ones: a 403 through a residential proxy is
         traffic somebody charges for.
+
+        ── tolerate, and the one caller that needs it ──────────────────────
+
+        A status named here comes back as an ordinary `Reply` instead of being
+        retried and then raised. Empty by default, so nothing changes for a
+        caller that does not ask.
+
+        It exists for OnTheMarket, whose origin sheds load as a bare nginx
+        `404` — measured on 1 November 2026, 7 of 12 deep pages, with
+        `x-cache: Error from cloudfront`. `BLOCKED` already keeps a 404 off
+        the rotation, so no second fingerprint and no proxy exit is spent on
+        one either way; what this adds is letting the caller see it. Without
+        it the reader is handed `Refused`, the engine counts a refusal, and a
+        district is dropped for the run on something that is not a refusal and
+        that clears by itself twenty seconds later.
+
+        Only for a status whose meaning the *caller* knows better than this
+        method does. A 403 must never be tolerated: the whole escalation above
+        exists to answer it, and handing it back unexamined would skip the one
+        thing that gets the page.
 
         ── why the proxy is an escalation and not a setting ─────────────────
 
@@ -1385,7 +1411,12 @@ class Fetcher:
                         break
                     continue
                 broke = ""
-                if 200 <= reply.status < 300:
+                if 200 <= reply.status < 300 or reply.status in tolerate:
+                    # A tolerated status is recorded as served, deliberately.
+                    # The exchange completed, so this fingerprint works and
+                    # this address is not blocked — which is what both of
+                    # these remember. The only thing that did not work is the
+                    # page, and that is the caller's to judge.
                     self._best = target
                     self._served(host, url, via=via)
                     return reply

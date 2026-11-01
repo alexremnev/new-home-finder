@@ -1,29 +1,38 @@
 # Running the worker on a VPS
 
-Eight jobs, on systemd timers, on a machine that listens on nothing.
+Nine jobs, on systemd timers, on a machine that listens on nothing.
 
     ingest         every 2 min    read the feed, parse, match, queue
     rightmove      by calendar    read Rightmove search pages
     zoopla_london  by calendar    read the whole of Zoopla London, newest first
+    onthemarket    by calendar    read OnTheMarket in batches of nine districts
     spareroom      by calendar    read SpareRoom as a rotating window
     drain          every 5 min    send the queue, warn about plans, seed filters
     rollup         every 5 min    total the day into daily_stats
     report         hourly         check for silence, alert the ops chat
     purge          nightly        delete rows that have expired
 
-The ones on a plain interval drift, which is what you want from them. The three
-portal readers do not: they share one London-time calendar — every 5 minutes on
-weekdays 08:00–18:00, every 10 minutes either side of that, hourly between
+The ones on a plain interval drift, which is what you want from them. The four
+portal readers do not: they share one London-time calendar — every 6 minutes on
+weekdays 08:00–18:00, every 12 minutes either side of that, hourly between
 midnight and 07:00 — because how often it is worth asking a portal depends on
 when letting agents publish.
 
 They share the grid by phase rather than all landing on it: `rightmove` on the
-boundary, `zoopla_london` a third of the interval later, `spareroom` two thirds.
-So on the five-minute band it is :00, :01:40 and :03:20. Those are the only
-three jobs that reach outward over the network and two of them share one
-residential proxy pool, so starting them together would arrive at three portals
-as one burst with a period a stopwatch could read off. The reasoning, band by
-band, is in `systemd/london-home-finder-rightmove.timer`.
+boundary, `zoopla_london` a quarter of the interval later, `onthemarket` half,
+`spareroom` three quarters. So on the six-minute band it is :00, :01:30, :03:00
+and :04:30. Six minutes rather than five is what makes those quarters land on
+whole seconds. Those are the only four jobs that reach outward over the network
+and two of them share one residential proxy pool, so starting them together
+would arrive at four portals as one burst with a period a stopwatch could read
+off. The reasoning, band by band, is in
+`systemd/london-home-finder-rightmove.timer`.
+
+One of the four is deliberately asked more often than the site answers:
+OnTheMarket's search pages are CDN-cached for half an hour and no request
+header overrides it, so about four runs in five re-read an identical page. That
+is a choice — one cadence for every reader, and the requests are not billed —
+and it is argued out in `systemd/london-home-finder-onthemarket.timer`.
 
 Each run's individual requests are spaced too, by `SCRAPE_JITTER` — see
 `.env.example`. The timers blur the start; that blurs the shape.

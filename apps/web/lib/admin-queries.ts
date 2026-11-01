@@ -813,14 +813,22 @@ export const SCHEDULED_JOBS: {
   { job: "ingest", everyMins: 2 },
   { job: "drain", everyMins: 1 },
   { job: "rollup", everyMins: 2 },
-  // These three share one grid, offset by a third of its interval each, so one
-  // period covers all of them: five minutes through the working day, ten in the
-  // evenings and at weekends, hourly overnight. Ten is the looser of the two
-  // live gaps and so the one that cannot cry wolf — a reader that has not run
-  // for ten minutes in the evening band is not yet news.
-  { job: "zoopla_london", everyMins: 10 },
-  { job: "spareroom", everyMins: 10 },
-  { job: "rightmove", everyMins: 10 },
+  // These four share one grid, offset by a quarter of its interval each, so one
+  // period covers all of them: six minutes through the working day, twelve in
+  // the evenings and at weekends, hourly overnight. Twelve is the looser of the
+  // two live gaps and so the one that cannot cry wolf — a reader that has not
+  // run for twelve minutes in the evening band is not yet news.
+  //
+  // `onthemarket` is on the same grid and is deliberately asked far more often
+  // than the site answers: its search pages are CDN-cached for thirty minutes
+  // and no request header overrides that, so roughly four runs in five re-read
+  // an identical page. That is a scheduling choice recorded in its timer unit,
+  // not something this page should read as a fault — what would be a fault is
+  // the job not firing, which is exactly what this entry watches.
+  { job: "zoopla_london", everyMins: 12 },
+  { job: "spareroom", everyMins: 12 },
+  { job: "rightmove", everyMins: 12 },
+  { job: "onthemarket", everyMins: 12 },
   // Stopped on purpose, so its silence is the intended state and not a fault.
   // `zoopla_london` reads the whole city in one search, which is what this
   // reader was doing twenty-odd districts at a time; the reader itself stays,

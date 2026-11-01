@@ -8,17 +8,16 @@
 # ── the schedule, in London time ─────────────────────────────────────────
 #
 #   every day  00:00–07:00   hourly
-#   weekdays   08:00–18:00   every 5 minutes
-#   weekdays   07:00–08:00   every 10 minutes
-#   weekdays   18:00–24:00   every 10 minutes
-#   weekends   07:00–24:00   every 10 minutes
+#   weekdays   08:00–18:00   every 6 minutes
+#   weekdays   07:00–08:00   every 12 minutes
+#   weekdays   18:00–24:00   every 12 minutes
+#   weekends   07:00–24:00   every 12 minutes
 #
-# These are `rightmove`'s bands exactly, which is the point: the three readers
-# that go out over the network now run at one cadence. It replaces a schedule
-# that stopped at 21:00 weekdays and did not run overnight.
+# These are `rightmove`'s bands exactly, which is the point: the four readers
+# that go out over the network run at one cadence.
 #
-# Each band's stated end is exclusive, so the last five-minute run is 17:58:20
-# and 18:00 belongs to the ten-minute band that follows.
+# Each band's stated end is exclusive, so the last six-minute run is 17:58:30
+# and 18:00 belongs to the twelve-minute band that follows.
 #
 # ── what the extra runs buy here, and it is not more stock ───────────────
 #
@@ -28,29 +27,34 @@
 # possible. See the module note in worker/sources/spareroom.py.
 #
 # So a run is a slice of a cycle, and the cycle is what the latency is made of:
-# about 10 runs to walk the window, which was some 50 minutes on the old
-# schedule and is the same 50 in the weekday band — the five-minute cadence
-# there is unchanged. What the new bands add is the evening and the night,
-# where the window used to step once a quarter hour and now steps once every
-# ten minutes, and the overnight hours where it did not step at all.
+# 10 runs to walk the window, which is 60 minutes in the weekday band. It was
+# 50 on the five-minute grid, and the ten extra minutes are the whole of what
+# the six-minute grid costs this reader.
 #
-# The slice is taken from the clock in 300-second buckets, not from a counter,
-# so the offset below cannot desynchronise it: a run at 3m20s past a boundary
-# falls in the same bucket as the boundary, and consecutive five-minute runs
-# still get consecutive slices. With the 15s delay the worst draw lands at
-# 3m35s, still 85 seconds inside that bucket.
+# The slice is taken from the clock in `spareroom.SLOT_SECONDS` buckets, not
+# from a counter, so the offset below cannot desynchronise it: a run at 4m30s
+# past a boundary falls in the same bucket as the boundary, and consecutive
+# runs get consecutive slices. With the 15s delay the worst draw lands at
+# 4m45s, still 75 seconds inside that bucket.
+#
+# That constant and this interval have to agree, and the reason is worth
+# stating because it fails quietly. At 300 seconds against a 360-second
+# cadence every slice is still visited — simulated over 200 runs — but
+# unevenly, four slices getting 24 visits and the other six 16, because the
+# bucket index advances 1,1,1,1,2 across every five runs. Nothing is lost, the
+# cycle is just lumpy. `SLOT_SECONDS` is 360 so that it is not.
 #
 # ── the offset, and why it is seconds and not minutes ────────────────────
 #
-# Three readers, one grid, evenly spaced: `rightmove` on the boundary,
-# `zoopla_london` a third of the interval later, this one two thirds. Two
-# thirds of five minutes is 3m20s, which is why the time fields below carry a
-# seconds component — minute offsets cannot divide a five-minute interval into
-# three equal parts.
+# Four readers, one grid, evenly spaced: `rightmove` on the boundary,
+# `zoopla_london` a quarter of the interval later, `onthemarket` half, this one
+# three quarters. Three quarters of six minutes is 4m30s, which is why the
+# six-minute line below carries a seconds component; the twelve-minute band
+# divides into whole minutes.
 #
-#   five-minute band   :03 at second 20   → 3m20s after rightmove
-#   ten-minute band    :06 at second 40   → 6m40s after rightmove
-#   hourly night band  :40               → 40m after rightmove
+#   six-minute band     :04 at second 30   → 4m30s after rightmove
+#   twelve-minute band  :09                → 9m after rightmove
+#   hourly night band   :45                → 45m after rightmove
 #
 # ── the zone is stated here, not taken from the machine ──────────────────
 #
@@ -61,7 +65,7 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..17:03/5:20 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:04/6:30 Europe/London'
 
 [Unit]
 Description=Read the whole of SpareRoom London as a rotating window
@@ -69,23 +73,24 @@ Description=Read the whole of SpareRoom London as a rotating window
 [Timer]
 Unit=london-home-finder@spareroom.service
 
-# Nights, every day including weekends: hourly, 00:00 to 07:00.
-OnCalendar=*-*-* 00..06:40 Europe/London
+# Nights, every day including weekends: hourly, 00:45 to 07:00.
+OnCalendar=*-*-* 00..06:45 Europe/London
 
-# Weekdays, the working day: every five minutes, 08:00 to 18:00.
-OnCalendar=Mon..Fri 08..17:03/5:20 Europe/London
+# Weekdays, the working day: every six minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:04/6:30 Europe/London
 
-# Weekdays, the hour before the working day and the evening after it: every ten
-# minutes. Two lines because the morning band is a single hour — folded into
-# `07..17` it would make 07:00–08:00 five-minutely too.
-OnCalendar=Mon..Fri 07:06/10:40 Europe/London
-OnCalendar=Mon..Fri 18..23:06/10:40 Europe/London
+# Weekdays, the hour before the working day and the evening after it: every
+# twelve minutes. Two lines because the morning band is a single hour — folded
+# into `07..17` it would make 07:00–08:00 six-minutely too.
+OnCalendar=Mon..Fri 07:09/12 Europe/London
+OnCalendar=Mon..Fri 18..23:09/12 Europe/London
 
-# Weekends, from the end of the night band to midnight: every ten minutes.
-OnCalendar=Sat,Sun 07..23:06/10:40 Europe/London
+# Weekends, from the end of the night band to midnight: every twelve minutes.
+OnCalendar=Sat,Sun 07..23:09/12 Europe/London
 
 # Fifteen seconds. Small enough to keep the spacing above and to stay inside
-# this run's 300-second window slice. The per-request delay is `SCRAPE_JITTER`.
+# this run's `SLOT_SECONDS` window slice. The per-request delay is
+# `SCRAPE_JITTER`.
 RandomizedDelaySec=15s
 AccuracySec=15s
 

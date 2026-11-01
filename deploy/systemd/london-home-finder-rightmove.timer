@@ -6,45 +6,49 @@
 # ── the schedule, in London time ─────────────────────────────────────────
 #
 #   every day  00:00–07:00   hourly
-#   weekdays   08:00–18:00   every 5 minutes
-#   weekdays   07:00–08:00   every 10 minutes
-#   weekdays   18:00–24:00   every 10 minutes
-#   weekends   07:00–24:00   every 10 minutes
+#   weekdays   08:00–18:00   every 6 minutes
+#   weekdays   07:00–08:00   every 12 minutes
+#   weekdays   18:00–24:00   every 12 minutes
+#   weekends   07:00–24:00   every 12 minutes
 #
-# Five minutes through the hours London letting agents actually publish, ten
+# Six minutes through the hours London letting agents actually publish, twelve
 # minutes either side of them, and hourly overnight when nothing is posted but
 # the watermark should still not be a whole night behind by breakfast. There is
-# no dead band any more: this reader runs around the clock.
+# no dead band: this reader runs around the clock.
 #
 # Each band's stated end is exclusive, which is what makes them meet without
-# firing twice. So the last five-minute run is 17:55 and the last hourly night
-# run is 06:00 — 18:00 and 07:00 belong to the ten-minute band that follows.
+# firing twice. So the last six-minute run is 17:54 and the last hourly night
+# run is 06:00 — 18:00 and 07:00 belong to the twelve-minute band that follows.
 #
-# About 1060 runs a week against roughly 335 before, a little over three times
-# as many; at one search page per district that is some 380MB a week with the
-# three districts the seed enables, and the sweep still stops as soon as it is
-# behind the watermark, so a shorter interval means less new stock above it per
-# run rather than proportionally more work.
+# About 142 runs a weekday and 92 a weekend day, against 169 and 109 on the
+# five-minute grid this replaced. The sweep still stops as soon as it is behind
+# the watermark, so a slightly longer interval means slightly more new stock
+# above it per run rather than proportionally less work.
 #
-# ── one grid, three readers, evenly spaced ───────────────────────────────
+# ── one grid, four readers, evenly spaced ────────────────────────────────
 #
-# `zoopla_london` and `spareroom` now run on exactly these bands, and the three
-# of them share the grid by phase rather than by accident:
+# `zoopla_london`, `onthemarket` and `spareroom` run on exactly these bands,
+# and the four of them share the grid by phase rather than by accident:
 #
 #   rightmove       on the boundary
-#   zoopla_london   a third of the interval later
-#   spareroom       two thirds later
+#   zoopla_london   a quarter of the interval later
+#   onthemarket     half
+#   spareroom       three quarters
 #
-# So on the five-minute band it is :00, :01:40 and :03:20, and on the ten it is
-# :00, :03:20 and :06:40. Even spacing is the point: the three readers are the
-# only jobs on this box that reach outward over the network, two of them share
-# one residential proxy session pool, and started together they would arrive at
-# three portals as one burst on the same second of every period.
+# So on the six-minute band it is :00, :01:30, :03:00 and :04:30, and on the
+# twelve it is :00, :03, :06 and :09. Six rather than five is what makes those
+# quarters land on whole seconds: a fifth of five minutes is a minute, but a
+# quarter of it is 75 seconds and a quarter of six is a clean 90.
+#
+# Even spacing is the point: these four are the only jobs on this box that
+# reach outward over the network, two of them share one residential proxy
+# session pool, and started together they would arrive at four portals as one
+# burst on the same second of every period.
 #
 # This timer keeps the boundary and so needs no offset of its own. What it did
-# need was less jitter: ninety seconds of RandomizedDelaySec is most of the
-# hundred-second gap to the next reader, which would have made the spacing
-# decorative. See the delay below.
+# need was less jitter: ninety seconds of RandomizedDelaySec is the whole of
+# the gap to the next reader, which would have made the spacing decorative.
+# See the delay below.
 #
 # A sweep that outlasts its interval does not pile up: systemd will not start a
 # second london-home-finder@rightmove.service while the first is still running,
@@ -59,10 +63,10 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..17:00/5 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:00/6 Europe/London'
 
 [Unit]
-Description=Read Rightmove search pages, five-minutely through the working day
+Description=Read Rightmove search pages, six-minutely through the working day
 
 [Timer]
 Unit=london-home-finder@rightmove.service
@@ -70,33 +74,33 @@ Unit=london-home-finder@rightmove.service
 # Nights, every day including weekends: hourly, 00:00 to 07:00.
 OnCalendar=*-*-* 00..06:00 Europe/London
 
-# Weekdays, the working day: every five minutes, 08:00 to 18:00.
-OnCalendar=Mon..Fri 08..17:00/5 Europe/London
+# Weekdays, the working day: every six minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:00/6 Europe/London
 
-# Weekdays, the hour before the working day and the evening after it: every ten
-# minutes. Two lines because the morning band is a single hour — folded into
-# `07..17` it would make 07:00–08:00 five-minutely too.
-OnCalendar=Mon..Fri 07:00/10 Europe/London
-OnCalendar=Mon..Fri 18..23:00/10 Europe/London
+# Weekdays, the hour before the working day and the evening after it: every
+# twelve minutes. Two lines because the morning band is a single hour — folded
+# into `07..17` it would make 07:00–08:00 six-minutely too.
+OnCalendar=Mon..Fri 07:00/12 Europe/London
+OnCalendar=Mon..Fri 18..23:00/12 Europe/London
 
-# Weekends, from the end of the night band to midnight: every ten minutes.
-OnCalendar=Sat,Sun 07..23:00/10 Europe/London
+# Weekends, from the end of the night band to midnight: every twelve minutes.
+OnCalendar=Sat,Sun 07..23:00/12 Europe/London
 
 # Fifteen seconds, down from ninety.
 #
 # Jitter here is now the smaller half of the job: `SCRAPE_JITTER` delays every
 # individual request, which is the pattern a portal can actually see, and this
-# only blurs the start. Ninety seconds was most of the hundred-second gap to
-# `zoopla_london` on the five-minute band, so the even spacing above would have
-# existed on paper and not in the logs. Fifteen leaves it intact — the three
-# readers stay at least 85 seconds apart under the worst draw — and still means
+# only blurs the start. Ninety seconds was the whole of the 90-second gap to
+# `zoopla_london` on the six-minute band, so the even spacing above would have
+# existed on paper and not in the logs. Fifteen leaves it intact — the four
+# readers stay at least 60 seconds apart under the worst draw — and still means
 # we are not on the exact stroke of the hour with everybody else's crontab.
 RandomizedDelaySec=15s
 AccuracySec=15s
 
 # Deliberately NOT Persistent. A run missed because the machine was off should
 # be skipped rather than fired on boot: the next slot is at most an hour away
-# and usually five minutes, so catching up buys nothing and a boot during the
+# and usually six minutes, so catching up buys nothing and a boot during the
 # night band would start a sweep off-grid.
 Persistent=false
 

@@ -1,0 +1,124 @@
+# OnTheMarket, read as batches of nine districts over its own 24-hour window.
+#
+# Costs about 58KB per batch of nine districts: one search page, every field
+# the filters need except four from the embedded __NEXT_DATA__, and a listing
+# page only for a new listing in a district somebody subscribes to. With the
+# three districts the seed enables that is one request a run; with all 101
+# districts of zones 1-3 enabled it is fourteen requests and 954KB, measured on
+# 1 November 2026.
+#
+# Nothing here is expected to be billed. The site has no Cloudflare, DataDome
+# or Akamai anywhere in its headers and served a plain `curl` with no cookies
+# and no TLS impersonation, so the escalation in worker/sources/fetch.py should
+# never fire. `proxy_bytes` above zero on this reader is news — see 0072.
+#
+# ── the schedule, in London time ─────────────────────────────────────────
+#
+#   every day  00:00–07:00   hourly
+#   weekdays   08:00–18:00   every 6 minutes
+#   weekdays   07:00–08:00   every 12 minutes
+#   weekdays   18:00–24:00   every 12 minutes
+#   weekends   07:00–24:00   every 12 minutes
+#
+# `rightmove`'s bands exactly, which is the point: the four readers that go out
+# over the network run at one cadence, and the question "how often do we ask a
+# portal" has one answer rather than four.
+#
+# Each band's stated end is exclusive, so the last six-minute run is 17:57 and
+# 18:00 belongs to the twelve-minute band that follows.
+#
+# ── this reader is asked far more often than the site answers ────────────
+#
+# Stated plainly because it is the first thing that looks like a mistake here.
+#
+# OnTheMarket's search pages carry `cache-control: public, max-age=1800` and
+# CloudFront honours it exactly: the same url returned `age: 448`, then 452,
+# then 455 over one minute on 1 November 2026, and `Cache-Control: no-cache`,
+# `Pragma: no-cache` and `max-age=0` were all ignored. A batch url nobody else
+# requests is therefore refreshed when our own previous copy expires — once
+# every thirty minutes, however often this timer fires.
+#
+# So roughly four runs in five re-read a byte-identical page, and the latency
+# floor is the TTL rather than the schedule. Thirty minutes between runs would
+# cost 48 runs a day instead of 142 and lose almost nothing.
+#
+# It is on the six-minute grid anyway, deliberately: one cadence for all four
+# readers is worth more operationally than the requests it saves, the requests
+# are not billed, and the cache boundary is not aligned to our clock — so the
+# tighter grid does shorten the wait between a refresh happening and us seeing
+# it, by up to the interval. If that trade ever stops looking right, the whole
+# of the change is this file.
+#
+# What this schedule is NOT buying is completeness. The reader asks for a fixed
+# 24-hour window, so a missed run costs nothing at all: the next one reads the
+# same window. Only an outage longer than the window loses listings, and that
+# is what `sweep.GAP_HOURS` already voids the watch for.
+#
+# ── the offset, and why it is seconds and not minutes ────────────────────
+#
+# Four readers, one grid, evenly spaced: `rightmove` on the boundary,
+# `zoopla_london` a quarter of the interval later, this one half, `spareroom`
+# three quarters. A quarter of six minutes is 1m30s, so the six-minute band
+# needs a seconds component; the twelve-minute band divides into minutes.
+#
+#   six-minute band     :03              → 3m after rightmove
+#   twelve-minute band  :06              → 6m after rightmove
+#   hourly night band   :30              → 30m after rightmove
+#
+# Why spacing at all: these four are the only jobs on this box that reach
+# outward over the network, two of them share one residential proxy session
+# pool, and four readers started on the same second arrive at four portals as
+# one burst with a period a stopwatch could read off. `SCRAPE_JITTER` blurs the
+# individual requests; this spaces the runs.
+#
+# A sweep that outlasts its interval does not pile up: systemd will not start a
+# second london-home-finder@onthemarket.service while the first is still
+# running, it skips that trigger. TimeoutStartSec in the service is 600s, and
+# the one thing here that can take real time is `SHED_BUDGET` — up to 60
+# seconds of waiting out a 404 the origin shed.
+#
+# ── the zone is stated here, not taken from the machine ──────────────────
+#
+# Every line carries `Europe/London`. Without it systemd reads OnCalendar in
+# whatever zone the machine happens to be in: the server runs on UTC, so the
+# schedule would sit an hour early through British Summer Time, quietly correct
+# itself in October and break again in March.
+#
+# Needs systemd 252 or later. Check a line with
+#
+#     systemd-analyze calendar 'Mon..Fri 08..17:03/6 Europe/London'
+
+[Unit]
+Description=Read OnTheMarket in district batches, six-minutely through the working day
+
+[Timer]
+Unit=london-home-finder@onthemarket.service
+
+# Nights, every day including weekends: hourly, 00:00 to 07:00.
+OnCalendar=*-*-* 00..06:30 Europe/London
+
+# Weekdays, the working day: every six minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:03/6 Europe/London
+
+# Weekdays, the hour before the working day and the evening after it: every
+# twelve minutes. Two lines because the morning band is a single hour — folded
+# into `07..17` it would make 07:00–08:00 six-minutely too.
+OnCalendar=Mon..Fri 07:06/12 Europe/London
+OnCalendar=Mon..Fri 18..23:06/12 Europe/London
+
+# Weekends, from the end of the night band to midnight: every twelve minutes.
+OnCalendar=Sat,Sun 07..23:06/12 Europe/London
+
+# Fifteen seconds, which is a fifth of the 90-second gap to the next reader on
+# the tightest band, so the spacing above survives the draw. The per-request
+# delay is `SCRAPE_JITTER` and does the real work.
+RandomizedDelaySec=15s
+AccuracySec=15s
+
+# Deliberately NOT Persistent. A missed run reads the same 24-hour window as
+# the next one, so catching up on boot buys nothing and would start this reader
+# off-grid, on top of whichever reader owns that second.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

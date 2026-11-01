@@ -8,41 +8,41 @@
 # ── the schedule, in London time ─────────────────────────────────────────
 #
 #   every day  00:00–07:00   hourly
-#   weekdays   08:00–18:00   every 5 minutes
-#   weekdays   07:00–08:00   every 10 minutes
-#   weekdays   18:00–24:00   every 10 minutes
-#   weekends   07:00–24:00   every 10 minutes
+#   weekdays   08:00–18:00   every 6 minutes
+#   weekdays   07:00–08:00   every 12 minutes
+#   weekdays   18:00–24:00   every 12 minutes
+#   weekends   07:00–24:00   every 12 minutes
 #
-# These are `rightmove`'s bands exactly, which is the point: the three readers
-# that go out over the network now run at one cadence, and the question "how
-# often do we ask a portal" has one answer rather than three. It replaces a
-# schedule that stopped at 21:00 weekdays and did not run overnight at all, so
-# this reader is no longer blind between ten at night and seven in the morning
-# — the hours a watermark quietly falls a whole night behind in.
+# These are `rightmove`'s bands exactly, which is the point: the four readers
+# that go out over the network run at one cadence, and the question "how often
+# do we ask a portal" has one answer rather than four. The bands cover the
+# whole clock, so this reader is not blind between ten at night and seven in
+# the morning — the hours a watermark quietly falls a whole night behind in.
 #
-# Each band's stated end is exclusive, so the last five-minute run is 17:56:40
-# and 18:00 belongs to the ten-minute band that follows.
+# Each band's stated end is exclusive, so the last six-minute run is 17:55:30
+# and 18:00 belongs to the twelve-minute band that follows.
 #
-# The cost of the extra bands is about 170 runs a weekday against 140 before,
-# some 20% more proxied traffic, and the overnight band is the cheap part of it
-# — nothing is published at four in the morning, so those runs read one page
-# and store nothing.
+# About 142 runs a weekday against 169 on the five-minute grid this replaced,
+# so roughly 16% less proxied traffic. The overnight band is the cheap part of
+# it either way — nothing is published at four in the morning, so those runs
+# read one page and store nothing.
 #
 # ── the offset, and why it is seconds and not minutes ────────────────────
 #
-# Three readers, one grid, evenly spaced: `rightmove` on the boundary, this one
-# a third of the interval later, `spareroom` two thirds. A third of five
-# minutes is 1m40s, which is why the time fields below carry a seconds
-# component — minute offsets cannot divide a five-minute interval into three
-# equal parts, and unequal spacing was the thing to avoid.
+# Four readers, one grid, evenly spaced: `rightmove` on the boundary, this one
+# a quarter of the interval later, `onthemarket` half, `spareroom` three
+# quarters. A quarter of six minutes is 1m30s, which is why the six-minute line
+# below carries a seconds component; the twelve-minute band divides into whole
+# minutes. Six rather than five is what buys that — a quarter of five minutes
+# is 75 seconds and would have put every band on an awkward offset.
 #
-#   five-minute band   :01 at second 40   → 1m40s after rightmove
-#   ten-minute band    :03 at second 20   → 3m20s after rightmove
-#   hourly night band  :20               → 20m after rightmove
+#   six-minute band     :01 at second 30   → 1m30s after rightmove
+#   twelve-minute band  :03                → 3m after rightmove
+#   hourly night band   :15                → 15m after rightmove
 #
 # Why spacing at all: this reader and `spareroom` are the two that cost money
-# or carry weight, two of the three share one residential proxy pool, and three
-# readers started on the same second arrive at three portals as one burst with
+# or carry weight, two of the four share one residential proxy pool, and four
+# readers started on the same second arrive at four portals as one burst with
 # a period a stopwatch could read off. `SCRAPE_JITTER` blurs the individual
 # requests; this spaces the runs.
 #
@@ -55,7 +55,7 @@
 #
 # Needs systemd 252 or later. Check a line with
 #
-#     systemd-analyze calendar 'Mon..Fri 08..17:01/5:40 Europe/London'
+#     systemd-analyze calendar 'Mon..Fri 08..17:01/6:30 Europe/London'
 
 [Unit]
 Description=Read the whole of Zoopla London, newest first
@@ -63,22 +63,22 @@ Description=Read the whole of Zoopla London, newest first
 [Timer]
 Unit=london-home-finder@zoopla_london.service
 
-# Nights, every day including weekends: hourly, 00:00 to 07:00.
-OnCalendar=*-*-* 00..06:20 Europe/London
+# Nights, every day including weekends: hourly, 00:15 to 07:00.
+OnCalendar=*-*-* 00..06:15 Europe/London
 
-# Weekdays, the working day: every five minutes, 08:00 to 18:00.
-OnCalendar=Mon..Fri 08..17:01/5:40 Europe/London
+# Weekdays, the working day: every six minutes, 08:00 to 18:00.
+OnCalendar=Mon..Fri 08..17:01/6:30 Europe/London
 
-# Weekdays, the hour before the working day and the evening after it: every ten
-# minutes. Two lines because the morning band is a single hour — folded into
-# `07..17` it would make 07:00–08:00 five-minutely too.
-OnCalendar=Mon..Fri 07:03/10:20 Europe/London
-OnCalendar=Mon..Fri 18..23:03/10:20 Europe/London
+# Weekdays, the hour before the working day and the evening after it: every
+# twelve minutes. Two lines because the morning band is a single hour — folded
+# into `07..17` it would make 07:00–08:00 six-minutely too.
+OnCalendar=Mon..Fri 07:03/12 Europe/London
+OnCalendar=Mon..Fri 18..23:03/12 Europe/London
 
-# Weekends, from the end of the night band to midnight: every ten minutes.
-OnCalendar=Sat,Sun 07..23:03/10:20 Europe/London
+# Weekends, from the end of the night band to midnight: every twelve minutes.
+OnCalendar=Sat,Sun 07..23:03/12 Europe/London
 
-# Fifteen seconds. Deliberately much smaller than the 100-second gap to the
+# Fifteen seconds. Deliberately much smaller than the 90-second gap to the
 # next reader on the tightest band, so the spacing above survives the draw.
 # The per-request delay is `SCRAPE_JITTER` and does the real work.
 RandomizedDelaySec=15s
@@ -86,7 +86,7 @@ AccuracySec=15s
 
 # Deliberately NOT Persistent. A run missed because the machine was off should
 # be skipped rather than fired on boot: the next slot is at most an hour away
-# and usually five minutes, and a boot-time catch-up would start it off-grid
+# and usually six minutes, and a boot-time catch-up would start it off-grid
 # and on top of whichever reader owns that second.
 Persistent=false
 

@@ -57,6 +57,21 @@ def _spareroom() -> Any:
     return SpareRoom()
 
 
+def _onthemarket() -> Any:
+    """OnTheMarket, read as batches of nine districts over its 24-hour window.
+
+    A district reader like `rightmove`, and the only one whose search takes
+    more than one location: nine at a time, measured, which is why the whole of
+    zones 1-3 costs fourteen requests rather than a hundred and one. There is
+    deliberately no second job for the city — enabling every district in
+    `source_locations` is the city, read by this one. See the module note.
+    """
+
+    from worker.sources.onthemarket import OnTheMarket
+
+    return OnTheMarket()
+
+
 def _zoopla_london() -> Any:
     """Zoopla, read as one search of the whole city rather than district by
     district.
@@ -84,6 +99,7 @@ PORTAL_JOBS: dict[str, Any] = {
     "zoopla_london": _zoopla_london,
     "openrent": _openrent,
     "spareroom": _spareroom,
+    "onthemarket": _onthemarket,
 }
 
 def run_job(
@@ -159,7 +175,7 @@ def run_job(
         # healthy because the others worked.
         #
         # The job name is NOT the source key, though it reads like one for
-        # three of the five: `zoopla_london` and `zoopla` are two jobs reading
+        # four of the six: `zoopla_london` and `zoopla` are two jobs reading
         # one site under one key. Everything below that asks the database about
         # a source therefore asks the reader for its key and never uses the
         # name of the job.

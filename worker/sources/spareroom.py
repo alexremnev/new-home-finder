@@ -105,13 +105,13 @@ this reader shares with `zoopla_london`:
 
     PAGES_PER_RUN = 6        186KB a run
     a full cycle             WINDOW / PAGES_PER_RUN = 10 runs
-    weekday, 136 runs        50 minutes to cycle, about 25MB a day
-    weekend, 40 runs         about 7MB a day
+    weekday, 142 runs        60 minutes to cycle, about 26MB a day
+    weekend, 92 runs         about 17MB a day
 
 Against `zoopla_london`'s 7MB a day that is three to four times the traffic,
 for a source whose stock the Telegram feed does not carry at all. The latency
-is the real price: up to one cycle from posting to alert, so about 25 minutes
-median and 50 at worst, not the five minutes the schedule suggests. That is a
+is the real price: up to one cycle from posting to alert, so about 30 minutes
+median and 60 at worst, not the six minutes the schedule suggests. That is a
 property of the site's ordering, not of this code, and the only thing that
 would fix it is the sort order robots.txt forbids.
 
@@ -212,7 +212,7 @@ WINDOW = 60
 # Pages per run, and the only real knob on what this source costs.
 #
 # Six pages is 186KB a run and a full cycle every ten. At the weekday
-# five-minute interval that is a 50-minute cycle; see the module note for what
+# six-minute interval that is a 60-minute cycle; see the module note for what
 # the day comes to. Raising it shortens the latency and costs traffic in the
 # same proportion, which is the whole of the trade.
 PAGES_PER_RUN = 6
@@ -234,12 +234,20 @@ LAST_PAGE = 100
 # the 186KB the search pages themselves cost.
 DETAIL_BUDGET = 15
 
-# The slot the rotating window steps in, in seconds. Five minutes, because that
+# The slot the rotating window steps in, in seconds. Six minutes, because that
 # is the shortest interval any band of this reader's timer fires at — so in the
 # working day each run gets its own slice and consecutive runs do not re-read
-# one. The quarter-hourly evening bands stride three slices at a time, which
-# still walks the whole window, only in bigger steps and over more runs.
-SLOT_SECONDS = 300
+# one. The twelve-minute evening bands stride two slices at a time, which still
+# walks the whole window, only in bigger steps and over more runs.
+#
+# It has to match the timer, and a mismatch fails quietly rather than loudly.
+# Left at 300 against the six-minute grid, the bucket index advances 1,1,1,1,2
+# across every five runs: every slice is still visited — simulated over 200
+# runs — but four of the ten get 24 visits to the other six's 16, so the cycle
+# becomes lumpy and the latency it implies stops being the 60 minutes the timer
+# claims. Nothing is lost either way; this is about the figure in the unit
+# being true.
+SLOT_SECONDS = 360
 
 # One card, from the opening `<li>` to the next. Split rather than matched:
 # the card holds nested `<li>` elements of its own and a non-greedy match to

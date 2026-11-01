@@ -249,11 +249,42 @@ class Portal(Protocol):
     #: every district in London. See worker.sources.zoopla.REGION.
     regions: tuple[str, ...]
 
+    #: How many district names this reader can put in one request. One for
+    #: every portal whose search takes a single location, which is all of them
+    #: but OnTheMarket — whose search takes nine, measured, and silently
+    #: returns an empty page for a tenth.
+    #:
+    #: The engine does NOT group the loop below. It still asks about one
+    #: district at a time, because the watch, the watermark and the gap rule
+    #: are all per district and grouping them would have to merge three pieces
+    #: of state that are deliberately separate. What this changes is two
+    #: things: `plan` is told the whole list up front so the reader can decide
+    #: which districts share a request, and `budget` is read as a number of
+    #: *requests* rather than of districts — so a reader that fits nine in one
+    #: gets nine times the names for the same spend.
+    #:
+    #: Optional; absent means one.
+    batch: int
+
     #: Hosts this reader must never reach through the paid proxy, whatever
     #: SCRAPE_PROXY says. Optional; absent means the usual escalation.
     #:
     #: See `_pin_direct` for why a reader would want this and what it costs.
     direct_only: tuple[str, ...]
+
+    def plan(self, districts: tuple[str, ...]) -> None:
+        """Every district this run will ask about, in the order it will ask.
+
+        Optional, and only useful to a reader with `batch` above one: it is the
+        only way such a reader can know which districts may share a request,
+        because the engine computes them from the subscriber list and then asks
+        about them one at a time.
+
+        Called once, before the first `harvest`, and a reader that implements
+        it should treat it as the start of a run — `python -m worker portals`
+        sweeps several portals in one process, and a test sweeps the same
+        reader twice.
+        """
 
     def postcode_for(
         self, catch: Catch, get: Fetcher, stage: Stage
@@ -671,6 +702,19 @@ def _collect(
 
         order = sweep_order(to_read, watching)
 
+        # Districts per request, and so how many names `budget` buys. See
+        # `Portal.batch`: for every reader but OnTheMarket this is one and
+        # `allowance` is `budget` exactly as it always was.
+        batch = max(1, int(getattr(portal, "batch", 1) or 1))
+        allowance = budget * batch
+        if batch > 1:
+            stage.set("batch", batch)
+        # Told up front, because a reader that shares a request between
+        # districts cannot work out which ones from a call about one of them.
+        ahead = getattr(portal, "plan", None)
+        if ahead is not None:
+            ahead(tuple(order[:allowance]))
+
         # Three counters and not one, because one was answering two
         # questions and getting the second wrong. `in_a_row` is about money:
         # a portal that has just declined three times is not having a bad
@@ -680,8 +724,15 @@ def _collect(
         refusals = 0
         read = 0
         postcodes = POSTCODE_BUDGET
-        for nth, district in enumerate(order[:budget]):
-            if nth:
+        # What the previous district actually cost. A batching reader answers
+        # eight districts in nine from a page it already has, and a courtesy
+        # pause between two of those is a second spent being polite to nobody —
+        # a hundred of them on a whole-London sweep. For every other reader
+        # every harvest costs at least one page, so this reads as it always
+        # did: pause between districts.
+        last_pages = 0
+        for nth, district in enumerate(order[:allowance]):
+            if nth and last_pages:
                 time.sleep(pause)
             watch = watching.get(district)
             # What the portal is asked to read back to.
@@ -726,6 +777,8 @@ def _collect(
             except Refused as exc:
                 in_a_row += 1
                 refusals += 1
+                # A refusal cost a request, so the next district waits.
+                last_pages = 1
                 # Only the first is described. Twenty-five copies of one
                 # sentence is not twenty-five pieces of information. On
                 # `refusals` rather than `in_a_row`: a run refused at the
@@ -751,6 +804,7 @@ def _collect(
                 continue
             in_a_row = 0
             read += 1
+            last_pages = harvest.pages
             stage.count("pages", harvest.pages)
 
             ids = [one.listing.external_id for one in harvest.caught]
@@ -893,7 +947,7 @@ def _collect(
                         f"may fall past the search's own 1,000-result ceiling"
                     )
 
-        stage.count("over_budget", max(0, len(order) - budget))
+        stage.count("over_budget", max(0, len(order) - allowance))
         stage.set("districts_read", read)
         # A run that read nothing is not an ok run.
         #

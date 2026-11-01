@@ -9,8 +9,8 @@ import { mb, PROXY_JOBS, tone, word } from "../spend";
 // Every tile is five numbers and a coloured stripe, and the numbers are read
 // off the counters the run itself wrote — there is nothing to get wrong there.
 // The stripe is a judgment, and the whole value of this page is that it is the
-// right way round: a nought is the healthy answer on four of the five readers
-// and a broken one on the fifth, so a tone function that ignored the
+// right way round: a nought is the healthy answer on five of the six readers
+// and a broken one on the sixth, so a tone function that ignored the
 // expectation would paint the one reader that matters green exactly when the
 // proxy had stopped being used.
 
@@ -108,6 +108,7 @@ describe("PROXY_JOBS", () => {
   // two readers this page exists to separate.
   it("names every scraper job the worker schedules", () => {
     expect([...PROXY_JOBS].sort()).toEqual([
+      "onthemarket",
       "openrent",
       "rightmove",
       "spareroom",

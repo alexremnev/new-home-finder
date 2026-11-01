@@ -31,6 +31,7 @@ from worker.obs.log import Stage
 from worker.sources.fetch import Fetcher, Refused, Reply
 from worker.sources.spareroom import (
     PAGES_PER_RUN,
+    SLOT_SECONDS,
     SOURCE_KEY,
     WINDOW,
     SpareRoom,
@@ -416,27 +417,36 @@ def test_no_coordinates_is_none_rather_than_nought() -> None:
 
 
 def test_a_full_cycle_covers_every_page_of_the_window() -> None:
-    # The rule the whole reader rests on: ten consecutive five-minute runs
-    # read pages 1..WINDOW between them and nothing twice.
+    # The rule the whole reader rests on: ten consecutive runs at the timer's
+    # own interval read pages 1..WINDOW between them and nothing twice.
+    #
+    # The interval is read from `SLOT_SECONDS` rather than written here as a
+    # number, because that constant and the timer have to agree and this is the
+    # test that says so. At six minutes against the old 300-second slot every
+    # page is still reached, but four slices of the ten get visited half as
+    # often again as the other six — the cycle stops being a cycle and starts
+    # being a weighting. See the note on the constant.
     portal = SpareRoom()
     start = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
     runs = WINDOW // PAGES_PER_RUN
     seen: list[int] = []
     for nth in range(runs):
-        at = start + timedelta(minutes=5 * nth)
+        at = start + timedelta(seconds=SLOT_SECONDS * nth)
         offset = portal._offset(at)
         seen += [portal._page(offset + page) for page in range(PAGES_PER_RUN)]
     assert sorted(seen) == list(range(1, WINDOW + 1))
 
 
-def test_two_runs_in_the_same_five_minute_slot_read_the_same_slice() -> None:
+def test_two_runs_in_the_same_slot_read_the_same_slice() -> None:
     # Which is harmless and deliberate: the advisory lock means two runs of
     # one job cannot overlap anyway, and the slice is a function of the clock
     # rather than of how many times it has been asked for.
     portal = SpareRoom()
     at = datetime(2026, 10, 9, 8, 0, tzinfo=UTC)
-    assert portal._offset(at) == portal._offset(at + timedelta(seconds=299))
-    assert portal._offset(at) != portal._offset(at + timedelta(seconds=300))
+    assert portal._offset(at) == portal._offset(
+        at + timedelta(seconds=SLOT_SECONDS - 1)
+    )
+    assert portal._offset(at) != portal._offset(at + timedelta(seconds=SLOT_SECONDS))
 
 
 def test_the_window_never_runs_past_the_feeds_last_page() -> None:
