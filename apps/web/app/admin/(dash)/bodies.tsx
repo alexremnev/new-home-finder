@@ -1,4 +1,4 @@
-import type { PortalRun, ReaderTally } from "@/lib/admin-queries";
+import type { ReaderTally } from "@/lib/admin-queries";
 import {
   delivery, duplicates, intakePoints, knownJobs, logPage,
   messagePoints, portalRuns, problems, readerTally, recentRuns,
@@ -13,6 +13,7 @@ import { Metric, OriginBars, RunBars, Series, Why } from "./charts";
 import { Paged, type MorePage } from "./paged";
 import { LogView } from "./log";
 import { moreFaults, moreLastRuns, moreLog } from "./more";
+import { PORTALS, portalTone } from "./portals";
 import { bucketMinutes, spanWords } from "./span";
 
 // What each card on the System tab contains, one component each.
@@ -300,46 +301,6 @@ export async function Feeds() {
   );
 }
 
-// The readers that fetch a portal's own pages, one row each. Named and
-// ordered here rather than taken from the database, so that a reader which has
-// not run at all still gets a panel — a silent scraper is the thing worth
-// seeing, and it cannot show itself.
-// The readers that fetch a portal's own pages, one tile each. Named and
-// ordered here rather than taken from the database, so that a reader which has
-// not run at all still gets a tile — a silent scraper is the thing worth
-// seeing, and it cannot show itself.
-const PORTALS: { source: string; label: string; why: string }[] = [
-  {
-    source: "rightmove",
-    label: "Rightmove",
-    why: "Читает страницу поиска по каждому району: все поля берутся из встроенного JSON, отдельные страницы объявлений не запрашиваются. Около 120 КБ на район за прогон. Сортировка — «самые новые», листание останавливается, как только доходит до объявлений старше прошлого обхода, поэтому в обычном режиме это одна страница. Большое число — сколько объявлений этот читатель увидел раньше всех остальных, включая Telegram-фид; это его настоящий вклад. Рядом: «seen» — всё, что попалось, включая найденное кем-то раньше; «stored» — сколько новых строк создал (меньше, чем seen, потому что объявление, опубликованное фидом минутой раньше, уже лежит в базе); «sent» — сколько из этого действительно ушло подписчикам, и расхождение со stored нормально для района, который ещё дочитывается. Трафик — из счётчика libcurl, то есть ровно то, что прошло по сети в сжатом виде.",
-  },
-  {
-    source: "zoopla",
-    label: "Zoopla",
-    why: "То же, но данные лежат в RSC-потоке страницы, а не в __NEXT_DATA__. Читается только массив собственных объявлений района: рядом лежат ещё два — продвинутые и из соседних районов, — и второй заведомо не наш. Около 63 КБ на район, вдвое дешевле Rightmove. Замечание: Zoopla отвечает адресу сервера 403 под любым отпечатком браузера, поэтому либо этот читатель запускается с домашней машины, либо ему нужен резидентский прокси. Если в состоянии видно «refused» — дело именно в этом.",
-  },
-  {
-    source: "openrent",
-    label: "OpenRent",
-    why: "Одна страница района отдаёт PROPERTYIDS — все id района целиком, а не только показанные 20. Для незнакомых id спрашивается редирект (3 КБ) — он раскрывает slug, а значит район, число спален и тип; страница объявления качается только для тех, что действительно новые и действительно в нужном районе. Радиус поиска 2 км, поэтому район определяется по slug, а не по запросу. OpenRent отвечает адресу сервера 405, так что здесь та же оговорка, что у Zoopla.",
-  },
-  {
-    source: "spareroom",
-    label: "SpareRoom",
-    why: "Комнаты в шеред-флэтах — то, чего в Telegram-фиде нет вообще, поэтому это единственный источник такого стока. Читается не «до вотермарка», а крутящимся окном: 6 страниц за прогон из 60, полный круг за 10 прогонов (~50 минут). Так сделано не из экономии: robots.txt запрещает и сортировку по новизне, и поиск, и все фильтры в query, а дефолтный порядок сайта определяется платными апгрейдами. Замерено 9 октября 2026 — страницы 1-8 через час держали 87 из тех же 88 объявлений, а свежие id попадались и на 1-й, и на 20-й, и на 40-й странице; правило «все id знакомы — стоп» здесь остановилось бы на первой странице и больше никогда ничего не нашло. Цена такого чтения — задержка: объявление доходит в среднем за ~25 минут. «window_from» в счётчиках показывает, с какой страницы начался прогон. Страница объявления качается только для подписанного района (лимит 15 за прогон) — только там есть меблировка, животные и минимальный срок. Полного посткода сайт не публикует нигде: он выводится из координат и помечается derived, так что склейка дублей по нему не работает. Ванных и площади на сайте нет совсем. Прокси запрещён в коде: «refused_and_pinned» означает, что SpareRoom отказал адресу сервера и прогон сознательно не пошёл через платный прокси.",
-  },
-];
-
-function portalTone(row: PortalRun | undefined): "good" | "warn" | "bad" {
-  if (!row || row.runs === 0) return "bad";
-  if (row.bad > 0 || row.refused > 0) return "bad";
-  // A district left half-read means the page cap stopped a sweep early. Not
-  // broken, but it will not settle until a run finishes the district.
-  if (row.partial > 0 || row.invalid > 0) return "warn";
-  return "good";
-}
-
 // Tiles, not a table.
 //
 // Two attempts at a wide table broke this tab, and the reason is structural
@@ -387,6 +348,9 @@ export async function Portals({ span }: { span: string }) {
                 row ? weight(Number(row.bytes ?? 0)) : null,
                 row && row.runs > 0 ? `${row.runs} runs` : null,
                 row?.last_at ? ago(row.last_at) : null,
+                row?.last_status === "failed" || row?.last_status === "degraded"
+                  ? `last run ${row.last_status}`
+                  : null,
                 row && row.refused > 0 ? `${row.refused} refused` : null,
                 row && row.bad > 0 ? `${row.bad} failed` : null,
                 row && row.invalid > 0 ? `${row.invalid} rejected` : null,
@@ -414,6 +378,7 @@ const PORTAL_NAMES: Record<string, string> = {
   zoopla: "Zoopla",
   openrent: "OpenRent",
   spareroom: "SpareRoom",
+  onthemarket: "OnTheMarket",
 };
 
 export async function Duplicates({ span }: { span: string }) {
@@ -568,8 +533,8 @@ export async function ListingsCreated({ span }: { span: string }) {
 }
 
 // The scraper's half of "Messages read": the same chart, same window, same
-// buckets, one per portal reader. `source` is a key from PORTALS above, never
-// anything a request supplied.
+// buckets, one per portal reader. `source` is a key from PORTALS in
+// ./portals.ts, never anything a request supplied.
 export async function PortalSeen({
   source,
   span,

@@ -215,6 +215,7 @@ export async function problems(win: Win): Promise<Problem[]> {
                  ELSE 'warn' END AS level
        FROM job_runs
       WHERE status IN ('failed', 'degraded')
+        AND job <> ALL($4::text[])
         AND started_at >  now() - make_interval(mins => $1::int)
         AND started_at <= now() - make_interval(mins => $2::int)
         -- A run whose degradation the worker flagged recoverable waits for a
@@ -257,6 +258,7 @@ export async function problems(win: Win): Promise<Problem[]> {
        FROM job_events e
        JOIN job_runs r ON r.id = e.run_id
       WHERE e.level IN ('warn', 'error')
+        AND r.job <> ALL($4::text[])
         AND e.ts >  now() - make_interval(mins => $1::int)
         AND e.ts <= now() - make_interval(mins => $2::int)
         -- Dropped per event rather than per group: a stage that said one
@@ -316,7 +318,12 @@ export async function problems(win: Win): Promise<Problem[]> {
 
       ORDER BY 4 DESC NULLS LAST
       LIMIT 40`,
-    [Math.round(win.mins), Math.round(win.endMins), RECOVERABLE_STREAK],
+    [
+      Math.round(win.mins),
+      Math.round(win.endMins),
+      RECOVERABLE_STREAK,
+      RETIRED_JOBS,
+    ],
   );
 }
 
@@ -371,6 +378,10 @@ export type Run = {
   error: string | null;
 };
 
+// Last runs: individual runs, newest first, unfiltered except for a job that
+// no longer exists. `portals` stays — a sweep somebody started by hand is
+// exactly what this list is for, and the note above `UNSCHEDULED_JOBS` says
+// why it is only here.
 export async function recentRuns(limit = 20, offset = 0): Promise<Run[]> {
   return query<Run>(
     `SELECT id, job, trigger, status,
@@ -378,9 +389,10 @@ export async function recentRuns(limit = 20, offset = 0): Promise<Run[]> {
             round(extract(epoch FROM finished_at - started_at)::numeric, 1)::float8 AS seconds,
             counters, error
        FROM job_runs
+      WHERE job <> ALL($3::text[])
       ORDER BY started_at DESC
       LIMIT $1 OFFSET $2`,
-    [limit, offset],
+    [limit, offset, RETIRED_JOBS],
   );
 }
 
@@ -397,21 +409,24 @@ export type Event = {
 };
 
 
-// What the log filter offers. Bounded to a month, because a retired job name
-// otherwise haunts the dropdown forever: `hot` was removed with the in-worker
-// scheduler in migration 0021 and cannot run, but its old `job_runs` rows kept
-// listing it as though it could.
-// The run log's job filter. `UNSCHEDULED_JOBS` is left out for the same reason
-// it is left off the Jobs panel, and because a chip is worse than a tile here:
-// the row of them is what has to fit on a phone, and a name that answers no
-// question was pushing the ones that do off the screen.
+// The run log's job filter, and what it offers.
+//
+// Bounded to a month, which used to be the whole of the defence against a
+// retired name haunting the dropdown — and a bound only works once the name
+// has stopped appearing, so for the month after a job is deleted it is still
+// offered as a filter. `RETIRED_JOBS` is the standing half of that answer.
+//
+// `UNSCHEDULED_JOBS` is left out for the same reason it is left off the Jobs
+// panel, and because a chip is worse than a tile here: the row of them is what
+// has to fit on a phone, and a name that answers no question was pushing the
+// ones that do off the screen.
 export async function knownJobs(): Promise<string[]> {
   const rows = await query<{ job: string }>(
     `SELECT DISTINCT job FROM job_runs
       WHERE started_at > now() - interval '30 days'
         AND job <> ALL($1::text[])
       ORDER BY job`,
-    [UNSCHEDULED_JOBS],
+    [HIDDEN_JOBS],
   );
   return rows.map((r) => r.job);
 }
@@ -915,6 +930,26 @@ export function expectation(
 // in this file does.
 const UNSCHEDULED_JOBS = ["portals"];
 
+// Jobs that no longer exist. Their `job_runs` rows are real history and are
+// left alone; what is wrong is a panel built to answer "is this working"
+// saying anything at all about a job that was deleted. The clearance minter
+// went with its timer, its unit and its browser slice on 2 November 2026 — see
+// deploy/install.sh, which removes them from the box — and until its last run
+// aged out of the window the Jobs panel drew it a tile, then drew the same
+// tile `silent`, which is red, about a job nothing can start. `hot` went with
+// the in-worker scheduler in migration 0021 and had the same problem; the
+// 30-day bound in `knownJobs` kept it out of the filter and nothing kept it
+// out of anywhere else.
+//
+// Hidden rather than deleted: `purge` drops job_runs after a month anyway, so
+// this list empties itself, and history nobody is shown is still history
+// somebody can ask for by hand.
+const RETIRED_JOBS = ["clearance", "hot"];
+
+// Everything the Jobs panel, the run log and its filter leave out — two
+// different reasons for the same silence. Built here, after both halves.
+const HIDDEN_JOBS = [...UNSCHEDULED_JOBS, ...RETIRED_JOBS];
+
 export async function jobStates(win: Win): Promise<JobState[]> {
   const rows = await query<Omit<JobState, "due" | "timed">>(
     `WITH expected AS (SELECT unnest($2::text[]) AS job),
@@ -963,7 +998,7 @@ export async function jobStates(win: Win): Promise<JobState[]> {
       SCHEDULED_JOBS.map((one) => one.job),
       Math.round(win.endMins),
       STUCK_AFTER_MINUTES,
-      UNSCHEDULED_JOBS,
+      HIDDEN_JOBS,
     ],
   ).catch(() => []);
 
@@ -1043,7 +1078,7 @@ export async function runLog(
     filter.q ?? null,
     Math.round(win.endMins),
     STUCK_AFTER_MINUTES,
-    UNSCHEDULED_JOBS,
+    HIDDEN_JOBS,
   ];
 
   // `bad` means the run is worth a look: it failed, it degraded, it logged
@@ -1117,9 +1152,11 @@ export async function logPage(
     filter.level ?? null,
     filter.q ?? null,
     Math.round(win.endMins),
+    RETIRED_JOBS,
   ];
   const where = `e.ts >  now() - make_interval(mins => $1::int)
         AND e.ts <= now() - make_interval(mins => $5::int)
+        AND r.job <> ALL($6::text[])
         AND ($2::text IS NULL OR r.job = $2)
         AND ($3::text IS NULL OR e.level = $3)
         AND ($4::text IS NULL OR e.message ILIKE '%' || $4 || '%')`;
@@ -1130,7 +1167,7 @@ export async function logPage(
          FROM job_events e JOIN job_runs r ON r.id = e.run_id
         WHERE ${where}
         ORDER BY e.ts DESC
-        LIMIT $6 OFFSET $7`,
+        LIMIT $7 OFFSET $8`,
       [...args, perPage, Math.max(0, page - 1) * perPage],
     ).catch(() => []),
     query<{ total: number }>(

@@ -813,7 +813,8 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY je.id DESC LIMIT 1
   ) AS e ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent', 'portals')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent',
+                 'onthemarket', 'portals')
  ORDER BY r.started_at DESC;
 
 
@@ -906,7 +907,7 @@ SELECT date_trunc('day', r.started_at AT TIME ZONE 'Europe/London') AS day,
   FROM job_runs r
   JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
  WHERE r.started_at > now() - interval '7 days'
-   AND r.job IN ('rightmove', 'zoopla_london', 'spareroom', 'openrent')
+   AND r.job IN ('rightmove', 'zoopla_london', 'spareroom', 'openrent', 'onthemarket')
  GROUP BY 1, 2 ORDER BY 1 DESC, 2;
 
 
@@ -960,7 +961,8 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
        ORDER BY js.started_at LIMIT 1
   ) AS s ON true
  WHERE r.started_at > now() - interval '24 hours'
-   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent', 'portals')
+   AND r.job IN ('rightmove', 'zoopla', 'zoopla_london', 'spareroom', 'openrent',
+                 'onthemarket', 'portals')
  GROUP BY 1, 2
  ORDER BY 1, 2;
 
