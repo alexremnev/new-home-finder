@@ -90,6 +90,12 @@ export async function POST(request: Request) {
           // subscriber back onto the trial hands out twice the trial they would
           // have got by signing up. `duration_days_whatsapp` is NULL wherever
           // the channel makes no difference, and coalesce falls back.
+          //
+          // The channel is looked up by `$1` and not by `u.id`: a LATERAL in
+          // the FROM clause cannot see an UPDATE's target table, and asking it
+          // to is the error "invalid reference to FROM-clause entry for table
+          // u". The WHERE below pins `u.id` to the same `$1`, so the two read
+          // the same account.
           `UPDATE users u
               SET plan = p.key,
                   plan_from = now(),
@@ -101,7 +107,7 @@ export async function POST(request: Request) {
              CROSS JOIN LATERAL (
                SELECT CASE
                    WHEN (SELECT uc.channel FROM user_channels uc
-                          WHERE uc.user_id = u.id AND uc.is_primary) = 'whatsapp'
+                          WHERE uc.user_id = $1 AND uc.is_primary) = 'whatsapp'
                    THEN coalesce(p.duration_days_whatsapp, p.duration_days)
                    ELSE p.duration_days
                END AS count
