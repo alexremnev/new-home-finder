@@ -3,6 +3,8 @@ import { join } from "node:path";
 
 import { ImageResponse } from "next/og";
 
+import sample from "@/lib/sample-alert.json";
+
 /**
  * The card a chat app or a feed draws when somebody pastes a link to the site.
  *
@@ -16,13 +18,38 @@ import { ImageResponse } from "next/og";
  * from this file at build time, which is also why it can never drift from the
  * copy in the hero — if the promise changes, this changes with it.
  *
+ * ── the phone is the page's phone ─────────────────────────────────────────
+ *
+ * Not a sketch of it. Every measurement in the right-hand column is the one
+ * `.phone` and its children carry in globals.css, multiplied by `S`, and the
+ * message is `lib/sample-alert.json` parsed the way phone.tsx parses it — the
+ * same fixture the WhatsApp renderer is tested against. A hand-drawn
+ * approximation was the thing it replaced: it showed four invented bullet
+ * points in a phone with no photograph, which is not the alert anybody
+ * receives.
+ *
+ * `S` is 0.91 because the phone is 640 CSS pixels tall and the card is 630, so
+ * the whole device only fits below 1:1. The alternative was drawing it larger
+ * and letting the compose bar fall off the bottom edge; this way nothing of it
+ * is cropped, at the cost of a message that is small until the card is opened.
+ *
  * ── what the constraints are ──────────────────────────────────────────────
  *
- * Satori draws this, not a browser: flexbox only, every element that has more
- * than one child needs an explicit `display: flex`, and there is no grid, no
- * `background-clip: text` worth relying on and no font but the one bundled
- * with `next/og`. Hence the plain colours and the hand-stacked rows — the
- * gradient the headline has on the page is a flat mint here.
+ * Satori draws this, not a browser:
+ *
+ *   * flexbox only — no grid, and every element with more than one child needs
+ *     an explicit `display: flex`;
+ *   * the font bundled with `next/og` has one weight, so `fontWeight` is
+ *     decorative here. The *bold* in the WhatsApp message is parsed and the
+ *     asterisks dropped, but the emphasis itself cannot be drawn without
+ *     shipping a real font file;
+ *   * `background-clip: text` is not worth relying on, hence a flat mint for
+ *     the headline's last line where the page has a gradient;
+ *   * a CSS border triangle renders as a box, so the bubble's tail is an SVG
+ *     polygon rather than `.bubble::before`;
+ *   * emoji are images fetched from a CDN by `emoji: "twemoji"`. That is a
+ *     network call while the image is being drawn — fine at build time, and
+ *     the reason this route must stay prerendered.
  */
 export const alt =
   "Beat the London Rental Race. Get Instant Alerts. — a new London listing " +
@@ -33,14 +60,19 @@ export const contentType = "image/png";
 
 const NIGHT = "#101215";
 const MINT = "#6ee7b7";
-const EMERALD = "#10b981";
-const WA_HEAD = "#0f5a47";
+const WA_HEAD = "#075e54";
+const WA_HEAD_SOFT = "#128c7e";
+const WA_PAPER = "#e5ddd5";
+
+/** The page's phone, scaled to the one dimension this card has to spare. */
+const S = 0.91;
+const px = (value: number) => Math.round(value * S * 10) / 10;
 
 /**
- * The badge itself rather than a glyph like it, read off disk and inlined:
- * Satori has no access to /public and no network here.
+ * An asset itself rather than a glyph like it, read off disk and inlined:
+ * Satori has no access to /public and no network for it here.
  *
- * Read inside the function and never at module scope. This module is imported
+ * Read inside the handler and never at module scope. This module is imported
  * by every page that resolves `openGraph` metadata — that is how Next learns
  * the image's size and alt text — so anything at the top level runs in the
  * page's own request, and in a serverless function `public/` is not there to
@@ -48,13 +80,30 @@ const WA_HEAD = "#0f5a47";
  * ENOENT on `/var/task/public/logo-mark.png`. Down here it runs only when the
  * image itself is being drawn, which is at build time.
  */
-function mark(): string {
-  const file = readFileSync(join(process.cwd(), "public", "logo-mark.png"));
+function asset(name: string): string {
+  const file = readFileSync(join(process.cwd(), "public", name));
   return `data:image/png;base64,${file.toString("base64")}`;
 }
 
+/**
+ * WhatsApp's own emphasis: *between asterisks* is bold. Split the same way
+ * phone.tsx splits it, so the asterisks never reach the picture even though
+ * the weight they ask for cannot be drawn.
+ */
+function segments(line: string) {
+  return line
+    .split(/\*([^*]+)\*/g)
+    .map((text, index) => ({ text, bold: index % 2 === 1 }))
+    .filter((part) => part.text !== "");
+}
+
 export default function OpengraphImage() {
-  const MARK = mark();
+  const MARK = asset("logo-mark.png");
+  const PHOTO = asset("sample-flat.png");
+
+  const lines = sample.whatsapp.split("\n");
+  const body = lines.slice(0, -1);
+  const link = lines[lines.length - 1] ?? "";
 
   return new ImageResponse(
     (
@@ -64,18 +113,26 @@ export default function OpengraphImage() {
           height: "100%",
           display: "flex",
           alignItems: "center",
-          padding: "0 64px",
           backgroundColor: NIGHT,
           // The hero's own light, as far as two radials go without a grid
           // overlay — the 56px lines read as moiré at this size.
           backgroundImage:
-            "radial-gradient(55% 55% at 88% 0%, rgba(16,185,129,0.26), transparent 70%)," +
+            "radial-gradient(55% 50% at 78% 0%, rgba(16,185,129,0.28), transparent 70%)," +
             "radial-gradient(45% 45% at 0% 30%, rgba(14,165,233,0.16), transparent 70%)",
           fontFamily: "sans-serif",
         }}
       >
         {/* The promise, in the words the page opens with. */}
-        <div style={{ display: "flex", flexDirection: "column", width: 660 }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: "space-between",
+            flexGrow: 1,
+            height: "100%",
+            padding: "52px 54px 48px",
+          }}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
             <img src={MARK} width={44} height={44} alt="" />
             <div style={{ color: "#f5f5f4", fontSize: 26, fontWeight: 600 }}>
@@ -87,21 +144,22 @@ export default function OpengraphImage() {
             style={{
               display: "flex",
               flexDirection: "column",
-              marginTop: 40,
-              fontSize: 66,
-              fontWeight: 700,
-              lineHeight: 1.06,
-              letterSpacing: "-0.03em",
+              fontSize: 68,
+              lineHeight: 1.02,
+              letterSpacing: "-0.04em",
             }}
           >
             <div style={{ color: "#fafaf9" }}>Beat the London</div>
             <div style={{ color: "#fafaf9" }}>Rental Race.</div>
-            <div style={{ color: MINT }}>Get Instant Alerts.</div>
+            <div style={{ color: MINT, marginTop: 6 }}>Get Instant Alerts.</div>
           </div>
 
-          <div style={{ marginTop: 36, color: "#a8a29e", fontSize: 25, lineHeight: 1.45 }}>
-            Every new London rental, in Telegram or WhatsApp,
-            minutes after it is published.
+          {/* The portals, said in words, with the hero's live dot. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <div style={{ width: 10, height: 10, borderRadius: 999, backgroundColor: MINT }} />
+            <div style={{ color: "#a8a29e", fontSize: 22 }}>
+              Rightmove · Zoopla · OpenRent · SpareRoom
+            </div>
           </div>
         </div>
 
@@ -109,118 +167,293 @@ export default function OpengraphImage() {
         <div
           style={{
             display: "flex",
-            flexDirection: "column",
-            width: 360,
-            marginLeft: 48,
-            borderRadius: 40,
-            padding: 10,
-            backgroundColor: "#25282e",
+            alignItems: "center",
+            height: "100%",
+            paddingRight: 26,
           }}
         >
+          {/* .phone */}
           <div
             style={{
               display: "flex",
               flexDirection: "column",
-              borderRadius: 32,
-              overflow: "hidden",
-              backgroundColor: "#ebe4da",
+              width: px(320) + 2 * px(11),
+              height: px(640) + 2 * px(11),
+              padding: px(11),
+              borderRadius: px(54),
+              backgroundImage: "linear-gradient(160deg, #3a3a42, #14141a 38%, #1d1d24)",
+              boxShadow: "0 30px 70px -24px rgba(15,23,42,0.45)",
             }}
           >
+            {/* .phone-screen */}
             <div
               style={{
                 display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                padding: "10px 22px 2px",
-                backgroundColor: WA_HEAD,
-                color: "#fff",
-                fontSize: 13,
-                fontWeight: 600,
+                flexDirection: "column",
+                position: "relative",
+                width: "100%",
+                height: "100%",
+                borderRadius: px(44),
+                overflow: "hidden",
+                backgroundColor: WA_PAPER,
               }}
             >
-              <div>9:41</div>
-              <div style={{ width: 74, height: 18, borderRadius: 999, backgroundColor: "#25282e" }} />
-              <div>5G</div>
-            </div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "12px 20px 18px",
-                backgroundColor: WA_HEAD,
-              }}
-            >
-              <img src={MARK} width={34} height={34} alt="" style={{ borderRadius: 999 }} />
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <div style={{ color: "#fff", fontSize: 17, fontWeight: 600 }}>
-                  London Home Finder
-                </div>
-                <div style={{ color: "rgba(255,255,255,0.7)", fontSize: 13 }}>online</div>
-              </div>
-            </div>
-
-            <div style={{ display: "flex", padding: "18px 14px 22px" }}>
+              {/* .chat-top — the status bar and the chat head share the green. */}
               <div
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  width: "100%",
-                  padding: "14px 16px",
-                  borderRadius: 18,
-                  backgroundColor: "#fff",
-                  color: "#1c1917",
-                }}
+                style={{ display: "flex", flexDirection: "column", backgroundColor: WA_HEAD }}
               >
-                <div style={{ fontSize: 19, fontWeight: 700 }}>New listing spotted!</div>
-                {[
-                  "Rotherhithe · SE16 4TH",
-                  "£2,100 / month",
-                  "2 bedrooms · Flat",
-                  "Available 1 October",
-                ].map((line) => (
+                {/* .ios-status. The notch is a flex item here rather than an
+                    absolutely-centred pseudo-element, which is the one thing
+                    about this screen that cannot be copied literally — and it
+                    reads the same. */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    height: px(40),
+                    padding: `0 ${px(21.6)}px 0 ${px(24)}px`,
+                    color: "#fff",
+                    fontSize: px(12),
+                  }}
+                >
+                  <div>9:41</div>
                   <div
-                    key={line}
-                    style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}
-                  >
-                    <div
-                      style={{
-                        width: 7,
-                        height: 7,
-                        borderRadius: 999,
-                        backgroundColor: EMERALD,
-                      }}
-                    />
-                    <div style={{ fontSize: 17 }}>{line}</div>
+                    style={{
+                      width: px(78),
+                      height: px(22),
+                      marginTop: px(8),
+                      borderRadius: px(11),
+                      backgroundColor: "#07120f",
+                    }}
+                  />
+                  <div style={{ display: "flex", alignItems: "center", gap: px(4.8) }}>
+                    {/* .ios-signal, .ios-wifi, .ios-battery */}
+                    <svg width={px(17)} height={px(11)} viewBox="0 0 18 12" fill="#fff">
+                      <rect x="0" y="8" width="3" height="4" rx="1" />
+                      <rect x="5" y="5.5" width="3" height="6.5" rx="1" />
+                      <rect x="10" y="3" width="3" height="9" rx="1" />
+                      <rect x="15" y="0.5" width="3" height="11.5" rx="1" />
+                    </svg>
+                    <svg width={px(15)} height={px(11)} viewBox="0 0 16 12" fill="#fff">
+                      <path d="M8 10.9 6.1 8.7a2.6 2.6 0 0 1 3.8 0z" />
+                      <path
+                        d="M2.7 5.1a7.8 7.8 0 0 1 10.6 0"
+                        fill="none"
+                        stroke="#fff"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                      <path
+                        d="M4.6 7.3a5.2 5.2 0 0 1 6.8 0"
+                        fill="none"
+                        stroke="#fff"
+                        strokeWidth="1.6"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                    <svg width={px(24)} height={px(11)} viewBox="0 0 26 12" fill="#fff">
+                      <rect
+                        x="0.5"
+                        y="0.5"
+                        width="21"
+                        height="11"
+                        rx="3"
+                        fill="none"
+                        stroke="#fff"
+                        strokeWidth="1"
+                      />
+                      <rect x="2" y="2" width="16" height="8" rx="1.8" />
+                      <path d="M23.5 4.2v3.6a2 2 0 0 0 0-3.6z" />
+                    </svg>
                   </div>
-                ))}
-                <div style={{ marginTop: 14, color: "#0369a1", fontSize: 15 }}>
-                  rightmove.co.uk/properties/…
+                </div>
+
+                {/* .chat-head */}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: px(8),
+                    padding: `${px(1.6)}px ${px(11.2)}px ${px(9.6)}px`,
+                  }}
+                >
+                  <div
+                    style={{
+                      color: "rgba(255,255,255,0.9)",
+                      fontSize: px(21.6),
+                      marginTop: -px(3),
+                    }}
+                  >
+                    ‹
+                  </div>
+                  <img
+                    src={MARK}
+                    width={px(32)}
+                    height={px(32)}
+                    alt=""
+                    style={{ borderRadius: 999 }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", flexGrow: 1 }}>
+                    <div style={{ color: "#fff", fontSize: px(13) }}>London Home Finder</div>
+                    <div style={{ color: "rgba(255,255,255,0.75)", fontSize: px(11) }}>
+                      online
+                    </div>
+                  </div>
+                  <svg
+                    width={px(17)}
+                    height={px(17)}
+                    viewBox="0 0 20 20"
+                    fill="rgba(255,255,255,0.9)"
+                  >
+                    <path d="M4 3h4l2 4-2 1a8 8 0 0 0 4 4l1-2 4 2v4a1 1 0 0 1-1 1A15 15 0 0 1 3 4a1 1 0 0 1 1-1z" />
+                  </svg>
                 </div>
               </div>
-            </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 14px 20px" }}>
+              {/* .chat-body. `flex-start` matters: as the only child of a
+                  stretch-aligned row the bubble grew to the full height of the
+                  paper and stranded its own timestamp at the bottom. */}
               <div
                 style={{
                   display: "flex",
                   flexGrow: 1,
-                  padding: "11px 16px",
-                  borderRadius: 999,
-                  backgroundColor: "#fff",
-                  color: "#a8a29e",
-                  fontSize: 14,
+                  alignItems: "flex-start",
+                  padding: `${px(12.8)}px ${px(10.4)}px`,
                 }}
               >
-                Message
+                {/* .bubble */}
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    position: "relative",
+                    width: px(248),
+                    borderRadius: px(8),
+                    backgroundColor: "#fff",
+                    boxShadow: "0 1px 1px rgba(15,23,42,0.12)",
+                  }}
+                >
+                  {/* .bubble::before — the tail, as a polygon. */}
+                  <svg
+                    width={px(7)}
+                    height={px(8)}
+                    viewBox="0 0 7 8"
+                    style={{ position: "absolute", top: 0, left: -px(6) }}
+                  >
+                    <polygon points="7,0 7,8 0,0" fill="#fff" />
+                  </svg>
+
+                  {/* .bubble-photo — swap public/sample-flat.png to change it. */}
+                  <img
+                    src={PHOTO}
+                    width={px(248)}
+                    height={px(142)}
+                    alt=""
+                    style={{
+                      objectFit: "cover",
+                      borderRadius: `${px(8)}px ${px(8)}px 0 0`,
+                    }}
+                  />
+
+                  {/* .bubble-text */}
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      padding: `${px(8)}px ${px(9.6)}px ${px(20)}px`,
+                      color: "#111b21",
+                      fontSize: px(11),
+                      lineHeight: 1.45,
+                    }}
+                  >
+                    {body.map((line, index) => (
+                      <div key={index} style={{ display: "flex" }}>
+                        {segments(line).map((part, at) => (
+                          // `pre`, because a flex item drops its trailing
+                          // space and that space is what separates the emoji
+                          // from the word after it.
+                          <div key={at} style={{ whiteSpace: "pre" }}>
+                            {part.text}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    <div style={{ color: "#0a7cba", wordBreak: "break-all" }}>{link}</div>
+                  </div>
+
+                  {/* .bubble-time */}
+                  <div
+                    style={{
+                      position: "absolute",
+                      right: px(8.8),
+                      bottom: px(5.6),
+                      color: "#667781",
+                      fontSize: px(10),
+                    }}
+                  >
+                    19:42
+                  </div>
+                </div>
               </div>
+
+              {/* .chat-compose, so the screen has a bottom as well as a top. */}
               <div
                 style={{
                   display: "flex",
-                  width: 36,
-                  height: 36,
-                  borderRadius: 999,
-                  backgroundColor: WA_HEAD,
+                  alignItems: "center",
+                  gap: px(6.4),
+                  padding: `0 ${px(9.6)}px ${px(24)}px`,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    flexGrow: 1,
+                    padding: `${px(8)}px ${px(12)}px`,
+                    borderRadius: 999,
+                    backgroundColor: "#fff",
+                    color: "#8696a0",
+                    fontSize: px(12),
+                  }}
+                >
+                  Message
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: px(32),
+                    height: px(32),
+                    borderRadius: 999,
+                    backgroundColor: WA_HEAD_SOFT,
+                  }}
+                >
+                  <svg width={px(16)} height={px(16)} viewBox="0 0 20 20" fill="#fff">
+                    <path d="M10 3a2.2 2.2 0 0 1 2.2 2.2v4.3a2.2 2.2 0 0 1-4.4 0V5.2A2.2 2.2 0 0 1 10 3z" />
+                    <path
+                      d="M5.5 9.4a4.5 4.5 0 0 0 9 0M10 14v3"
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </div>
+              </div>
+
+              {/* .ios-bar — the home indicator. Centred by its own offset
+                  rather than by a translate, which Satori does not apply. */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: px(101),
+                  bottom: px(8),
+                  width: px(118),
+                  height: px(5),
+                  borderRadius: px(3),
+                  backgroundColor: "rgba(17,27,33,0.28)",
                 }}
               />
             </div>
@@ -228,6 +461,6 @@ export default function OpengraphImage() {
         </div>
       </div>
     ),
-    size,
+    { ...size, emoji: "twemoji" },
   );
 }

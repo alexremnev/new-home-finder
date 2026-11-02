@@ -76,17 +76,18 @@ export const metadata: Metadata = {
     title: "Real-time alerts for new London rentals — Telegram & WhatsApp bot",
     description: PITCH,
     locale: "en_GB",
-    // No `images` here on purpose. app/opengraph-image.jpg is picked up by
-    // file convention, which reads the real width, height and mime type off
-    // the file itself, so the declared size cannot drift from the image the
-    // way a hand-written entry does — and a declared size an unfurler cannot
-    // match is a preview it may decline to draw. The file is built by
-    // scripts/make-og-image.py; regenerate it there, do not crop it by hand.
+    // No `images` here on purpose. app/opengraph-image.tsx is picked up by
+    // file convention, which takes the width, height and mime type from that
+    // file's own `size` and `contentType` exports, so the declared size cannot
+    // drift from the image the way a hand-written entry does — and a declared
+    // size an unfurler cannot match is a preview it may decline to draw. The
+    // image is drawn by that file at build time; change it there.
   },
   twitter: {
-    // Safe again now the image is itself 1.91:1: the large card crops whatever
-    // it is given to that ratio, which on the square original took the
-    // "HOME FINDER" line off the bottom. There is nothing left to crop.
+    // Safe because the image is itself 1.91:1: the large card crops whatever
+    // it is given to that ratio, which on the square original the logo used to
+    // be took the "HOME FINDER" line off the bottom. There is nothing left to
+    // crop.
     card: "summary_large_image",
     title: "Real-time alerts for new London rentals",
     description: PITCH,
