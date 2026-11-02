@@ -76,7 +76,7 @@ for extra in /etc/london-home-finder/readers/*.env; do
 done
 
 echo "== timers"
-cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer "$DIR"/deploy/systemd/*.slice /etc/systemd/system/
+cp "$DIR"/deploy/systemd/*.service "$DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
 
 # The OpenRent sitemap reader, gone. It discovered from the nationwide sitemap,
