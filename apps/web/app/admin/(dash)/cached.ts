@@ -1,6 +1,6 @@
 import { cache } from "react";
 
-import { jobStates, planMix, subscriberPage } from "@/lib/admin-queries";
+import { hostPoints, jobStates, planMix, subscriberPage } from "@/lib/admin-queries";
 
 import { spanFrom } from "./span";
 
@@ -37,3 +37,14 @@ export const planMixOnce = cache(planMix);
 
 /** A page of accounts — the tiles and the table are built from the same one. */
 export const subscriberPageOnce = cache(subscriberPage);
+
+/**
+ * The box's samples as a timeline — the CPU chart and the RAM chart.
+ *
+ * One query behind both: load and memory come out of the same counters on the
+ * same rows, and the two panels differ only in which field they plot. Asking
+ * twice would double the work to produce the same rows, and — because each
+ * panel measures "now" when its own query starts — could leave the two charts
+ * bucketed a minute apart.
+ */
+export const hostPointsOnce = cache(hostPoints);

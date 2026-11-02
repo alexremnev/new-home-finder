@@ -2,6 +2,8 @@
 
 import { useRef, useState } from "react";
 
+import { peakOf, stretches, type Reading } from "./levels";
+
 // Dense, small, quiet. A dashboard chart is read in a glance beside five
 // others, so it carries no legend it can do without, no gradient, and no label
 // that repeats what the card's heading already said.
@@ -200,6 +202,163 @@ function Hover({ data, suffix }: { data: Point[]; suffix: string }) {
           <strong>{comma(point.value)}{suffix}</strong>
           <br />
           {spell(point.label)}
+        </Tip>
+      )}
+    </div>
+  );
+}
+
+// ── a level over time, as opposed to a count over time ───────────────────
+//
+// `Series` above is for things that happened: every bucket has a count, zero
+// is a true answer, and the number worth printing beside it is the total. A
+// level is none of those. Memory and load are states of a box rather than
+// tallies, a bucket nobody measured has no value at all, and summing them
+// would produce a number with no meaning — so this is a separate chart rather
+// than a flag on that one.
+//
+// What it does differently:
+//
+//   * `null` is a gap in the line, not a point at zero. On this worker the
+//     overnight timers are an hour apart, so most night buckets have no
+//     sample, and a line dropping to the floor there would read as "the box
+//     had no memory free" — the exact opposite of the truth.
+//   * The axis has a floor. A percentage chart whose peak was 30% would
+//     otherwise be drawn against a 30% ceiling and look alarming; against 100%
+//     it looks like what it is.
+//   * It can carry one guide line, at the level where the thing goes wrong.
+//     The whole point of plotting this is to see whether a line crossed, and
+//     a crossing needs something to cross.
+
+export function Gauge({
+  data,
+  floor = 100,
+  suffix = "%",
+  guide = null,
+}: {
+  data: Reading[];
+  /** The smallest the axis may be. 100 for a percentage of a capacity. */
+  floor?: number;
+  suffix?: string;
+  /** The level where it goes wrong, and what to call it. */
+  guide?: { at: number; name: string } | null;
+}) {
+  const peak = peakOf(data);
+  if (peak === null) return <Empty />;
+
+  const top = Math.max(floor, niceMax(peak));
+  const measured = data.filter((one) => one.value !== null).length;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: FAINT }}>
+        <span>{round(top)}{suffix}</span>
+        <span style={{ color: SOFT }}>
+          peak {round(peak)}{suffix}
+          {measured < data.length && ` · ${measured} of ${data.length} buckets sampled`}
+        </span>
+      </div>
+
+      <GaugeHover data={data} top={top} suffix={suffix} guide={guide} />
+
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: FAINT }}>
+        {ticksOf(data).map((at) => (
+          <span key={at}>{clock(data[at]?.label ?? "")}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// One decimal, and none when it would be ".0" — a load of 42% and a ceiling of
+// 100% should not print as "42.0%" beside each other.
+function round(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function GaugeHover({
+  data, top, suffix, guide,
+}: {
+  data: Reading[];
+  top: number;
+  suffix: string;
+  guide: { at: number; name: string } | null;
+}) {
+  const [at, setAt] = useState<number | null>(null);
+  const point = at === null ? null : data[at];
+
+  const w = 100;
+  const step = data.length > 1 ? w / (data.length - 1) : 0;
+  const y = (v: number) => H - 18 - (v / top) * (H - 30);
+  const runs = stretches(data);
+
+  return (
+    <div
+      style={{ position: "relative" }}
+      onMouseMove={(event) => setAt(indexFrom(event, data.length))}
+      onMouseLeave={() => setAt(null)}
+    >
+      <svg viewBox={`0 0 ${w} ${H}`} width="100%" height={H} preserveAspectRatio="none"
+           role="img" aria-label={`${round(peakOf(data) ?? 0)}${suffix} at its worst`}>
+        {[0, 0.5, 1].map((share) => (
+          <line key={share} x1="0" x2={w} y1={y(top * share)} y2={y(top * share)}
+                stroke={GRID} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        ))}
+
+        {guide && guide.at <= top && (
+          <line x1="0" x2={w} y1={y(guide.at)} y2={y(guide.at)} stroke={BAD}
+                strokeWidth="1" strokeDasharray="3 3" opacity="0.65"
+                vectorEffect="non-scaling-stroke" />
+        )}
+
+        {runs.map((run) => {
+          const first = run[0] as number;
+          // A lone reading between two gaps: a path of one point draws
+          // nothing, so it is a dot or it is lost.
+          if (run.length === 1) {
+            return (
+              <circle key={first} cx={first * step} cy={y(data[first]?.value as number)} r="2"
+                      fill={LINE} vectorEffect="non-scaling-stroke" />
+            );
+          }
+          const path = run
+            .map((i, n) => `${n ? "L" : "M"}${i * step},${y(data[i]?.value as number)}`)
+            .join("");
+          return (
+            <path key={first} d={path} fill="none" stroke={LINE} strokeWidth="2"
+                  strokeLinejoin="round" strokeLinecap="round"
+                  vectorEffect="non-scaling-stroke" />
+          );
+        })}
+
+        {at !== null && (
+          <line x1={at * step} x2={at * step} y1="6" y2={H - 18} stroke={FAINT}
+                strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        )}
+        {point?.value != null && (
+          <circle cx={(at as number) * step} cy={y(point.value)} r="3.5" fill={LINE}
+                  stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+        )}
+      </svg>
+
+      {point && (
+        <Tip at={at as number} count={data.length}>
+          {point.value === null ? (
+            // Said rather than left blank: "no run sampled the box here" and
+            // "the box was idle here" are different facts and the chart would
+            // otherwise look the same for both.
+            <strong style={{ color: "#c9ced6" }}>not sampled</strong>
+          ) : (
+            <strong>{round(point.value)}{suffix}</strong>
+          )}
+          <br />
+          {spell(point.label)}
+          {guide && point.value !== null && point.value >= guide.at && (
+            <>
+              <br />
+              <span style={{ color: "#ff9d9f" }}>past {guide.name}</span>
+            </>
+          )}
         </Tip>
       )}
     </div>

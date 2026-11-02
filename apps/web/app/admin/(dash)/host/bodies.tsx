@@ -1,12 +1,17 @@
+import type { HostPoint } from "@/lib/admin-queries";
 import { browserUse, hostHealth } from "@/lib/admin-queries";
 import { ago } from "@/lib/when";
 
-import { windowFor } from "../cached";
-import { Why } from "../charts";
-import { spanWords } from "../span";
+import { hostPointsOnce, windowFor } from "../cached";
+import { Gauge, Why } from "../charts";
+import { peakOf } from "../levels";
+import type { Span } from "../span";
+import { bucketMinutes, bucketWords, spanWords } from "../span";
 import {
   BROWSER_CAP,
   browserTone,
+  CPU_GUIDE,
+  cpuReadings,
   diskTone,
   gb,
   loadTone,
@@ -14,7 +19,10 @@ import {
   measured,
   memoryTone,
   mintTone,
+  mixedHosts,
   pct,
+  ramGuide,
+  ramReadings,
   word,
   worst,
 } from "./health";
@@ -230,6 +238,113 @@ export async function BrowserCost({ span }: { span: string }) {
           falls back to being challenged without it.
         </p>
       )}
+    </>
+  );
+}
+
+// ── the same samples as a timeline ───────────────────────────────────────
+//
+// The tiles above answer "was the box short of anything over this window". The
+// question you have the moment that answer is yes is "when", and a peak cannot
+// give it: 1.9 on two processors is one fault if it was a single spike at
+// 03:00 where a sweep collided with the clearance timer, and another entirely
+// if it was a plateau from noon.
+//
+// Two charts rather than one with two lines. They share an axis by
+// construction — both are a percentage of the thing that runs out — but they
+// run out for unrelated reasons, and a reader who has to pick a line out of a
+// pair before reading it reads neither.
+//
+// Both are drawn from the run log, at one sample per finished run, so the
+// resolution caveat on the panel above applies here too and is worth repeating
+// under each: this is a line through a handful of points per bucket, not a
+// trace.
+
+/** The hint that stands in for a chart with nothing to draw. */
+function NotSampled({ win }: { win: Span }) {
+  return (
+    <p className="hint">
+      No run sampled the machine {spanWords(win)}, so there is nothing to draw.
+      Samples are written by finished runs, not by an agent — see the panel
+      above.
+    </p>
+  );
+}
+
+/**
+ * Said when a bucket holds more than one machine, which makes the division
+ * behind both charts meaningless.
+ *
+ * Not expected to ever show: see `HostPoint.hosts`. It is here because the
+ * alternative to saying it is printing a load percentage computed from one
+ * box's queue and another box's processors, which looks like an ordinary
+ * reading and is not one.
+ */
+function Mixed({ points }: { points: HostPoint[] }) {
+  if (!mixedHosts(points)) return null;
+  return (
+    <p className="hint">
+      Some bucket here holds runs from more than one machine, so a percentage in
+      it may divide one box's figure by another's. Both charts assume the run
+      log describes a single host, which is what job_runs.host records.
+    </p>
+  );
+}
+
+export async function CpuChart({ span }: { span: string }) {
+  const win = windowFor(span);
+  const bucket = bucketMinutes(win.hours);
+  const points = await hostPointsOnce(win, bucket);
+  const data = cpuReadings(points);
+
+  if (peakOf(data) === null) return <NotSampled win={win} />;
+
+  return (
+    <>
+      <p className="panel-note">{bucketWords(bucket)} · worst sample in each</p>
+      <Gauge data={data} guide={{ at: CPU_GUIDE, name: "one per core" }} />
+      <p className="hint">
+        Load average divided by the processors it is spread over, so 100% is one
+        runnable process per vCPU rather than a busy box. The dashed line is
+        there: above it more work is ready to run than there is anything to run
+        it on, which on a scrape that has to finish inside its timer is the
+        thing that turns into a late alert. Gaps are buckets no run fell in.
+      </p>
+      <Mixed points={points} />
+    </>
+  );
+}
+
+export async function RamChart({ span }: { span: string }) {
+  const win = windowFor(span);
+  const bucket = bucketMinutes(win.hours);
+  const points = await hostPointsOnce(win, bucket);
+  const data = ramReadings(points);
+  const guide = ramGuide(points);
+
+  if (peakOf(data) === null) return <NotSampled win={win} />;
+
+  return (
+    <>
+      <p className="panel-note">{bucketWords(bucket)} · worst sample in each</p>
+      <Gauge
+        data={data}
+        guide={guide === null ? null : { at: guide, name: "the browser's cap" }}
+      />
+      <p className="hint">
+        Memory in use, as a share of the {gb(points.find((one) => one.mem_total)?.mem_total)} GB
+        the box has — the complement of the MemAvailable figure the tile prints,
+        drawn this way up so that both charts rise when the box is in trouble.
+        {guide !== null && (
+          <>
+            {" "}
+            The dashed line is where what is left stops covering{" "}
+            {gb(BROWSER_CAP)} GB, the ceiling on the browser slice: above it a
+            mint can no longer be given what it is allowed to take.
+          </>
+        )}
+      </p>
+      <Mixed points={points} />
     </>
   );
 }

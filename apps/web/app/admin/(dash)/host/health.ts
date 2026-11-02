@@ -1,4 +1,6 @@
-import type { BrowserUse, HostHealth } from "@/lib/admin-queries";
+import type { BrowserUse, HostHealth, HostPoint } from "@/lib/admin-queries";
+
+import type { Reading } from "../levels";
 
 // Where every red and green on the Host tab is decided. Apart from the page
 // for the same reason `../proxy/spend.ts` is: none of it needs React or a
@@ -154,4 +156,86 @@ export function worst(tones: Tone[]): Tone {
 /** Whether anything sampled at all, which decides between a tile and a hint. */
 export function measured(host: HostHealth): boolean {
   return host.samples > 0;
+}
+
+// ── the two charts ───────────────────────────────────────────────────────
+//
+// The tiles above them print "now" and "the window's worst". These turn the
+// same samples into a shape, and the shape is read for one thing: whether a
+// line crossed. So both are plotted as a percentage of the thing that runs
+// out — processors for load, total memory for RAM — rather than in their own
+// units, which puts them on one axis with one meaning and gives the guide line
+// something to be.
+//
+// Both rise when the box is in trouble. Memory is therefore plotted as *used*
+// rather than as the available figure the tile prints, because a chart where
+// one line falling and the other rising mean the same thing is a chart read
+// wrong once and then not read again.
+//
+// A bucket no run sampled stays null, all the way from the SQL to the gap in
+// the line. See `hostPoints`, and the module note above about what a zero
+// would claim here.
+
+/**
+ * The red line on the CPU chart, as a percentage of capacity.
+ *
+ * 100 rather than the 70 that `loadTone` turns amber at: one guide, at the
+ * point where the box is definitely over-subscribed. The amber band is a
+ * warning to act on, which is the tile's job; the chart's job is to show when
+ * the thing actually happened.
+ */
+export const CPU_GUIDE = 100;
+
+/** Load per processor, as a percentage. Null where nothing sampled. */
+export function cpuReadings(points: HostPoint[]): Reading[] {
+  return points.map((one) => ({
+    label: one.label,
+    value:
+      one.load1 === null || !one.cpus ? null : (one.load1 / one.cpus) * 100,
+  }));
+}
+
+/** Memory in use, as a percentage of the box's total. */
+export function ramReadings(points: HostPoint[]): Reading[] {
+  return points.map((one) => ({
+    label: one.label,
+    value:
+      one.mem_available === null || !one.mem_total
+        ? null
+        : ((one.mem_total - one.mem_available) / one.mem_total) * 100,
+  }));
+}
+
+/**
+ * Where the RAM chart's red line goes: the point at which available memory
+ * falls below `BROWSER_CAP` and the browser slice can no longer be given what
+ * it is allowed to take.
+ *
+ * Derived from the box rather than written down, because it is the same
+ * judgment `memoryTone` makes and the two must not be able to disagree — on
+ * this 4 GB box against a 2 GB cap it lands at 50% used. Null when the box did
+ * not say how much memory it has, and null when the box is smaller than the
+ * cap, where the line would sit at or below zero and mean nothing.
+ */
+export function ramGuide(points: HostPoint[]): number | null {
+  const totals = points
+    .map((one) => one.mem_total)
+    .filter((one): one is number => one !== null && one > 0);
+  if (!totals.length) return null;
+  const total = Math.max(...totals);
+  if (total <= BROWSER_CAP) return null;
+  return ((total - BROWSER_CAP) / total) * 100;
+}
+
+/**
+ * Whether any one bucket holds samples from more than one machine.
+ *
+ * The one way these two charts can print a number belonging to no machine: a
+ * bucket's worst load average comes from one row and its processor count from
+ * another, and dividing them is meaningless the moment those rows are
+ * different boxes. See `HostPoint.hosts` for why that cannot happen on this
+ * setup and why it is counted anyway.
+ */
+export function mixedHosts(points: HostPoint[]): boolean {
+  return points.some((one) => one.hosts > 1);
 }

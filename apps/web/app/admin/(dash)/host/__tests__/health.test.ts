@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import type { BrowserUse } from "@/lib/admin-queries";
+import type { BrowserUse, HostPoint } from "@/lib/admin-queries";
 
 import {
   BROWSER_CAP,
   browserTone,
+  cpuReadings,
   diskTone,
   gb,
   loadTone,
   mb,
   memoryTone,
   mintTone,
+  mixedHosts,
   pct,
+  ramGuide,
+  ramReadings,
   word,
   worst,
 } from "../health";
@@ -161,5 +165,125 @@ describe("word", () => {
     expect(word("bad", "mint")).toBe("spending for nothing");
     expect(word("bad", "browser")).toBe("near the cap");
     expect(word("ok", "memory")).toBe("room to spare");
+  });
+});
+
+// ── what the two charts plot ─────────────────────────────────────────────
+//
+// Same reason as the tones above: these are arithmetic that cannot look wrong.
+// A load average plotted undivided draws this box at half its real occupancy,
+// memory plotted the wrong way up draws a crisis as a dip, and either is read
+// once and then trusted. The third thing under test is the one the SQL and the
+// chart both go out of their way to preserve: a bucket nobody measured has no
+// value, and must not arrive as a zero.
+
+const bucket = (over: Partial<HostPoint> = {}): HostPoint => ({
+  label: "2026-10-12 14:00",
+  load1: 1.4,
+  cpus: 2,
+  mem_available: 3.1 * 1024 ** 3,
+  mem_total: 4 * 1024 ** 3,
+  hosts: 1,
+  ...over,
+});
+
+/** A bucket no run fell in: the aggregates come back NULL, not zero. */
+const empty = (): HostPoint =>
+  bucket({ load1: null, cpus: null, mem_available: null, mem_total: null, hosts: 0 });
+
+describe("cpuReadings", () => {
+  it("divides by the processors, so 100% means one runnable process each", () => {
+    // The same mistake `loadTone` is built to avoid, in the chart instead of
+    // the tile: undivided, 1.4 would be drawn at 1.4% of a 100% axis and this
+    // box at seventy percent of capacity would look idle.
+    expect(cpuReadings([bucket({ load1: 1.4, cpus: 2 })])[0]?.value).toBeCloseTo(70, 10);
+    expect(cpuReadings([bucket({ load1: 2, cpus: 2 })])[0]?.value).toBeCloseTo(100, 10);
+  });
+
+  it("lets a reading past 100%, which is a real state and not a bug", () => {
+    // Load average counts what is waiting as well as what is running, so it
+    // goes past the processor count. Clamping it would hide the only readings
+    // worth looking at.
+    expect(cpuReadings([bucket({ load1: 3.4, cpus: 2 })])[0]?.value).toBeCloseTo(170, 10);
+  });
+
+  it("leaves a bucket nothing ran in as null rather than as a reading of zero", () => {
+    expect(cpuReadings([empty()])[0]?.value).toBeNull();
+  });
+
+  it("is null rather than Infinity when the host did not say how many processors it has", () => {
+    expect(cpuReadings([bucket({ cpus: null })])[0]?.value).toBeNull();
+    expect(cpuReadings([bucket({ cpus: 0 })])[0]?.value).toBeNull();
+  });
+
+  it("keeps the labels and the order it was given, which is what pairs the gaps up", () => {
+    const points = [bucket({ label: "a" }), empty(), bucket({ label: "c" })];
+
+    expect(cpuReadings(points).map((one) => one.label)).toEqual(["a", "2026-10-12 14:00", "c"]);
+  });
+});
+
+describe("ramReadings", () => {
+  it("plots memory used, not the available figure the tile prints", () => {
+    // Drawn this way up on purpose: both charts have to rise when the box is
+    // in trouble. 3.1 GB available out of 4 is 22.5% used.
+    expect(ramReadings([bucket()])[0]?.value).toBeCloseTo(22.5, 6);
+  });
+
+  it("reaches 100% when nothing is available and 0% when all of it is", () => {
+    expect(ramReadings([bucket({ mem_available: 0 })])[0]?.value).toBe(100);
+    expect(ramReadings([bucket({ mem_available: 4 * 1024 ** 3 })])[0]?.value).toBe(0);
+  });
+
+  it("leaves an unsampled bucket null, where zero would claim the memory was free", () => {
+    // The one that matters most of the four. Zero here reads as "none of the
+    // memory was in use", which is the most reassuring thing the chart could
+    // say and is said about a bucket where nobody looked.
+    expect(ramReadings([empty()])[0]?.value).toBeNull();
+    expect(ramReadings([bucket({ mem_total: null })])[0]?.value).toBeNull();
+  });
+});
+
+describe("ramGuide", () => {
+  it("lands where what is left stops covering the browser's cap", () => {
+    // 2 GB cap on a 4 GB box: at 50% used there is exactly the cap available,
+    // and above that line a mint can no longer be given what it is allowed to
+    // take. The same judgment as `memoryTone`, derived from the same two
+    // numbers so the line and the tile's colour cannot disagree.
+    expect(ramGuide([bucket()])).toBeCloseTo(50, 10);
+  });
+
+  it("is read off the box rather than written down, so a bigger box moves it", () => {
+    expect(ramGuide([bucket({ mem_total: 8 * 1024 ** 3 })])).toBeCloseTo(75, 10);
+  });
+
+  it("has nothing to say about a box no larger than the cap", () => {
+    // The line would sit at or below zero and mean nothing: such a box can
+    // never satisfy the slice, which is a fact about the box rather than
+    // something a dashed line says about one afternoon.
+    expect(ramGuide([bucket({ mem_total: BROWSER_CAP })])).toBeNull();
+    expect(ramGuide([bucket({ mem_total: 1024 ** 3 })])).toBeNull();
+  });
+
+  it("is null when no bucket said how big the box is", () => {
+    expect(ramGuide([empty()])).toBeNull();
+    expect(ramGuide([])).toBeNull();
+  });
+});
+
+describe("mixedHosts", () => {
+  it("catches a bucket holding runs from two machines", () => {
+    // The one state in which both charts print a number belonging to no
+    // machine: the worst load average comes from one row and the processor
+    // count it is divided by from another.
+    expect(mixedHosts([bucket(), bucket({ hosts: 2 }), bucket()])).toBe(true);
+  });
+
+  it("is quiet for the ordinary case, including buckets nothing ran in", () => {
+    // It must not fire on a quiet night, or the notice is permanently up and
+    // therefore unread — the same failure the module note gives for colouring
+    // memory off MemFree.
+    expect(mixedHosts([bucket(), empty(), bucket()])).toBe(false);
+    expect(mixedHosts([])).toBe(false);
   });
 });

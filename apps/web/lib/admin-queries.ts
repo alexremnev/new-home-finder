@@ -2416,6 +2416,98 @@ export async function hostHealth(win: Win): Promise<HostHealth> {
   );
 }
 
+export type HostPoint = {
+  /** The bucket's start, London, as the charts label them. */
+  label: string;
+  /** The worst one-minute load average any of them reported. */
+  load1: number | null;
+  cpus: number | null;
+  /** The least memory any of them found available, in bytes. */
+  mem_available: number | null;
+  mem_total: number | null;
+  /**
+   * How many distinct machines sampled inside the bucket.
+   *
+   * Normally one, and the chart is only honest while it is. The scrape job
+   * runs from two places — a systemd timer on the server and a scheduled task
+   * on a desk, which is what 0044 added `host` to answer — and a bucket
+   * holding both would divide one machine's load average by the other's
+   * processor count. Counted rather than filtered out, because on this setup
+   * it cannot currently happen: the desk is a Mac, `worker.obs.host` reads
+   * memory out of /proc, and a run with no `host_mem_total` is not a sample at
+   * all. So this is the tripwire for that stopping being true, which the
+   * panel says out loud rather than quietly averaging.
+   */
+  hosts: number;
+};
+
+// The same samples `hostHealth` reduces to three tiles, left as a timeline.
+//
+// ── why a chart when the tiles already carry a peak ──────────────────────
+//
+// The tiles answer "was the box short of anything over this window" and cannot
+// answer "when", which is the question you actually have once the answer to
+// the first is yes. A peak of 1.9 on two processors is a different fault
+// depending on whether it is one spike at 03:00 — a sweep that collided with
+// the clearance timer — or a plateau from noon onwards.
+//
+// ── the worst of each bucket, not the mean ───────────────────────────────
+//
+// `max` on load and `min` on available memory, for the reason `../host/health`
+// gives for colouring on the window's worst: a box that ran out of memory at
+// 14:00 and recovered averages out to healthy, and the average is the one
+// shape that cannot be read for trouble. With readers running every six to
+// twelve minutes a bucket holds a handful of samples, so this is the worst of
+// three or five rather than of hundreds.
+//
+// ── a bucket nothing ran in is null, never zero ──────────────────────────
+//
+// The aggregates are NULL for an empty bucket and stay null all the way into
+// the chart, which draws a gap. A zero here would read as "no load and no
+// memory free", which is the opposite of the truth on an idle night, and the
+// overnight hours are exactly when this worker's timers are sparse.
+//
+// Bigints are cast to float8 rather than returned as bigint because node-pg
+// hands a bigint back as a string, and a string that reaches arithmetic
+// silently concatenates. Forty gigabytes is nowhere near float8's exact
+// integer range, so nothing is lost by it.
+export async function hostPoints(win: Win, minutes: number): Promise<HostPoint[]> {
+  return query<HostPoint>(
+    `WITH span AS (
+       SELECT generate_series(
+                date_trunc('hour', now() - make_interval(mins => $1::int)),
+                now() - make_interval(mins => $3::int),
+                make_interval(mins => $2::int)
+              ) AS bucket
+     )
+     SELECT to_char(span.bucket AT TIME ZONE 'Europe/London', 'YYYY-MM-DD HH24:MI') AS label,
+            max((r.counters->>'host_load1')::float8)
+              FILTER (WHERE jsonb_typeof(r.counters->'host_load1') = 'number')
+              AS load1,
+            max((r.counters->>'host_cpus')::int)
+              FILTER (WHERE jsonb_typeof(r.counters->'host_cpus') = 'number')
+              AS cpus,
+            min((r.counters->>'host_mem_available')::float8)
+              FILTER (WHERE jsonb_typeof(r.counters->'host_mem_available') = 'number')
+              AS mem_available,
+            max((r.counters->>'host_mem_total')::float8)
+              FILTER (WHERE jsonb_typeof(r.counters->'host_mem_total') = 'number')
+              AS mem_total,
+            count(DISTINCT r.host)::int AS hosts
+       FROM span
+       LEFT JOIN job_runs r
+              -- The same marker hostHealth uses for a run that sampled at
+              -- all: one from before that code existed has none of these
+              -- keys and is not a sample that read zero.
+              ON r.counters ? 'host_mem_total'
+             AND r.started_at >= span.bucket
+             AND r.started_at <  span.bucket + make_interval(mins => $2::int)
+      GROUP BY span.bucket
+      ORDER BY span.bucket`,
+    [Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
+  ).catch(() => []);
+}
+
 export type BrowserUse = {
   runs: number;
   /** Runs that came away with a token. The rest spent the memory for nothing. */
