@@ -14,6 +14,7 @@ import {
   whatsappChat,
   whatsappLink,
 } from "@/lib/plans";
+import { arrivalOf } from "@/lib/visits";
 import { sendWhatsApp } from "@/lib/whatsapp";
 
 export const runtime = "nodejs";
@@ -106,12 +107,35 @@ export async function POST(request: Request): Promise<NextResponse> {
 
   const token = newToken();
 
+  // Where this person came from, read before the transaction opens: it is a
+  // second query of its own and it must not hold a write transaction open, and
+  // the account is worth opening whatever it answers — see 0073. `arrivalOf`
+  // swallows its own failures and returns nulls, which the admin shows as a
+  // blank rather than as a guess.
+  const from = await arrivalOf({
+    address: request.headers.get("x-forwarded-for"),
+    userAgent: request.headers.get("user-agent"),
+    referer: request.headers.get("referer"),
+    language: request.headers.get("accept-language"),
+    // Set by the edge on Vercel and absent anywhere else. The address itself
+    // is deliberately never stored — see 0043.
+    country: request.headers.get("x-vercel-ip-country"),
+    city: request.headers.get("x-vercel-ip-city"),
+    region: request.headers.get("x-vercel-ip-country-region"),
+  });
+
   await transaction(async (run) => {
     const users = await run(
-      `INSERT INTO users (status, consent_source, plan, plan_until, payment_ref)
-       VALUES ('pending', 'web_form', $1, NULL, $2)
+      `INSERT INTO users (status, consent_source, plan, plan_until, payment_ref,
+                          arrived_source, arrived_referrer, arrived_campaign,
+                          arrived_city, arrived_region, arrived_language)
+       VALUES ('pending', 'web_form', $1, NULL, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id`,
-      [plan.key, paymentRef()],
+      [
+        plan.key, paymentRef(),
+        from.source, from.referrer, from.campaign,
+        from.city, from.region, from.language,
+      ],
     );
     const userId = users[0]?.id;
     if (userId === undefined) throw new Error("user row was not created");

@@ -435,6 +435,87 @@ def test_a_filter_is_named_by_the_three_things_that_decide_it() -> None:
 
     assert line == "SE16, SE1 · £0-2000 · 1-2 bed · also landlord_direct_only"
 
+def test_a_filter_is_written_as_its_values_and_not_as_its_column_names() -> None:
+    # The whole of the change: "also property_types, furnished" told whoever
+    # read the ops chat that a filter named a property type, which is not a
+    # fact anybody can act on. A filter that wants a room is.
+    from worker.pipeline.outbox import criteria_line
+
+    line = criteria_line({
+        "areas": {"postcode_districts": ["SE16"]},
+        "property_types": ["flat", "room"],
+        "furnished": ["furnished", "part"],
+        "bathrooms": {"min": 2},
+        "floor_area_sqft": {"min": 500, "max": 900},
+        "available_from": {"after": "2026-12-01"},
+        "pets_allowed": True,
+        "send_duplicates": True,
+    })
+
+    assert "property_types" not in line
+    assert "furnished, part furnished" in line
+    assert line == (
+        "SE16 · flat, room · 2+ bath · 500-900 ft\u00b2 · "
+        "furnished, part furnished · from 2026-12-01 · pets allowed · "
+        "duplicates sent"
+    )
+
+
+def test_a_filter_field_nobody_has_named_yet_is_still_shown() -> None:
+    # The fallback, and why it is kept: a criterion added to the form and not
+    # to `_FILTER_VALUES` is worth seeing badly rather than not at all, and the
+    # bare key in the chat is the signal to come and name it.
+    from worker.pipeline.outbox import criteria_line
+
+    assert criteria_line({"landlord_direct_only": True}) == "also landlord_direct_only"
+
+
+def test_the_notice_says_which_post_produced_the_subscriber() -> None:
+    # The question the attribution exists for: "twelve visits from reddit" and
+    # "this subscriber came from reddit" are different numbers, and only the
+    # second says the post was worth making — see 0073.
+    from worker.pipeline.outbox import signup_notice
+
+    text = signup_notice({
+        "user_id": 7, "channel": "telegram", "plan": "trial", "plan_until": None,
+        "filters": 1, "criteria": {},
+        "arrived_source": "reddit", "arrived_campaign": "nov-post",
+        "arrived_city": "London", "arrived_region": "ENG",
+        "arrived_language": "en-GB",
+    })
+
+    assert text.splitlines()[1] == "from reddit · campaign nov-post · London, ENG · en-GB"
+
+
+def test_an_unattributed_signup_has_no_line_rather_than_a_blank_one() -> None:
+    # Every account opened before 0073 is this, and so is anyone the edge could
+    # not place. A line of placeholders reads as a broken message; no line reads
+    # as what it is.
+    from worker.pipeline.outbox import signup_notice
+
+    text = signup_notice({
+        "user_id": 7, "channel": "telegram", "plan": "trial", "plan_until": None,
+        "filters": 1, "criteria": {"areas": {"postcode_districts": ["SE16"]}},
+    })
+
+    assert text.splitlines() == [
+        "🎉 New subscriber #7 on telegram · trial",
+        "SE16",
+    ]
+
+
+def test_a_half_known_arrival_says_the_half_it_knows() -> None:
+    # Commoner than either extreme: the edge places the request and no visit
+    # row was ever written, or the other way round.
+    from worker.pipeline.outbox import arrival_line
+
+    assert arrival_line({"arrived_city": "Lisbon", "arrived_language": "pt-PT"}) == (
+        "Lisbon · pt-PT"
+    )
+    assert arrival_line({"arrived_source": "direct"}) == "from direct"
+    assert arrival_line({}) == ""
+
+
 def test_an_empty_filter_says_so_rather_than_reading_as_a_bug() -> None:
     from worker.pipeline.outbox import criteria_line
 

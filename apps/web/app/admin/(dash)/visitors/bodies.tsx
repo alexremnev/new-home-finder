@@ -1,4 +1,7 @@
 import { visitorPoints, visitorsBy, visitorsByDay } from "@/lib/admin-queries";
+// The same two lookups the subscriber page uses for one account's own tag, so
+// "Russian" there and "Russian" in this ranking cannot come to disagree.
+import { countryName, languageName } from "@/lib/visits";
 
 import { windowFor } from "../cached";
 import { Metric, Series } from "../charts";
@@ -11,30 +14,6 @@ import { moreFacet } from "./more";
 // The page renders these inside Suspense, so the ten breakdowns query in
 // parallel and the page streams rather than waiting for the slowest. Each
 // breakdown shows its longest twelve and loads the rest on demand.
-
-// Two letters is all that is stored, so the name is looked up here rather than
-// kept in a column that would need maintaining.
-const COUNTRIES = new Intl.DisplayNames(["en"], { type: "region" });
-
-function countryName(code: string | null): string {
-  if (!code) return "unknown";
-  try {
-    return COUNTRIES.of(code) ?? code;
-  } catch {
-    return code;
-  }
-}
-
-const LANGUAGES = new Intl.DisplayNames(["en"], { type: "language" });
-
-function languageName(tag: string | null): string {
-  if (!tag) return "unknown";
-  try {
-    return LANGUAGES.of(tag) ?? tag;
-  } catch {
-    return tag;
-  }
-}
 
 export type Facet =
   | "source" | "referrer" | "campaign" | "country" | "region" | "city"

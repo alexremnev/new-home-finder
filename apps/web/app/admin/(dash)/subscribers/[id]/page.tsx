@@ -7,6 +7,7 @@ import {
   person, sellablePlans, wantedBy,
 } from "@/lib/admin-queries";
 import { describeCriteria, type Criteria } from "@/lib/criteria";
+import { languageName } from "@/lib/visits";
 
 import { Metric, Why } from "../../charts";
 import { Panel, PanelWait } from "../../panel";
@@ -178,6 +179,52 @@ export default async function UserPage({
                   {who.channel ?? "none"}
                   {who.address ? ` · ${who.address}` : ""}
                   {who.verified_at ? ` · verified ${at(who.verified_at)}` : " · unverified"}
+                </td>
+              </tr>
+              {/* Where this person came from — 0073. Four rows and not one,
+                  because they answer different questions: the first says
+                  whether a post is producing customers, and the other three
+                  say who is answering it. Blank is a real answer throughout
+                  and is shown as one: an account opened before these columns
+                  existed has none of them, and the edge cannot always place a
+                  request. Nothing here is inferred — a sign-up we could not
+                  attribute reads as "—" rather than as "direct". */}
+              <tr>
+                <th>
+                  Arrived from
+                  <Why text="Откуда пришёл этот человек, в момент отправки формы. Нормализовано так же, как в Visitors: все google.* — это «google», reddit.com — «reddit», utm_source из ссылки важнее заголовка Referer. «direct» значит, что ссылку открыли без referrer — набрали адрес, тапнули в приложении — а не что источник неизвестен: неизвестный источник это прочерк. Берётся из записи визита за тот же день: сама форма отправляется с нашей же страницы, поэтому её собственный Referer всегда наш домен и ничего бы не сказал." />
+                </th>
+                <td>
+                  {who.arrived_source ?? "—"}
+                  {who.arrived_referrer && who.arrived_referrer !== who.arrived_source
+                    ? ` · ${who.arrived_referrer}`
+                    : ""}
+                  {who.arrived_campaign ? ` · campaign ${who.arrived_campaign}` : ""}
+                </td>
+              </tr>
+              <tr>
+                <th>
+                  City
+                  <Why text="Город от edge Vercel в момент регистрации. Сам адрес мы не храним, координаты — тоже: город это самая честная точность, дальше начинается слежка. Прочерк — заголовка не было: так выглядят аккаунты, заведённые до появления колонки, и всё, что открыто не через Vercel." />
+                </th>
+                <td>{who.arrived_city ?? "—"}</td>
+              </tr>
+              <tr>
+                <th>
+                  Region
+                  <Why text="Административная единица внутри страны, тоже от edge Vercel. Для Великобритании это country subdivision — код вроде ENG или SCT." />
+                </th>
+                <td>{who.arrived_region ?? "—"}</td>
+              </tr>
+              <tr>
+                <th>
+                  Language
+                  <Why text="Первый тег из Accept-Language — тот, который браузер предпочитает. Целиком заголовок не храним: это строка с высокой энтропией, годная разве что для отпечатка. Рядом в скобках — сам тег, потому что по имени языка не видно страны." />
+                </th>
+                <td>
+                  {who.arrived_language
+                    ? `${languageName(who.arrived_language)} (${who.arrived_language})`
+                    : "—"}
                 </td>
               </tr>
               <tr><th>Payment ref</th><td>{who.payment_ref ?? "—"}</td></tr>

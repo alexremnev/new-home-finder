@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -174,11 +175,70 @@ SEED_POOL = 400
 SEED_SKIPS = frozenset({"whatsapp"})
 
 
-# Which parts of a filter are named in the ops line, and what to call them.
-# The rest are counted by name without their values: these three decide whether
-# a filter will ever match anything, and a line read twenty at a time has room
-# for three.
+# The three that lead the ops line. They decide whether a filter will ever
+# match anything, so they are written first and in this order every time — a
+# line read twenty at a time is only scannable if the fields keep their places.
 _FILTER_SHOWN = ("areas", "price_pcm", "bedrooms")
+
+# "part" on its own reads as half a word rather than as a furnishing.
+_FURNISHING = {"part": "part furnished"}
+
+def _band(value: Any, suffix: str = "") -> str | None:
+    """A min/max pair as one phrase, or None when neither bound is given."""
+
+    if not isinstance(value, dict):
+        return None
+    low, high = value.get("min"), value.get("max")
+    if low is None and high is None:
+        return None
+    if low is not None and high is not None:
+        body = str(low) if low == high else f"{low}-{high}"
+    elif high is not None:
+        body = f"up to {high}"
+    else:
+        body = f"{low}+"
+    return body + suffix
+
+def _listed(value: Any, names: dict[str, str] | None = None) -> str | None:
+    """A chosen-from-a-list filter as its values, not as its column name."""
+
+    if not isinstance(value, list) or not value:
+        return None
+    return ", ".join((names or {}).get(str(one), str(one)) for one in value)
+
+def _dates(value: Any) -> str | None:
+    if not isinstance(value, dict):
+        return None
+    after, before = value.get("after"), value.get("before")
+    if after and before:
+        return f"{after} to {before}"
+    if after:
+        return f"from {after}"
+    return f"to {before}" if before else None
+
+
+# Everything a filter can hold beyond the three above, rendered as what was
+# chosen rather than as the name of the field it was chosen into.
+#
+# This used to be `", ".join(sorted(rest))`, which put "also property_types,
+# furnished" in the chat — the one thing a reader cannot act on. Knowing that a
+# filter names a property type says nothing; knowing it wants a room says
+# whether the search will match. The values are the news, and they were already
+# in the row.
+#
+# A dict, so the order is fixed and matches the form rather than being
+# whatever `sorted` makes of the keys. Anything not named here still appears as
+# its bare key — a filter field added later is worth seeing badly rather than
+# not at all, and the bare name is the signal to come and add it here.
+_FILTER_VALUES: dict[str, Callable[[Any], str | None]] = {
+    "property_types": _listed,
+    "bathrooms": lambda value: _band(value, suffix=" bath"),
+    "floor_area_sqft": lambda value: _band(value, suffix=" ft\u00b2"),
+    "furnished": lambda value: _listed(value, _FURNISHING),
+    "available_from": _dates,
+    "pets_allowed": lambda value: "pets allowed" if value else None,
+    "send_duplicates": lambda value: "duplicates sent" if value else None,
+}
 
 def criteria_line(criteria: dict[str, Any]) -> str:
     """One filter on one line. The subscriber's own card is the long version."""
@@ -206,19 +266,73 @@ def criteria_line(criteria: dict[str, Any]) -> str:
     elif many is not None:
         parts.append(f"up to {many} bed")
 
-    # Named but not valued. A filter nobody can see is how a search that
-    # matches nothing stays mysterious, and the values are in the database.
-    rest = sorted(k for k in criteria if k not in _FILTER_SHOWN and criteria[k])
+    # Everything else, as its values. A filter nobody can see is how a search
+    # that matches nothing stays mysterious.
+    for key, render in _FILTER_VALUES.items():
+        # The overlap guard, and the only reason it is here: the three above
+        # are written by hand, so naming one of them below as well would print
+        # it twice rather than fail.
+        if key in _FILTER_SHOWN or not criteria.get(key):
+            continue
+        said = render(criteria[key])
+        if said:
+            parts.append(said)
+
+    # Whatever this file has not been taught to render. Sorted, because there
+    # is no meaningful order for a field nobody has named yet, and prefixed so
+    # that a key standing in for its value is visibly the odd one out.
+    rest = sorted(
+        k
+        for k in criteria
+        if k not in _FILTER_SHOWN and k not in _FILTER_VALUES and criteria[k]
+    )
     if rest:
         parts.append("also " + ", ".join(rest))
 
     return " · ".join(parts) if parts else "no filter set — matches everything"
 
+def arrival_line(row: Row) -> str:
+    """Where this account came from, or "" when nothing is known — 0073.
+
+    Empty rather than "unknown from unknown": an account opened before the
+    columns existed has none of these, and a line of placeholders is worse than
+    no line. The caller drops it.
+
+    The city stays coarse on purpose. A city is the grain the dashboard uses
+    and the grain the edge is honest at; a coordinate would be surveillance,
+    and this goes to a chat.
+    """
+
+    parts: list[str] = []
+
+    # First, because it is the question: which post is producing customers.
+    source = row.get("arrived_source")
+    if source:
+        parts.append(f"from {source}")
+    campaign = row.get("arrived_campaign")
+    if campaign:
+        parts.append(f"campaign {campaign}")
+
+    # City and region as one phrase — "London, ENG" is one fact about where
+    # somebody is, and two fields apart it reads as two.
+    place = ", ".join(
+        str(one) for one in (row.get("arrived_city"), row.get("arrived_region")) if one
+    )
+    if place:
+        parts.append(place)
+
+    language = row.get("arrived_language")
+    if language:
+        parts.append(str(language))
+
+    return " · ".join(parts)
+
 def signup_notice(row: Row) -> str:
     """The ops line for a filter that has just appeared.
 
-    Says which account and what it is looking for, and never how to reach them:
-    this goes to a chat, and a chat is not where a phone number belongs.
+    Says which account, where it came from and what it is looking for, and
+    never how to reach them: this goes to a chat, and a chat is not where a
+    phone number belongs.
     """
 
     # `.get` throughout: this line is commentary, and a column that is not
@@ -230,13 +344,15 @@ def signup_notice(row: Row) -> str:
     # thing separating a new customer from somebody editing their search.
     first = int(row.get("filters") or 1) <= 1
 
-    return "\n".join(
-        [
-            f"{'🎉 New subscriber' if first else '✏️ Filter replaced'} "
-            f"#{int(row['user_id'])} on {row['channel']} · {plan}{when}",
-            criteria_line(row["criteria"] or {}),
-        ]
-    )
+    lines = [
+        f"{'🎉 New subscriber' if first else '✏️ Filter replaced'} "
+        f"#{int(row['user_id'])} on {row['channel']} · {plan}{when}",
+        # Dropped when it is empty, which is why this is filtered rather than
+        # joined straight through: a blank middle line reads as a bug.
+        arrival_line(row),
+        criteria_line(row["criteria"] or {}),
+    ]
+    return "\n".join(line for line in lines if line)
 
 def seed_new_subscriptions(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
 
@@ -1183,7 +1299,8 @@ def notify_plan_changes(conn: Conn, run: Run, *, dry_run: bool = False) -> None:
                 )
 
 __all__ = [
-    "alert_for", "ask_before_the_window_shuts", "checkout_for", "criteria_line", "drain",
+    "alert_for", "arrival_line", "ask_before_the_window_shuts", "checkout_for",
+    "criteria_line", "drain",
     "watch_whatsapp_cost",
     "in_share", "interleave_by_user",
     "listing_view",

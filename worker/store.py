@@ -1176,6 +1176,27 @@ def daily_digests(conn: Conn, *, limit: int = 500) -> list[Row]:
                         AND n.created_at > now() - interval '24 hours'
                   LEFT JOIN listings l ON l.id = n.listing_id
                  WHERE s.active
+                   -- Only a filter that was running for the whole window these
+                   -- counts cover. A search set up at seven in the evening has
+                   -- had an hour, and the summary it gets at eight is "nothing
+                   -- matched your filter today — quiet days happen, /update to
+                   -- widen the rent range or add an area": a zero that is an
+                   -- artefact of having just signed up, read as a verdict on
+                   -- the areas they chose. The first thing the bot says about
+                   -- their search should not be that it is not working.
+                   --
+                   -- `backfill_from` and not `created_at`, because it is the
+                   -- instant from which listings became eligible for this
+                   -- filter — the start of the only stream `notifications` can
+                   -- have rows from. It is also reset by an edit and by
+                   -- /resume, and neither of those days happened either: an
+                   -- hour of a filter changed at seven is not a quiet day for
+                   -- the filter that replaced it.
+                   --
+                   -- Per subscription rather than per user, so somebody with a
+                   -- filter from last week and another from this evening still
+                   -- hears about the week-old one.
+                   AND s.backfill_from <= now() - interval '24 hours'
                  GROUP BY s.user_id
                  ORDER BY s.user_id
                  LIMIT %s
@@ -1658,7 +1679,7 @@ def unseeded_subscriptions(conn: Conn) -> list[Row]:
     `seeded_at` is the latch, so every new subscription passes through here
     exactly once — which is also what makes this the one place that can tell
     the ops chat somebody has signed up. No address is selected: the chat is
-    told who and what, never how to reach them.
+    told who, where from and what, never how to reach them.
     """
 
     return list(
@@ -1666,6 +1687,14 @@ def unseeded_subscriptions(conn: Conn) -> list[Row]:
             """
             SELECT s.id, s.user_id, s.criteria, uc.channel,
                    u.plan, u.plan_until,
+                   -- Where they came from, and who they are to the extent the
+                   -- edge could say — 0073. Here because this is the one place
+                   -- a sign-up is announced, and "a subscriber from reddit" is
+                   -- a different piece of news from "a subscriber". NULL
+                   -- throughout for anyone the web form could not attribute,
+                   -- and the notice simply leaves the line out.
+                   u.arrived_source, u.arrived_campaign,
+                   u.arrived_city, u.arrived_region, u.arrived_language,
                    -- How many filters this account has ever had, so the ops
                    -- line can say "signed up" rather than guess. The sign-up
                    -- form writes a new subscription every time it is used, so

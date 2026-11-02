@@ -82,8 +82,16 @@ def make_user(
 
 def make_subscription(
     conn: Any, user_id: int, *, criteria: dict[str, Any] | None = None,
-    backfill_hours: int = 1, active: bool = True,
+    backfill_hours: int = 25, active: bool = True,
 ) -> int:
+    """An ordinary subscriber: a filter that has been running for over a day.
+
+    Over a day, and not an hour, because `daily_digests` now asks for a filter
+    that covered the whole window it counts over — a day-old filter is the
+    default case, and a brand-new one is the special one. Tests about what a
+    new filter does and does not get say `backfill_hours=` themselves.
+    """
+
     row = conn.execute(
         """
         INSERT INTO subscriptions (user_id, criteria, backfill_from, active)
@@ -684,6 +692,54 @@ def test_a_live_whatsapp_plan_is_still_sent_its_digest(conn: Any) -> None:
     # nothing" rather than "not on WhatsApp".
     user_id = wa_subscriber(conn, used=10)
     make_subscription(conn, user_id)
+
+    assert [int(r["user_id"]) for r in store.daily_digests(conn)] == [user_id]
+
+
+def claimed_days(conn: Any, user_id: int) -> int:
+    row = conn.execute(
+        "SELECT count(*) AS n FROM daily_digests WHERE user_id = %s", (user_id,)
+    ).fetchone()
+    return 0 if row is None else int(row["n"])
+
+
+def test_a_filter_set_up_this_evening_is_not_sent_a_summary_of_the_day(
+    conn: Any,
+) -> None:
+    # It has had an hour, so its zero is not a quiet day — it is the hour. The
+    # message that zero produces reads "nothing matched your filter today,
+    # /update to widen the rent range or add an area", which is a verdict on
+    # the areas somebody picked minutes ago, and the first thing the bot would
+    # say about their search is that it is not working.
+    user_id = make_user(conn, plan="free", plan_days=None)
+    make_subscription(conn, user_id, backfill_hours=1)
+
+    assert store.daily_digests(conn) == []
+    # And no claim, so tomorrow — a day this filter did run for — still has one.
+    assert claimed_days(conn, user_id) == 0
+
+
+def test_a_day_old_filter_is_sent_its_quiet_day(conn: Any) -> None:
+    # The other side of it, and the reason a quiet day is reported at all: a
+    # day with no message is indistinguishable from a bot that has died, and
+    # after a full day the usual cause is a filter that is too tight.
+    user_id = make_user(conn, plan="free", plan_days=None)
+    make_subscription(conn, user_id, backfill_hours=25)
+
+    rows = store.daily_digests(conn)
+
+    assert [int(r["user_id"]) for r in rows] == [user_id]
+    assert int(rows[0]["matched"]) == 0
+
+
+def test_a_filter_added_this_evening_does_not_silence_an_older_one(
+    conn: Any,
+) -> None:
+    # The test is per subscription, not per user: somebody who added a second
+    # area tonight still has a week-old search that had the whole day.
+    user_id = make_user(conn, plan="free", plan_days=None)
+    make_subscription(conn, user_id, backfill_hours=25 * 7)
+    make_subscription(conn, user_id, backfill_hours=1)
 
     assert [int(r["user_id"]) for r in store.daily_digests(conn)] == [user_id]
 

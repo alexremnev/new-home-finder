@@ -519,6 +519,17 @@ export type Person = {
   joined: string;
   consent_at: string | null;
   consent_source: string | null;
+  // Where this account came from, copied onto it when the form was submitted
+  // — 0073. `consent_source` beside them is a different fact: how somebody
+  // opted in, not where they arrived from. NULL on every account opened
+  // before the columns existed, and on anyone the edge could not place; the
+  // page shows those as a blank rather than inventing "direct".
+  arrived_source: string | null;
+  arrived_referrer: string | null;
+  arrived_campaign: string | null;
+  arrived_city: string | null;
+  arrived_region: string | null;
+  arrived_language: string | null;
   stopped_at: string | null;
   payment_ref: string | null;
   channel: string | null;
@@ -572,6 +583,8 @@ export async function person(userId: number): Promise<Person | null> {
               AS wa_marketing_micros,
             u.created_at::text AS joined, u.consent_at::text,
             u.consent_source, u.stopped_at::text, u.payment_ref,
+            u.arrived_source, u.arrived_referrer, u.arrived_campaign,
+            u.arrived_city, u.arrived_region, u.arrived_language,
             uc.channel, uc.address, uc.verified_at::text,
             s.id AS subscription_id, s.criteria,
             s.backfill_from::text, s.seeded_at::text,

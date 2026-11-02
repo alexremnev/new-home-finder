@@ -148,6 +148,36 @@ export function countryFrom(header: string | null): string | null {
   return /^[A-Z]{2}$/.test(code) && code !== "XX" ? code : null;
 }
 
+// Named here rather than written out at each call site: the normalisation is
+// shared with the visit row, and `ownHost` is the one argument to `sourceOf`
+// that is not a request header.
+const OWN_SITE = "https://londonhomefinder.co.uk";
+
+/**
+ * Who this is, for counting, or null when it cannot be worked out.
+ *
+ * The day is part of the hash on purpose: the same person tomorrow is a
+ * different row, so this counts people without being able to follow one. The
+ * secret is what stops the hash being reversible from a user agent and an
+ * address somebody already has, so a deployment without one counts nobody.
+ *
+ * One function because the sign-up recomputes it to find the visit it came
+ * from — see `arrivalOf`. Two copies of this formula would drift, and the
+ * drift would be silent: the lookup would simply never find a row, and every
+ * sign-up would read as having come from nowhere.
+ */
+function visitorKey(address: string | null, userAgent: string): string | null {
+  const secret = process.env.ADMIN_SESSION_SECRET ?? "";
+  if (secret.length < 32) return null;
+
+  const first = (address ?? "").split(",")[0]?.trim() || "unknown";
+  const day = new Date().toISOString().slice(0, 10);
+  return createHash("sha256")
+    .update(`${secret}:${day}:${first}:${userAgent}`)
+    .digest("hex")
+    .slice(0, 32);
+}
+
 /** Everything a request offers that is worth recording. All of it optional. */
 export type Arrival = {
   address: string | null;
@@ -176,22 +206,14 @@ export async function recordVisit(arrival: Arrival): Promise<void> {
   const browser = browserFrom(userAgent);
   if (!browser) return;
 
-  const secret = process.env.ADMIN_SESSION_SECRET ?? "";
+  const visitor = visitorKey(arrival.address, userAgent);
+  if (!visitor) return;
 
-  if (secret.length < 32) return;
-
-  const address = (arrival.address ?? "").split(",")[0]?.trim() || "unknown";
   const day = new Date().toISOString().slice(0, 10);
-  // The day is part of the hash on purpose: the same person tomorrow is a
-  // different row, so this counts people without being able to follow one.
-  const visitor = createHash("sha256")
-    .update(`${secret}:${day}:${address}:${userAgent}`)
-    .digest("hex")
-    .slice(0, 32);
 
   // Our own domain reads as "direct": somebody moving between our pages did
   // not arrive from anywhere.
-  const ownHost = hostOf(process.env.SITE_URL ?? "https://londonhomefinder.co.uk");
+  const ownHost = hostOf(process.env.SITE_URL ?? OWN_SITE);
   const { source, referrer } = sourceOf(
     arrival.referer,
     arrival.utmSource ?? null,
@@ -237,4 +259,109 @@ export async function recordVisit(arrival: Arrival): Promise<void> {
     // Deliberately swallowed. A counter must never be the reason the page a
     // visitor came for fails to render.
   });
+}
+
+// ── what a sign-up can be told about where it came from ───────────────────
+
+/**
+ * The six facts recorded against an account at sign-up — see 0073.
+ *
+ * Every one of them nullable, and null genuinely means "we do not know"
+ * rather than a default: the admin shows a blank, and a blank is the honest
+ * answer for somebody the edge could not place or a visit we never counted.
+ */
+export type Attribution = {
+  source: string | null;
+  referrer: string | null;
+  campaign: string | null;
+  city: string | null;
+  region: string | null;
+  language: string | null;
+};
+
+/**
+ * Where the person making this request came from.
+ *
+ * Two halves, because the request can answer one of them and not the other.
+ *
+ * City, region and language are read straight off this request: they are
+ * properties of the connection and the browser, identical on every request of
+ * the visit, so they are available whether or not anything else is.
+ *
+ * Source, referrer and campaign are not. The sign-up form POSTs from our own
+ * page, so this request's own Referer is our own domain and normalising it
+ * would produce "direct" for every sign-up ever made — the one request in the
+ * visit that cannot see where the person came from. Today's `site_visits` row
+ * can: the visitor hash is computable from the same request, and because
+ * `recordVisit` only ever fills attribution in, that row still holds the
+ * *first* page of the visit.
+ *
+ * No row, no answer — these three stay null rather than being guessed at from
+ * a request that does not know. That happens for somebody on a browser the
+ * counter refuses, on a deployment with no session secret, and across
+ * midnight, when the hash has already moved to the next day.
+ */
+export async function arrivalOf(arrival: Arrival): Promise<Attribution> {
+  const place = {
+    city: placeOf(arrival.city),
+    region: placeOf(arrival.region),
+    language: languageOf(arrival.language),
+  };
+  const nowhere = { source: null, referrer: null, campaign: null, ...place };
+
+  const userAgent = arrival.userAgent;
+  if (!userAgent) return nowhere;
+  const visitor = visitorKey(arrival.address, userAgent);
+  if (!visitor) return nowhere;
+
+  const rows = await query<{
+    source: string | null;
+    referrer: string | null;
+    campaign: string | null;
+  }>(
+    `SELECT source, referrer, campaign
+       FROM site_visits
+      WHERE day = $1::date AND visitor_hash = $2`,
+    [new Date().toISOString().slice(0, 10), visitor],
+    // Deliberately swallowed, like the counter itself: knowing where a
+    // sign-up came from must never be the reason the sign-up fails.
+  ).catch(() => []);
+
+  const seen = rows[0];
+  if (!seen) return nowhere;
+  return {
+    source: seen.source,
+    referrer: seen.referrer,
+    campaign: seen.campaign,
+    ...place,
+  };
+}
+
+// ── the names behind the codes ────────────────────────────────────────────
+//
+// Two letters and a language tag are all that is stored, so the readable name
+// is looked up here rather than kept in a column that would need maintaining.
+// Here rather than beside the one page that draws them, because the subscriber
+// page shows the same tag for one account that the visitors page aggregates.
+
+const COUNTRIES = new Intl.DisplayNames(["en"], { type: "region" });
+
+export function countryName(code: string | null): string {
+  if (!code) return "unknown";
+  try {
+    return COUNTRIES.of(code) ?? code;
+  } catch {
+    return code;
+  }
+}
+
+const LANGUAGES = new Intl.DisplayNames(["en"], { type: "language" });
+
+export function languageName(tag: string | null): string {
+  if (!tag) return "unknown";
+  try {
+    return LANGUAGES.of(tag) ?? tag;
+  } catch {
+    return tag;
+  }
 }

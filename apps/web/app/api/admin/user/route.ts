@@ -165,7 +165,17 @@ export async function POST(request: Request) {
 
         if (hasPayments) {
           await run(
-            `UPDATE users SET status = 'erased', stopped_at = now() WHERE id = $1`,
+            // The city, the region and the language go with the chat id: they
+            // are facts about the person, and this row is being kept only
+            // because a financial record has to survive a request to be
+            // forgotten. `arrived_source`, `arrived_referrer` and
+            // `arrived_campaign` stay — they say which post we paid for
+            // produced a customer, which is a fact about us and names nobody.
+            `UPDATE users
+                SET status = 'erased', stopped_at = now(),
+                    arrived_city = NULL, arrived_region = NULL,
+                    arrived_language = NULL
+              WHERE id = $1`,
             [userId],
           );
           detail.kept = "payment history";
