@@ -136,7 +136,9 @@ def run_job(
         # not the transport.
         from worker.sources.clearance import mint
 
-        return mint(run, dry_run=cfg.dry_run)
+        # `conn` because the mint is now conditional on what the reader's own
+        # refusals recorded — see `mint` and `store.challenged_recently`.
+        return mint(conn, run, dry_run=cfg.dry_run)
 
     if job == "drain":
 

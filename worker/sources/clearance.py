@@ -76,10 +76,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+import psycopg
+
+from worker import store
 from worker.obs import Run, host
 from worker.sources import session as session_memory
 from worker.sources.fetch import IMPERSONATE, PRIMARY, exit_ports
 from worker.sources.zoopla import BASE, NEWEST_FIRST, SOURCE_KEY
+
+Row = dict[str, Any]
+Conn = psycopg.Connection[Row]
 
 #: The page the token has to be good for, which is the page that gets
 #: challenged: the one `zoopla_london` reads every six minutes. Minting against
@@ -110,9 +116,30 @@ TIMEOUT_MS = 60_000
 #: needs and nothing that merely identifies us more precisely.
 KEEP = ("cf_clearance", "__cf_bm", "_cfuvid")
 
+#: How far back to look for evidence that the reader is actually being
+#: challenged. See `mint`, which will not launch a browser without it.
+#:
+#: Thirty minutes, which is a little over the timer's own twenty-five: every
+#: challenge since the previous mint decision is in scope, so a challenge
+#: cannot land in the gap between two runs and be seen by neither.
+CHALLENGE_WINDOW_MINUTES = 30
 
-def mint(run: Run, *, dry_run: bool = False) -> str:
+#: Statuses Cloudflare serves an interactive challenge under. A page that
+#: arrives any other way was not challenged, and the absence of a token on it
+#: is not a failure to mint one — see `mint`.
+#:
+#: 403 is what Zoopla answers this pool with and carries `cf-mitigated`; 503 is
+#: the older JS interstitial, kept because the edge still serves it to some
+#: exits and it is the same situation with a different number on it.
+CHALLENGED = (403, 503)
+
+
+def mint(conn: Conn, run: Run, *, dry_run: bool = False) -> str:
     """Open Zoopla in a browser and leave its cookies where curl will find them.
+
+    Does nothing at all unless the reader is actually being challenged. See
+    `store.challenged_recently` and the note below on why the browser is no
+    longer launched on the timer alone.
 
     Returns the run status. Never raises for a portal's behaviour — a
     challenge that does not clear is a degraded run, not a crash — but does
@@ -121,6 +148,48 @@ def mint(run: Run, *, dry_run: bool = False) -> str:
     """
 
     with run.stage("clearance", source_key=SESSION) as stage:
+        # ── the browser is launched on evidence, not on the clock ──────────
+        #
+        # This used to mint on every timer tick, to keep a token warm ahead of
+        # the reader needing one. Measured on 2 November 2026 that was a
+        # browser every twenty-five minutes on a 4 GB box, against a
+        # `zoopla_london` that was not being challenged at all: every run since
+        # 08:05 reported `no cf_clearance in the browser's cookies`, which with
+        # green reads means Cloudflare was serving the page without a challenge
+        # and there was no token to collect.
+        #
+        # So the question is asked of the reader's own refusals rather than
+        # guessed at. `refusal_detail` records a challenge the moment one is
+        # served — before the reader starts losing pages, because it is written
+        # even when another exit then carried the run — so this is reactive
+        # without being late.
+        #
+        # The cost is the window: a challenge that first appears one minute
+        # after a tick waits out the rest of the twenty-five before a token is
+        # minted for it, and `zoopla_london` spends that time climbing its own
+        # ladder. That is the trade — a quarter hour of the reader's existing
+        # fallbacks against a browser that was running for nothing.
+        # The gate is on the *schedule*, not on the job. A person who types
+        # `python -m worker clearance` is asking for a browser on purpose —
+        # usually to check the installed Chromium against TARGET, which the
+        # module note calls the answer to a mint rate that sits low, and which
+        # there would otherwise be no way to do on a day Zoopla is behaving.
+        # The timer passes `--trigger schedule`; nothing else does.
+        challenged = store.challenged_recently(
+            conn, source_key=SESSION, within_minutes=CHALLENGE_WINDOW_MINUTES
+        )
+        stage.set("challenged", challenged)
+        if not challenged and run.trigger == "schedule":
+            # "ok" and an info line, not a skip and not a degradation. Nothing
+            # was lost and nothing needs doing: being served the page is the
+            # outcome this whole module exists to restore.
+            stage.log(
+                "info",
+                f"{SESSION} has not been challenged in the last "
+                f"{CHALLENGE_WINDOW_MINUTES} minutes; no token needed",
+            )
+            return "ok"
+
         memory = session_memory.Session.load(SESSION)
         proxy = (os.environ.get("SCRAPE_PROXY") or "").strip()
         ports = exit_ports(proxy) if proxy else ()
@@ -148,7 +217,7 @@ def mint(run: Run, *, dry_run: bool = False) -> str:
 
         began = time.monotonic()
         try:
-            cookies = _open_and_collect(where)
+            cookies, served = _open_and_collect(where)
         finally:
             # Recorded whatever happened, because a browser that died having
             # eaten the box is exactly the case the Host tab is watching for,
@@ -158,13 +227,36 @@ def mint(run: Run, *, dry_run: bool = False) -> str:
             if peak is not None:
                 stage.set("browser_peak_bytes", peak)
 
+        stage.set("page_status", served)
+        stage.set("cookies_seen", len(cookies))
+
         token = next((one for one in cookies if one.get("name") == "cf_clearance"), None)
         if token is None:
-            # Cloudflare served a challenge the browser did not clear, or
-            # served the page without needing one. Both leave nothing to write
-            # and neither is a fault worth waking anybody for.
+            # Two different things used to land here and both were reported as
+            # a degradation, which is why `clearance` sat amber for a whole day
+            # with nothing wrong: Cloudflare serving a challenge the browser
+            # did not clear, and Cloudflare serving the page with no challenge
+            # at all. The status the navigation itself answered is what tells
+            # them apart — see CHALLENGED — and it is recorded either way, so
+            # the journal no longer needs a guess.
             stage.set("clearance_minted", 0)
-            stage.degrade("no cf_clearance in the browser's cookies", recoverable=True)
+            if served not in CHALLENGED:
+                # No challenge to pass, so no token exists to collect. The
+                # reader was challenged within the window or this run would
+                # have stopped at the gate above, so what happened in between
+                # is Cloudflare relenting — which is the good outcome, arrived
+                # at without us.
+                stage.log(
+                    "info",
+                    f"{MINT_URL} answered {served} with no challenge; "
+                    f"nothing to mint and nothing to fix",
+                )
+                return "ok"
+            stage.degrade(
+                f"no cf_clearance in the browser's cookies; {MINT_URL} answered "
+                f"{served} and the browser did not clear the challenge",
+                recoverable=True,
+            )
             return "degraded"
 
         _write_jar(jar, cookies)
@@ -189,8 +281,19 @@ def mint(run: Run, *, dry_run: bool = False) -> str:
         return "ok"
 
 
-def _open_and_collect(proxy: str) -> list[dict[str, Any]]:
-    """Launch, navigate, wait for the challenge, return the cookies.
+def _open_and_collect(proxy: str) -> tuple[list[dict[str, Any]], int]:
+    """Launch, navigate, wait for the challenge, return the cookies and status.
+
+    The status is the one the *navigation* answered, which is the interstitial's
+    own and not the page that replaced it: Playwright hands back the response to
+    the first main-frame request, and a challenge that clears reloads behind it.
+    That is exactly what is wanted here — whether a challenge was served at all
+    — and it is why the caller can read a missing token two ways. See CHALLENGED.
+
+    Zero when the navigation answered nothing to read a status from, which
+    Playwright reports as a null response. Not treated as a challenge, because
+    guessing "challenged" from an absence is how this reported a problem it had
+    no evidence for in the first place.
 
     Imported here and not at module scope for the reason every other optional
     import in this package is: the delivery host installs neither the scraping
@@ -218,14 +321,15 @@ def _open_and_collect(proxy: str) -> list[dict[str, Any]]:
         )
         try:
             page = browser.new_page()
-            page.goto(MINT_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+            answer = page.goto(MINT_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
+            served = answer.status if answer is not None else 0
             # The interstitial replaces itself when it is satisfied, so what
             # is being waited for is the real page arriving rather than a
             # fixed sleep. `networkidle` rather than a selector because a
             # selector would couple this to Zoopla's markup, which is the one
             # thing in this project that changes without notice.
             page.wait_for_load_state("networkidle", timeout=TIMEOUT_MS)
-            return list(page.context.cookies())
+            return list(page.context.cookies()), served
         finally:
             browser.close()
 

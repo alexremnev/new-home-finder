@@ -13,6 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
+from worker.obs import Run
 from worker.sources import clearance
 
 
@@ -142,3 +145,96 @@ def test_it_mints_against_the_page_that_is_actually_challenged() -> None:
     # The source key, not the job name — two jobs share one sticky exit, and
     # the readers pass `Fetcher.from_env(session=portal.key)`.
     assert clearance.SESSION == "zoopla"
+
+
+# ── when the browser runs at all ────────────────────────────────────────────
+#
+# Added after 2 November 2026, when `clearance` reported `degraded` on every
+# one of a day's runs while `zoopla_london` was entirely green. Two faults in
+# one: a browser launched on the clock whether or not anything needed a token,
+# and an absent token read as a failure to mint one when it in fact meant
+# there had been no challenge to pass. Both are decisions `mint` makes before
+# and after the browser, which is the part of it that can be tested.
+
+
+class FakeConn:
+
+    """Enough of a connection for `Run` to open a run and a stage on it."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(self, sql: str, params: object = None) -> FakeConn:
+        self.statements.append(" ".join(sql.split()))
+        return self
+
+    def fetchone(self) -> dict[str, int]:
+        return {"id": 1}
+
+
+def _run(trigger: str = "schedule") -> Run:
+    return Run(FakeConn(), job="clearance", trigger=trigger)  # type: ignore[arg-type]
+
+
+def test_no_browser_is_launched_when_the_reader_is_not_being_challenged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The point of the gate. Chromium on a 4 GB box is the most expensive thing
+    # this project does, and a token nothing is asking for is worth none of it.
+    monkeypatch.setattr(clearance.store, "challenged_recently", lambda *a, **k: 0)
+
+    def refuse(_: str) -> tuple[list[dict[str, object]], int]:
+        raise AssertionError("the browser must not be launched without a challenge")
+
+    monkeypatch.setattr(clearance, "_open_and_collect", refuse)
+
+    # "ok", not "degraded" and not a skip: being served the page is the outcome
+    # this whole module exists to restore, so reaching it is not a bad run.
+    assert clearance.mint(FakeConn(), _run()) == "ok"  # type: ignore[arg-type]
+
+
+def test_asking_for_a_mint_by_hand_runs_the_browser_whatever_the_refusals_say(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The gate is on the timer, not on the job. Checking the installed Chromium
+    # against TARGET is the answer to a mint rate that sits low, and a gate that
+    # also refused a person at a terminal would make it impossible on exactly
+    # the days there is nothing else wrong.
+    monkeypatch.setattr(clearance.store, "challenged_recently", lambda *a, **k: 0)
+    opened: list[str] = []
+
+    def collect(proxy: str) -> tuple[list[dict[str, object]], int]:
+        opened.append(proxy)
+        return [_cookie()], 403
+
+    monkeypatch.setattr(clearance, "_open_and_collect", collect)
+    monkeypatch.setattr(clearance, "_verify", lambda *a, **k: 200)
+
+    assert clearance.mint(FakeConn(), _run("manual")) == "ok"  # type: ignore[arg-type]
+    assert opened == [""]
+
+
+def test_a_page_served_without_a_challenge_is_not_a_degraded_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The reader was challenged inside the window, so the gate let this through
+    # — and by the time the browser asked, Cloudflare had relented. There is no
+    # token on an unchallenged page and nothing to fix about its absence.
+    monkeypatch.setattr(clearance.store, "challenged_recently", lambda *a, **k: 1)
+    monkeypatch.setattr(clearance, "_open_and_collect", lambda _: ([], 200))
+
+    assert clearance.mint(FakeConn(), _run()) == "ok"  # type: ignore[arg-type]
+
+
+def test_a_challenge_the_browser_did_not_clear_is_still_degraded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The case the module is for, and the one that must keep reporting: a
+    # challenge was served, the browser was given its sixty seconds, and it
+    # came back without a token. That is a reader left under a 403.
+    monkeypatch.setattr(clearance.store, "challenged_recently", lambda *a, **k: 1)
+    monkeypatch.setattr(
+        clearance, "_open_and_collect", lambda _: ([_cookie(name="__cf_bm")], 403)
+    )
+
+    assert clearance.mint(FakeConn(), _run()) == "degraded"  # type: ignore[arg-type]

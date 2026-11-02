@@ -1,5 +1,12 @@
 [Unit]
-Description=Keep a Cloudflare clearance token warm for zoopla_london
+Description=Check whether zoopla_london needs a Cloudflare clearance token
+
+# How often the *question* is asked, which since 2 November 2026 is not the
+# same as how often a browser runs. The job reads `zoopla_london`'s own
+# refusals first and returns without launching Chromium unless one of them
+# carried `cf-mitigated: challenge` — see `mint` in worker/sources/clearance.py.
+# So on a day Zoopla is serving the page this timer costs one query a tick, and
+# the minutes below only matter on the days it does not.
 
 [Timer]
 Unit=london-home-finder-clearance.service

@@ -351,7 +351,9 @@ def test_an_unreachable_recipient_stops_collecting_for_them(
     ids = [make_listing(conn, "a"), make_listing(conn, "b")]
     outbox.queue_matches(conn, run, source_key="openrent", listing_ids=ids)
 
-    outbox.drain(conn, run)
+    # "ok", not "degraded": somebody pressing stop is not a fault of this run,
+    # and a degraded drain exits 1, which systemd reports as a failed unit.
+    assert outbox.drain(conn, run) == "ok"
 
     user = conn.execute("SELECT * FROM users WHERE id = %s", (user_id,)).fetchone()
     assert user["status"] == "blocked"

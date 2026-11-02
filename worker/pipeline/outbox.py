@@ -526,7 +526,19 @@ def drain(
             if decision.stop_user:
                 gone.add(user_id)
             _apply(conn, stage, int(row["id"]), user_id, decision)
-            if decision.status != "sent":
+            # A recipient who has blocked the bot or deleted their account is
+            # not a message this run lost. There is no address left to deliver
+            # to, and `_apply` has already done the only correct thing with
+            # that: blocked the user, deactivated the subscriptions and skipped
+            # what was queued. Calling it a degradation exits 1 — see
+            # `_run_one` — so systemd records the unit as failed and
+            # `OnFailure=` wakes somebody at whatever hour one person pressed
+            # stop. The `recipient_gone` counter and the warn event beside it
+            # are the record, and the Host tab is where it is read.
+            #
+            # Everything else here still degrades, because everything else is a
+            # message that should have gone out and did not.
+            if decision.status != "sent" and not decision.stop_user:
                 status = "degraded"
 
     return status
