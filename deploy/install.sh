@@ -47,23 +47,7 @@ cd "$DIR"
 # `scrape` brings curl_cffi, which the portal readers need: Rightmove and
 # Zoopla both answer a plain client 403 and the same request 200 once the TLS
 # handshake looks like a browser's. Without it the portal readers cannot import.
-uv sync --frozen --no-dev --extra ingest --extra scrape --extra browser
-
-# The browser binary, which is not a Python package and so is not in the lock.
-# `--with-deps` pulls the shared libraries Chromium needs from apt; without it
-# the launch fails at runtime with a missing .so rather than at install time.
-# Idempotent: a second run finds the browser already there and does nothing.
-#
-# PLAYWRIGHT_BROWSERS_PATH is not optional here, and the default is a trap on
-# this box: Playwright downloads to the *installing* user's cache, this script
-# runs as root, and the clearance unit runs as `finder` — so the default would
-# put 450MB in /root/.cache where the service cannot read it, and the only
-# symptom would be a launch failing at runtime with "executable doesn't exist".
-#
-# Inside $DIR so the chown below covers it, and named again in
-# london-home-finder-clearance.service so the runtime looks where this wrote.
-export PLAYWRIGHT_BROWSERS_PATH="$DIR/.playwright"
-.venv/bin/playwright install --with-deps chromium
+uv sync --frozen --no-dev --extra ingest --extra scrape
 chown -R "$USER_NAME:$USER_NAME" "$DIR"
 
 echo "== settings"
@@ -124,8 +108,17 @@ rm -f /etc/systemd/system/london-home-finder-openrent.timer
 systemctl disable --now london-home-finder-openrent_v2.timer 2>/dev/null || true
 rm -f /etc/systemd/system/london-home-finder-openrent_v2.timer
 
+# The clearance minter is gone. Its timer, its unit and the browser slice they
+# ran in are removed rather than left behind launching a Chromium for a job that
+# no longer exists, and the 450MB Playwright put under $DIR goes with them.
+systemctl disable --now london-home-finder-clearance.timer 2>/dev/null || true
+rm -f /etc/systemd/system/london-home-finder-clearance.timer
+rm -f /etc/systemd/system/london-home-finder-clearance.service
+rm -f /etc/systemd/system/london-home-finder-browser.slice
+rm -rf "$DIR/.playwright"
+
 systemctl daemon-reload
-for job in ingest rightmove zoopla_london onthemarket spareroom clearance drain rollup report purge; do
+for job in ingest rightmove zoopla_london onthemarket spareroom drain rollup report purge; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 

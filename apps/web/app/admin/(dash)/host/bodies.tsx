@@ -1,5 +1,5 @@
 import type { HostPoint } from "@/lib/admin-queries";
-import { browserUse, hostHealth } from "@/lib/admin-queries";
+import { hostHealth } from "@/lib/admin-queries";
 import { ago } from "@/lib/when";
 
 import { hostPointsOnce, windowFor } from "../cached";
@@ -8,37 +8,30 @@ import { peakOf } from "../levels";
 import type { Span } from "../span";
 import { bucketMinutes, bucketWords, spanWords } from "../span";
 import {
-  BROWSER_CAP,
-  browserTone,
   CPU_GUIDE,
   cpuReadings,
   diskTone,
   gb,
   loadTone,
-  mb,
   measured,
   memoryTone,
-  mintTone,
+  MEMORY_FLOOR,
   mixedHosts,
   pct,
   ramGuide,
   ramReadings,
   word,
-  worst,
 } from "./health";
 
-// The box itself: processors, memory, disk, and what the headless browser
-// takes out of them.
+// The box itself: processors, memory, disk.
 //
 // ── why a tab and not a line on System ───────────────────────────────────
 //
 // The System tab answers "did the jobs work". This answers "could they have" —
-// a different question with different evidence, and one that only started
-// mattering when a browser was added to a 4 GB machine. Chromium is the first
-// thing this worker runs that can plausibly exhaust the box, so the figure
-// that matters is not an average but a high-water mark against a ceiling, and
-// it is read beside the mint rate because memory spent without a token is the
-// failure worth catching.
+// a different question with different evidence. So the figure that matters is
+// not an average but a high-water mark against a ceiling: a box that ran out
+// of memory at 14:00 and recovered looks healthy in its latest sample, and the
+// latest sample is the one a tile would otherwise print.
 //
 // Every judgment of colour is in ./health.ts.
 
@@ -94,10 +87,10 @@ export async function HostTiles({ span }: { span: string }) {
           <div className="job-name">
             RAM
             <span className={`pill pill-${memory}`}>{word(memory, "memory")}</span>
-            <Why text="MemAvailable, а не MemFree — это оценка самого ядра, сколько новый процесс сможет получить, не уходя в своп. На этом боксе free показывает около 400 МБ при 3.1 ГБ available, потому что разница это переиспользуемый страничный кэш; красить по free значит держать плитку вечно красной, а вечно красную плитку перестают читать. Пороги привязаны не к круглому числу, а к потолку браузерного слайса (2 ГБ): если available упал ниже потолка, слайсу уже нельзя выдать то, что ему разрешено, и очередной запуск браузера может столкнуть бокс в OOM-killer; ниже половины потолка браузер не поместится даже по измеренному рабочему набору. «low» — минимум за период, и именно он важнее текущего значения: бокс, которому не хватило памяти в 14:00 и который успел отдышаться, в последнем снимке выглядит здоровым." />
+            <Why text="MemAvailable, а не MemFree — это оценка самого ядра, сколько новый процесс сможет получить, не уходя в своп. На этом боксе free показывает около 400 МБ при 3.1 ГБ available, потому что разница это переиспользуемый страничный кэш; красить по free значит держать плитку вечно красной, а вечно красную плитку перестают читать. Порог — 2 ГБ свободного запаса, половина бокса (MEMORY_FLOOR в health.ts): жёлтым ниже него, красным ниже половины от него. Оговорка, которую стоит знать: это число досталось в наследство от MemoryMax=2G снесённого браузерного слайса, то есть раньше оно отвечало на конкретный вопрос «поместится ли Chromium», а теперь это просто запас и его стоит перевывести из того, сколько на самом деле занимают скраперы. «low» — минимум за период, и именно он важнее текущего значения: бокс, которому не хватило памяти в 14:00 и который успел отдышаться, в последнем снимке выглядит здоровым." />
           </div>
           <div className="metric-note">
-            {gb(host.mem_total)} GB total · cap for the browser {gb(BROWSER_CAP)} GB
+            {gb(host.mem_total)} GB total · {gb(MEMORY_FLOOR)} GB wanted spare
           </div>
           <div className="job-numbers">
             <span>
@@ -119,7 +112,7 @@ export async function HostTiles({ span }: { span: string }) {
           <div className="job-name">
             Disk
             <span className={`pill pill-${disk}`}>{word(disk, "disk")}</span>
-            <Why text="Свободное место на файловой системе, где лежит состояние воркера: там живут куки-джары и профиль браузера. В процентах, а не в байтах, потому что весь диск — 40 ГБ, и доля осталось понятнее абсолютного числа. Жёлтый ниже 20%, красный ниже 10%. Сам Chromium от Playwright занимает около 450 МБ плюс системные библиотеки — это единоразово и на фоне 40 ГБ незаметно; расти здесь будут джары (по одному на связку выход+отпечаток, 501 возможный выход) и логи journald, и первое ограничено JAR_FOR, который чистит джары старше суток на каждом старте." />
+            <Why text="Свободное место на файловой системе, где лежит состояние воркера: там живут куки-джары. В процентах, а не в байтах, потому что весь диск — 40 ГБ, и доля осталось понятнее абсолютного числа. Жёлтый ниже 20%, красный ниже 10%. Расти здесь будут джары (по одному на связку выход+отпечаток, 501 возможный выход) и логи journald, и первое ограничено JAR_FOR, который чистит джары старше суток на каждом старте." />
           </div>
           <div className="metric-note">{gb(host.disk_total)} GB total</div>
           <div className="job-numbers">
@@ -143,112 +136,13 @@ export async function HostTiles({ span }: { span: string }) {
   );
 }
 
-export async function BrowserCost({ span }: { span: string }) {
-  const win = windowFor(span);
-  const use = await browserUse(win);
-
-  const size = browserTone(use.peak_bytes);
-  const mint = mintTone(use);
-  const mood = worst([size, mint]);
-
-  if (use.runs === 0) {
-    return (
-      <p className="hint">
-        The browser did not run {spanWords(win)}. Its timer covers weekday
-        working hours only, so a quiet night or weekend is the expected reading
-        rather than a fault.
-      </p>
-    );
-  }
-
-  return (
-    <>
-      <div className="tiles tiles-roomy">
-        <div className={`card job job-${size}`}>
-          <div className="job-name">
-            Browser memory
-            <span className={`pill pill-${size}`}>{word(size, "browser")}</span>
-            <Why text="Пиковый RSS самого крупного дочернего процесса прогона, в мегабайтах — то есть Chromium, потому что на этой задаче он единственный ребёнок. Берётся из getrusage(RUSAGE_CHILDREN).ru_maxrss после закрытия браузера, поэтому не нужен ни psutil, ни агент. Важная оговорка: ru_maxrss по детям это максимум одного процесса, а не сумма всех, — на минтере это честное число, на задаче с несколькими детьми оно занижало бы, и поэтому больше никто его не вызывает. Красным с 80% потолка, а не на самом потолке: процесс, убитый MemoryMax, уже не оставит снимка, который можно покрасить, так что единственное полезное предупреждение — то, что дано заранее." />
-          </div>
-          <div className="metric-note">
-            {use.runs} launch{use.runs === 1 ? "" : "es"} · last {ago(use.last_at)}
-          </div>
-          <div className="job-numbers">
-            <span>
-              <b className={size === "ok" ? undefined : "warn"}>{mb(use.peak_bytes)}</b>
-              <span>MB peak</span>
-            </span>
-            <span>
-              <b>{pct(use.peak_bytes, BROWSER_CAP)}</b>
-              <span>of cap</span>
-            </span>
-            <span>
-              <b>{use.avg_seconds === null ? "—" : use.avg_seconds.toFixed(1)}</b>
-              <span>s each</span>
-            </span>
-          </div>
-        </div>
-
-        <div className={`card job job-${mint}`}>
-          <div className="job-name">
-            Clearance minted
-            <span className={`pill pill-${mint}`}>{word(mint, "mint")}</span>
-            <Why text="Сколько запусков действительно унесли токен. Это та половина картины, которой нет в «браузер запускался 68 раз»: запуск, который поднял Chromium, сжёг полгигабайта и ушёл ни с чем, строго хуже, чем незапуск — он стоил ресурсов и оставил zoopla_london под челленджем. Красным, если доля меньше половины или хоть один прогон упал с failed; жёлтым ниже 90%. Отдельные неудачи нормальны: Cloudflare иногда отдаёт челлендж, который не проходит и настоящий браузер. Устойчиво низкая доля означает одно из двух — либо выход попал в чёрный список настолько, что браузеру тоже не открывают, либо отпечаток Chromium разошёлся с тем, что имперсонирует curl_cffi, и токен выписывается не на того." />
-          </div>
-          <div className="metric-note">
-            {use.total_seconds === null
-              ? "—"
-              : `${Math.round(use.total_seconds)}s of browser time`}{" "}
-            {spanWords(win)}
-          </div>
-          <div className="job-numbers">
-            <span>
-              <b className={mint === "ok" ? undefined : "warn"}>{use.minted}</b>
-              <span>minted</span>
-            </span>
-            <span>
-              <b>{use.runs}</b>
-              <span>launches</span>
-            </span>
-            <span>
-              <b>{pct(use.minted, use.runs)}</b>
-              <span>hit rate</span>
-            </span>
-            {use.degraded > 0 && (
-              <span>
-                <b className="warn">{use.degraded}</b>
-                <span>degraded</span>
-              </span>
-            )}
-            {use.failed > 0 && (
-              <span>
-                <b className="warn">{use.failed}</b>
-                <span>failed</span>
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {mood === "bad" && (
-        <p className="hint">
-          Either the browser is close to its ceiling or it is spending memory
-          without coming away with a token. Both are reasons to look at the
-          clearance job before the next working day, because `zoopla_london`
-          falls back to being challenged without it.
-        </p>
-      )}
-    </>
-  );
-}
-
 // ── the same samples as a timeline ───────────────────────────────────────
 //
 // The tiles above answer "was the box short of anything over this window". The
 // question you have the moment that answer is yes is "when", and a peak cannot
 // give it: 1.9 on two processors is one fault if it was a single spike at
-// 03:00 where a sweep collided with the clearance timer, and another entirely
-// if it was a plateau from noon.
+// 03:00 where two sweeps collided, and another entirely if it was a plateau
+// from noon.
 //
 // Two charts rather than one with two lines. They share an axis by
 // construction — both are a percentage of the thing that runs out — but they
@@ -338,9 +232,8 @@ export async function RamChart({ span }: { span: string }) {
         {guide !== null && (
           <>
             {" "}
-            The dashed line is where what is left stops covering{" "}
-            {gb(BROWSER_CAP)} GB, the ceiling on the browser slice: above it a
-            mint can no longer be given what it is allowed to take.
+            The dashed line is where what is left stops covering the{" "}
+            {gb(MEMORY_FLOOR)} GB this box is meant to keep spare.
           </>
         )}
       </p>

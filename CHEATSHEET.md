@@ -820,20 +820,22 @@ SELECT coalesce(r.host, '(до 0044)')                        AS host,
 -- ═════════════════ 3б. Почему отказали: challenge или блок ══════════════
 --
 -- Главный запрос, когда zoopla_london деградирует. Zoopla стоит за Cloudflare,
--- и 403 от неё бывает двух совершенно разных видов — а лечатся они
--- противоположно:
+-- и 403 от неё бывает двух совершенно разных видов:
 --
---   cf-mitigated=challenge  Cloudflare отдал интерактивный челлендж. Браузер
---                           его проходит, curl — нет. ЭТО и есть тот случай,
---                           когда headless Chrome окупает свой трафик.
---   нет cf-mitigated вовсе   репутация exit-адреса. Браузер здесь не помогает
---                           ничем: нужен другой адрес.
+--   cf-mitigated=challenge  Cloudflare отдал интерактивный челлендж, который
+--                           curl не проходит. Сам по себе отпускает: ждать и
+--                           смотреть, держится ли это часами или это всплеск.
+--   нет cf-mitigated вовсе   репутация exit-адреса — нужен другой адрес.
 --   retry-after=N            портал сам назвал паузу; до 10 секунд воркер её
 --                           соблюдает, больше — переносит на следующий прогон.
 --
--- До 12 октября 2026 различить их было нельзя: в логе был только статус.
--- Теперь каждая отказавшая попытка пишется в `refusal_detail` как строка
---   «<статус> <exit=порт|direct> <отпечаток> <заголовки>».
+-- Где это лежит. Счётчик `refusal_detail` писался до 2 ноября 2026, пока его
+-- читал минтер clearance; минтера больше нет, и счётчик больше не пишется.
+-- Заголовки по-прежнему сохраняются — `Refused` вклеивает их в своё сообщение,
+-- и sweep пишет его в `job_events` как warn. Разница, про которую надо знать:
+-- это ОДНА строка на прогон, первая, а не до десяти. Двадцать пять копий
+-- одного предложения информацией не были, но и посчитать отказы внутри одного
+-- прогона по этому больше нельзя — только прогоны, в которых они были.
 SELECT to_char(r.started_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI') AS run,
        r.status,
        (s.counters->>'exit_port')::int                      AS exit_port,
@@ -841,29 +843,41 @@ SELECT to_char(r.started_at AT TIME ZONE 'Europe/London', 'DD Mon HH24:MI') AS r
        (s.counters->>'fallback_requests')::int              AS fb_reqs,
        (s.counters->>'exit_rotations')::int                 AS rotations,
        (s.counters->>'probes_skipped')::int                 AS probes_saved,
-       jsonb_array_length(s.counters->'refusal_detail')     AS refusals,
-       s.counters->'refusal_detail'                         AS why
+       (s.counters->>'refused')::int                        AS refusals,
+       e.message                                            AS why
   FROM job_runs r
   JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
+  LEFT JOIN LATERAL (
+      SELECT je.message FROM job_events je
+       WHERE je.run_id = r.id AND je.level = 'warn'
+         AND je.message LIKE '%answered%from %'
+       ORDER BY je.id LIMIT 1
+  ) AS e ON true
  WHERE r.job = 'zoopla_london'
    AND r.started_at > now() - interval '24 hours'
-   AND s.counters ? 'refusal_detail'
+   AND s.counters ? 'refused'
  ORDER BY r.started_at DESC;
 
 
--- Та же картина одной цифрой: чего именно больше за сутки. Это и есть ответ
--- на «нужен ли нам Playwright» — если challenge преобладает, да; если
--- преобладают блоки без cf-mitigated, браузер не поможет и дело в адресах.
+-- Та же картина одной цифрой: чего именно больше за сутки. Считаются ПРОГОНЫ
+-- с таким отказом, а не сами отказы — см. оговорку выше про одну строку на
+-- прогон. Для «насколько плохо» рядом стоит сумма счётчика `refused`.
 SELECT date_trunc('hour', r.started_at AT TIME ZONE 'Europe/London') AS hour,
-       count(*) FILTER (WHERE one LIKE '%cf-mitigated=challenge%') AS challenge,
-       count(*) FILTER (WHERE one LIKE '%403%'
-                          AND one NOT LIKE '%cf-mitigated%')       AS blocked,
-       count(*) FILTER (WHERE one LIKE '%429%')                    AS rate_limited,
-       count(*) FILTER (WHERE one LIKE '- %')                      AS no_answer,
-       count(*)                                                     AS total
+       count(*) FILTER (WHERE e.message LIKE '%cf-mitigated=challenge%') AS challenge,
+       count(*) FILTER (WHERE e.message LIKE '%answered 403 %'
+                          AND e.message NOT LIKE '%cf-mitigated%')       AS blocked,
+       count(*) FILTER (WHERE e.message LIKE '%answered 429 %')          AS rate_limited,
+       count(*) FILTER (WHERE e.message LIKE '%never answered%')         AS no_answer,
+       count(*)                                                          AS runs,
+       sum((s.counters->>'refused')::int)                                AS refusals
   FROM job_runs r
   JOIN job_stages s ON s.run_id = r.id AND s.stage = 'scrape'
-  CROSS JOIN LATERAL jsonb_array_elements_text(s.counters->'refusal_detail') AS one
+  JOIN LATERAL (
+      SELECT je.message FROM job_events je
+       WHERE je.run_id = r.id AND je.level = 'warn'
+         AND je.message LIKE '%answered%from %'
+       ORDER BY je.id LIMIT 1
+  ) AS e ON true
  WHERE r.job = 'zoopla_london'
    AND r.started_at > now() - interval '24 hours'
  GROUP BY 1 ORDER BY 1 DESC;

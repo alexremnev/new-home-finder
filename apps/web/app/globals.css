@@ -2132,6 +2132,14 @@ form p.error {
 .dash button.danger-button { border-color: #f0b6b8; color: var(--d-bad); }
 .dash button.danger-button:hover { background: var(--d-bad-wash); border-color: var(--d-bad); }
 
+/* ── the badge, and what can be done about it, on one line ─────────────────
+   "What was sent" lists a withheld listing beside a warning badge, and 0074
+   puts a button against it to push that one listing out. The cell lays the two
+   along a row rather than stacking them: the button is an answer to the badge,
+   and a form is a block, which would otherwise drop it onto a second line and
+   give every row in the table the height of the few that have one. */
+.state-cell { display: flex; gap: 0.4rem; align-items: center; flex-wrap: wrap; }
+
 /* ── #5: a tone colours the whole card, not a line of text ─────────────────
    "green on this page" was a caption explaining a colour that was not there.
    The card itself carries it now, so the state is read before the words. */

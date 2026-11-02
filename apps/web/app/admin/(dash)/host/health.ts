@@ -1,4 +1,4 @@
-import type { BrowserUse, HostHealth, HostPoint } from "@/lib/admin-queries";
+import type { HostHealth, HostPoint } from "@/lib/admin-queries";
 
 import type { Reading } from "../levels";
 
@@ -11,22 +11,26 @@ import type { Reading } from "../levels";
 //
 // 2 vCPU, 4 GB, 40 GB, running nothing but the worker: Postgres is in Supabase
 // and the web app is on Vercel. Every number below is derived from that and
-// from the one deliberate limit, `BROWSER_CAP` — so moving the browser's
-// MemoryMax means changing it here too, and the tests say so.
+// from `MEMORY_FLOOR`, which is the one figure here that is a decision rather
+// than a reading off the box — see its note.
 
 export type Tone = "ok" | "warn" | "bad" | "idle";
 
 /**
- * The hard ceiling on the browser slice, in bytes.
+ * How much memory the box should have spare, in bytes.
  *
- * 2 GB, which is a decision rather than a measurement: a single Chromium page
- * load peaks around 400-500 MB, so this is roughly four times what it needs
- * and is set as a safety net, not as a working limit. It is the divisor for
- * two judgments below — how close a run came to being killed, and whether the
- * box currently has room to start one at all — so it must stay equal to
- * `MemoryMax=` in the slice unit. See deploy/systemd.
+ * 2 GB — half of this box — and a decision rather than a measurement. It was
+ * `MemoryMax=` on the headless browser's slice, which is what originally made
+ * it answerable: under that much available, the slice could no longer be given
+ * what it was allowed to take. The browser and its slice are gone, so the
+ * number no longer has that anchor and is kept as a plain headroom floor:
+ * below half the box there is no room for a burst from anything.
+ *
+ * Worth re-deriving from what the readers actually peak at rather than
+ * inheriting. It is the divisor for `memoryTone` and for the RAM chart's guide
+ * line, which is why both move together when it changes.
  */
-export const BROWSER_CAP = 2 * 1024 * 1024 * 1024;
+export const MEMORY_FLOOR = 2 * 1024 * 1024 * 1024;
 
 /** Bytes as GB with one decimal, or an em dash for "not measured". */
 export function gb(bytes: number | string | null | undefined): string {
@@ -35,13 +39,6 @@ export function gb(bytes: number | string | null | undefined): string {
   if (!Number.isFinite(value)) return "—";
   if (value > 0 && value < 0.05) return "<0.1";
   return value.toFixed(1);
-}
-
-/** Bytes as MB, whole, for the browser's own figure. */
-export function mb(bytes: number | string | null | undefined): string {
-  if (bytes === null || bytes === undefined) return "—";
-  const value = Number(bytes) / 1024 / 1024;
-  return Number.isFinite(value) ? Math.round(value).toString() : "—";
 }
 
 /** A ratio as a whole percentage, or an em dash. */
@@ -69,13 +66,11 @@ export function loadTone(load1: number | null, cpus: number | null): Tone {
 }
 
 /**
- * Whether there is room to start the browser.
+ * Whether the box has room left to do anything.
  *
- * Tied to `BROWSER_CAP` rather than to a round number, because that is the
- * question actually being asked: if available memory is under the cap, the
- * slice can no longer be given what it is allowed to take, and a mint may be
- * what pushes the box into the OOM killer. Under half the cap it will not even
- * fit the browser's measured working set.
+ * Tied to `MEMORY_FLOOR` rather than to a round number of its own, so that
+ * this and the RAM chart's guide line cannot disagree about where "tight"
+ * starts. Amber under the floor, red under half of it.
  *
  * `MemAvailable` is the input, not `MemFree` — see `worker.obs.host`. On this
  * box free reads about 400 MB while available reads 3.1 GB, because the rest
@@ -84,8 +79,8 @@ export function loadTone(load1: number | null, cpus: number | null): Tone {
  */
 export function memoryTone(available: number | null): Tone {
   if (available === null) return "idle";
-  if (available < BROWSER_CAP / 2) return "bad";
-  if (available < BROWSER_CAP) return "warn";
+  if (available < MEMORY_FLOOR / 2) return "bad";
+  if (available < MEMORY_FLOOR) return "warn";
   return "ok";
 }
 
@@ -98,59 +93,11 @@ export function diskTone(free: number | null, total: number | null): Tone {
   return "ok";
 }
 
-/**
- * How close the browser came to its ceiling.
- *
- * Red at 80% of the cap rather than at the cap itself: a process killed by
- * `MemoryMax` leaves no sample to colour, so the only useful warning is the
- * one given before it happens.
- */
-export function browserTone(peak: number | null): Tone {
-  if (peak === null) return "idle";
-  if (peak > BROWSER_CAP * 0.8) return "bad";
-  if (peak > BROWSER_CAP / 2) return "warn";
-  return "ok";
-}
-
-/**
- * Whether the browser is buying anything with the memory it spends.
- *
- * The failure this exists to make visible: a mint that launches, burns half a
- * gigabyte, and comes away without a token is strictly worse than not running
- * — it costs the resources *and* leaves `zoopla_london` to be challenged. In a
- * tile that only showed "the browser ran 68 times" it is invisible.
- */
-export function mintTone(use: BrowserUse): Tone {
-  if (use.runs === 0) return "idle";
-  if (use.failed > 0) return "bad";
-  const rate = use.minted / use.runs;
-  if (rate < 0.5) return "bad";
-  if (rate < 0.9) return "warn";
-  return "ok";
-}
-
 /** The pill beside each tile: what its colour means, in a word or two. */
-export function word(tone: Tone, kind: "load" | "memory" | "disk" | "browser" | "mint"): string {
+export function word(tone: Tone, kind: "load" | "memory" | "disk"): string {
   if (tone === "idle") return "not measured";
-  if (kind === "mint") {
-    return tone === "ok" ? "earning it" : tone === "warn" ? "missing some" : "spending for nothing";
-  }
-  if (kind === "browser") {
-    return tone === "ok" ? "well under" : tone === "warn" ? "half the cap" : "near the cap";
-  }
   if (tone === "ok") return "room to spare";
   return tone === "warn" ? "tight" : "out of room";
-}
-
-/**
- * The worst of several, for the banner at the top.
- *
- * `idle` is not a severity and must not win: a box where the disk could not be
- * read and memory is nearly gone is not "not measured", it is out of room.
- */
-export function worst(tones: Tone[]): Tone {
-  const rank: Record<Tone, number> = { idle: 0, ok: 1, warn: 2, bad: 3 };
-  return tones.reduce((bad, one) => (rank[one] > rank[bad] ? one : bad), "idle" as Tone);
 }
 
 /** Whether anything sampled at all, which decides between a tile and a hint. */
@@ -208,14 +155,13 @@ export function ramReadings(points: HostPoint[]): Reading[] {
 
 /**
  * Where the RAM chart's red line goes: the point at which available memory
- * falls below `BROWSER_CAP` and the browser slice can no longer be given what
- * it is allowed to take.
+ * falls below `MEMORY_FLOOR`.
  *
  * Derived from the box rather than written down, because it is the same
  * judgment `memoryTone` makes and the two must not be able to disagree — on
- * this 4 GB box against a 2 GB cap it lands at 50% used. Null when the box did
- * not say how much memory it has, and null when the box is smaller than the
- * cap, where the line would sit at or below zero and mean nothing.
+ * this 4 GB box against a 2 GB floor it lands at 50% used. Null when the box
+ * did not say how much memory it has, and null when the box is smaller than
+ * the floor, where the line would sit at or below zero and mean nothing.
  */
 export function ramGuide(points: HostPoint[]): number | null {
   const totals = points
@@ -223,8 +169,8 @@ export function ramGuide(points: HostPoint[]): number | null {
     .filter((one): one is number => one !== null && one > 0);
   if (!totals.length) return null;
   const total = Math.max(...totals);
-  if (total <= BROWSER_CAP) return null;
-  return ((total - BROWSER_CAP) / total) * 100;
+  if (total <= MEMORY_FLOOR) return null;
+  return ((total - MEMORY_FLOOR) / total) * 100;
 }
 
 /**

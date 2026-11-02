@@ -140,9 +140,9 @@ one every five minutes.
 
 What is NOT established: how much each of the three contributed. From a home
 connection all of chrome124, chrome150 and firefox147 are served 200, so none
-of this can be reproduced off the server — the way to apportion it is the
-counters, and `refusal_detail` is the one that can finally tell a Cloudflare
-challenge from a Cloudflare block. See EVIDENCE.
+of this can be reproduced off the server — the way to apportion it is what the
+refusals themselves said, which `Refused` quotes into `job_events`. See
+EVIDENCE for which headers it quotes and why a 403's headers are the diagnosis.
 
 ── when the pool itself is the problem ─────────────────────────────────────
 
@@ -477,22 +477,16 @@ RETRY_AFTER_CAP = 10.0
 # and those are two different problems with two different answers.
 #
 #   * `cf-mitigated: challenge` means Cloudflare served an interactive
-#     challenge rather than a block. A browser would get through it, so that
-#     is the reading under which a headless Chrome is worth its 40x traffic.
+#     challenge rather than a block. curl cannot pass one, but the edge lets
+#     go of it on its own, so the answer is to wait and watch whether it holds.
 #   * a 403 with no `cf-mitigated` at all is the exit address being scored
-#     badly, and the answer to that is a different address, never a browser.
+#     badly, and the answer to that is a different address.
 #   * `cf-ray` identifies the edge node and the request, which is the only
 #     thing Cloudflare support will accept as a reference.
 #   * `server` says who refused us, so the day Zoopla moves off Cloudflare
 #     this stops silently meaning nothing.
 #   * `retry-after` is read rather than guessed at. See RETRY_AFTER_CAP.
 EVIDENCE = ("cf-mitigated", "cf-ray", "server", "retry-after")
-
-# Refusals described in the stage counters, most recent last. Capped because
-# this ends up in a jsonb column: five attempts a page against twenty pages
-# would otherwise put a hundred lines in one counter, and the first ten are
-# enough to tell a challenge from a block.
-KEPT_REFUSALS = 10
 
 # ── the three places a request can go out from ─────────────────────────────
 #
@@ -727,12 +721,6 @@ class Reply:
             if name in self.headers
         )
 
-    def evidence(self, *, exit_port: int | None) -> str:
-        """One line about a refusal, for the stage counters. See EVIDENCE."""
-
-        where = f"exit={exit_port}" if exit_port else "direct"
-        return f"{self.status} {where} {self.impersonated} {self.said}".strip()
-
 
 @dataclass
 class Pool:
@@ -876,10 +864,6 @@ class Fetcher:
     #: stage counters: a reader that rotates every run is a pool going bad,
     #: which is a different piece of news from a run that failed.
     rotations: int = 0
-    #: Refused attempts, described. One line each, see `Reply.evidence`.
-    #: `sweep` writes these to the stage counters, and they are the only thing
-    #: that can tell a Cloudflare challenge from a Cloudflare block.
-    refusals: list[str] = field(default_factory=list)
     #: Direct probes not made because an earlier run had already learned the
     #: host refuses this address. One saved request each. See `_memory`.
     probes_skipped: int = 0
@@ -1137,18 +1121,6 @@ class Fetcher:
         delay = max(grown, min(asked, RETRY_AFTER_CAP))
         if delay > 0:
             time.sleep(delay)
-
-    def _note(self, said: str) -> None:
-        """Keep a line about one refused attempt. See KEPT_REFUSALS.
-
-        The *first* few rather than the last few. A run that fails is usually
-        explained by how it started failing — the first refusal names the exit
-        address and the fingerprint that were in play before any rotation
-        muddied them — and the tenth is the ninth again.
-        """
-
-        if len(self.refusals) < KEPT_REFUSALS:
-            self.refusals.append(said)
 
     def _served(self, host: str, url: str, *, via: str) -> None:
         """Record a page that actually arrived.
@@ -1408,7 +1380,6 @@ class Fetcher:
                     broke = _broke(exc)
                     last = 0
                     wait = 0.0
-                    self._note(f"- {self._address(via)} {target} {broke}")
                     # On a paid route the next attempt is a new exit address,
                     # which is exactly what a tunnel that would not open calls
                     # for. On the free route the loop varies the fingerprint
@@ -1430,8 +1401,6 @@ class Fetcher:
                     return reply
                 last = reply.status
                 said = reply.said
-                pool = self._pool(via)
-                self._note(reply.evidence(exit_port=pool.port if pool else None))
                 wait = reply.retry_after
                 if wait > RETRY_AFTER_CAP:
                     # They named a wait longer than this run should be held
@@ -1529,9 +1498,9 @@ class Fetcher:
             f"{url} answered {last} under {tried} {over} tried, from {where}"
             # What the refusal itself said, which is the difference between a
             # Cloudflare challenge and a Cloudflare block — and so between
-            # "a browser would get through this" and "ask from somewhere
-            # else". Without it `job_events` carried the status and nothing
-            # about the cause. See EVIDENCE.
+            # "wait for the edge to relent" and "ask from somewhere else".
+            # Without it `job_events` carried the status and nothing about the
+            # cause. See EVIDENCE.
             + (f" — {said}" if said else "")
         )
 
@@ -1933,7 +1902,7 @@ class Fetcher:
 __all__ = [
     "ATTEMPTS", "BACKOFF", "BACKOFF_CAP", "BLOCKED", "BROKEN",
     "CALLBACK_TARGETS", "DIRECT", "DIRECT_PROBES", "EVIDENCE", "FALLBACK",
-    "FALLBACK_ATTEMPTS", "IMPERSONATE", "JITTER", "KEPT_REFUSALS", "PRIMARY",
+    "FALLBACK_ATTEMPTS", "IMPERSONATE", "JITTER", "PRIMARY",
     "RETRY_AFTER_CAP", "ROTATE", "STICKY_PORTS", "TIMEOUT",
     "Fetcher", "Pool", "Refused", "Reply", "exit_ports", "host_of",
 ]

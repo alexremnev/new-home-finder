@@ -1,23 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import type { BrowserUse, HostPoint } from "@/lib/admin-queries";
+import type { HostPoint } from "@/lib/admin-queries";
 
 import {
-  BROWSER_CAP,
-  browserTone,
   cpuReadings,
   diskTone,
   gb,
   loadTone,
-  mb,
   memoryTone,
-  mintTone,
+  MEMORY_FLOOR,
   mixedHosts,
   pct,
   ramGuide,
   ramReadings,
   word,
-  worst,
 } from "../health";
 
 // The part of the Host tab that can be wrong without looking wrong.
@@ -28,18 +24,6 @@ import {
 // and fail in use: a load average read as a percentage, and memory read off
 // MemFree instead of MemAvailable. Both would paint this box the wrong colour
 // permanently, in opposite directions.
-
-const use = (over: Partial<BrowserUse> = {}): BrowserUse => ({
-  runs: 10,
-  minted: 10,
-  degraded: 0,
-  failed: 0,
-  peak_bytes: 450 * 1024 * 1024,
-  avg_seconds: 14,
-  total_seconds: 140,
-  last_at: new Date().toISOString(),
-  ...over,
-});
 
 describe("loadTone", () => {
   it("divides by the processors rather than reading the average as a percentage", () => {
@@ -73,11 +57,11 @@ describe("memoryTone", () => {
   it("is tied to the browser's ceiling, not to a round number", () => {
     // Above the cap there is room to start the browser and let it take
     // everything it is allowed to take.
-    expect(memoryTone(BROWSER_CAP + 1)).toBe("ok");
+    expect(memoryTone(MEMORY_FLOOR + 1)).toBe("ok");
     // Below it the slice can no longer be given its allowance.
-    expect(memoryTone(BROWSER_CAP - 1)).toBe("warn");
+    expect(memoryTone(MEMORY_FLOOR - 1)).toBe("warn");
     // Below half of it the browser will not fit at all.
-    expect(memoryTone(BROWSER_CAP / 2 - 1)).toBe("bad");
+    expect(memoryTone(MEMORY_FLOOR / 2 - 1)).toBe("bad");
   });
 
   it("reads this box's real figures as healthy", () => {
@@ -103,48 +87,9 @@ describe("diskTone", () => {
   });
 });
 
-describe("browserTone", () => {
-  it("goes red before the ceiling rather than at it", () => {
-    // A process the kernel kills leaves no sample to colour, so a threshold
-    // set at the cap would only ever be met by a browser that survived it.
-    expect(browserTone(450 * 1024 ** 2)).toBe("ok");
-    expect(browserTone(BROWSER_CAP * 0.6)).toBe("warn");
-    expect(browserTone(BROWSER_CAP * 0.9)).toBe("bad");
-  });
-});
-
-describe("mintTone", () => {
-  it("counts memory spent without a token as the failure it is", () => {
-    // The case this page exists for: the browser ran every time and came away
-    // with nothing, which costs the resources and leaves zoopla_london
-    // challenged anyway.
-    expect(mintTone(use({ minted: 0 }))).toBe("bad");
-    expect(mintTone(use({ minted: 7 }))).toBe("warn");
-    expect(mintTone(use())).toBe("ok");
-  });
-
-  it("treats a crashed run as bad however good the rate is", () => {
-    expect(mintTone(use({ runs: 10, minted: 10, failed: 1 }))).toBe("bad");
-  });
-
-  it("is idle when the browser did not run, which nights and weekends are", () => {
-    expect(mintTone(use({ runs: 0, minted: 0 }))).toBe("idle");
-  });
-});
-
-describe("worst", () => {
-  it("does not let an unmeasured reading outrank a bad one", () => {
-    expect(worst(["idle", "bad"])).toBe("bad");
-    expect(worst(["ok", "warn"])).toBe("warn");
-    expect(worst(["idle", "idle"])).toBe("idle");
-    expect(worst([])).toBe("idle");
-  });
-});
-
 describe("formatting", () => {
   it("prints an em dash for not measured and never a misleading zero", () => {
     expect(gb(null)).toBe("—");
-    expect(mb(null)).toBe("—");
     expect(pct(null, 10)).toBe("—");
     expect(pct(10, null)).toBe("—");
     expect(pct(10, 0)).toBe("—");
@@ -153,18 +98,16 @@ describe("formatting", () => {
   it("prints the figures this box actually shows", () => {
     expect(gb(3.7 * 1024 ** 3)).toBe("3.7");
     expect(gb(40 * 1024 ** 3)).toBe("40.0");
-    expect(mb(450 * 1024 ** 2)).toBe("450");
-    expect(pct(450 * 1024 ** 2, BROWSER_CAP)).toBe("22%");
+    expect(pct(1024 ** 3, 4 * 1024 ** 3)).toBe("25%");
   });
 });
 
 describe("word", () => {
   it("names what the colour means rather than repeating the number", () => {
     expect(word("idle", "load")).toBe("not measured");
-    expect(word("ok", "mint")).toBe("earning it");
-    expect(word("bad", "mint")).toBe("spending for nothing");
-    expect(word("bad", "browser")).toBe("near the cap");
     expect(word("ok", "memory")).toBe("room to spare");
+    expect(word("warn", "disk")).toBe("tight");
+    expect(word("bad", "memory")).toBe("out of room");
   });
 });
 
@@ -257,11 +200,11 @@ describe("ramGuide", () => {
     expect(ramGuide([bucket({ mem_total: 8 * 1024 ** 3 })])).toBeCloseTo(75, 10);
   });
 
-  it("has nothing to say about a box no larger than the cap", () => {
+  it("has nothing to say about a box no larger than the floor", () => {
     // The line would sit at or below zero and mean nothing: such a box can
-    // never satisfy the slice, which is a fact about the box rather than
+    // never hold the floor free, which is a fact about the box rather than
     // something a dashed line says about one afternoon.
-    expect(ramGuide([bucket({ mem_total: BROWSER_CAP })])).toBeNull();
+    expect(ramGuide([bucket({ mem_total: MEMORY_FLOOR })])).toBeNull();
     expect(ramGuide([bucket({ mem_total: 1024 ** 3 })])).toBeNull();
   });
 

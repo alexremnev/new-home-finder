@@ -1025,12 +1025,6 @@ def _collect(
         # which is a broken state directory and nothing to do with the portals.
         if fetcher.probes_skipped:
             stage.set("probes_skipped", fetcher.probes_skipped)
-        # What the refusals themselves said. This is the only place a
-        # Cloudflare challenge can be told apart from a Cloudflare block, and
-        # they have opposite answers — a challenge is something a browser gets
-        # through, a block is an address to stop using. See `fetch.EVIDENCE`.
-        if fetcher.refusals:
-            stage.set("refusal_detail", fetcher.refusals)
         if fetcher.blocked:
             # Worth saying out loud even when the proxy then carried the run:
             # this is the portal telling us it does not want this address, and

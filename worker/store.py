@@ -519,44 +519,6 @@ def enabled_sources(conn: Conn) -> set[str]:
     }
 
 
-def challenged_recently(conn: Conn, *, source_key: str, within_minutes: int) -> int:
-    """How many recent scrapes of this source were served a Cloudflare challenge.
-
-    Read by the clearance minter to decide whether to launch a browser at all.
-    A challenge is the one refusal a browser is the answer to — see
-    `fetch.EVIDENCE`, which is the only place a challenge can be told apart
-    from a block, and `sources.sweep`, which copies what each refusal said into
-    the stage counters as `refusal_detail`.
-
-    The counter is written whether or not the run went on to succeed through
-    another exit, which is what makes this worth gating on: the first challenge
-    is recorded before the reader actually starts losing pages, so a mint
-    triggered by it is still ahead of the damage.
-
-    Matched on the header text rather than a parsed field because
-    `Reply.evidence` composes one line per refusal and the line is the record;
-    anything structured here would be a second format to keep in step with it.
-    """
-
-    row = conn.execute(
-        """
-        SELECT count(*) AS n
-          FROM job_stages
-         WHERE stage = 'scrape'
-           AND source_key = %s
-           AND started_at > now() - make_interval(mins => %s)
-           AND jsonb_typeof(counters->'refusal_detail') = 'array'
-           AND EXISTS (
-                 SELECT 1
-                   FROM jsonb_array_elements_text(counters->'refusal_detail') AS said
-                  WHERE said LIKE '%%cf-mitigated=challenge%%'
-               )
-        """,
-        (source_key, within_minutes),
-    ).fetchone()
-    return int(row["n"]) if row else 0
-
-
 def seen_ids(
     conn: Conn, *, source_key: str, external_ids: list[str]
 ) -> dict[str, str | None]:

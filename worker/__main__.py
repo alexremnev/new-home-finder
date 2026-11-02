@@ -24,12 +24,6 @@ Row = dict[str, Any]
 JOBS = (
     "ingest", "portals",
     *PORTAL_JOBS,
-    # Not a reader. It fetches nothing anybody stores — it opens one page in a
-    # browser so that Cloudflare issues a token the readers' own curl handles
-    # can then present. Its own job name, and so its own timer and its own row
-    # in `job_runs`, because what it costs and whether it worked are both
-    # questions about it rather than about whoever benefits.
-    "clearance",
     "drain", "rollup", "purge",
 )
 

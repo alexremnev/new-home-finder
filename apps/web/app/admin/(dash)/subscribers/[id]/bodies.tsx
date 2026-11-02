@@ -5,6 +5,7 @@ import { at } from "@/lib/when";
 
 import { pounds } from "@/lib/money";
 
+import { AsyncForm } from "../../async-form";
 import { windowFor } from "../../cached";
 import { Series } from "../../charts";
 import { Paged, type MorePage } from "../../paged";
@@ -80,7 +81,7 @@ export async function sentPage(
       <tr key={one.id}>
         <td className="muted">{at(one.created_at)}</td>
         <td className="muted">{at(one.sent_at)}</td>
-        <td>
+        <td className="state-cell">
           <span
             className={`badge ${
               one.status === "sent"
@@ -93,6 +94,26 @@ export async function sentPage(
             {one.status}
             {one.error ? ` · ${one.error}` : ""}
           </span>
+          {/* Beside the badge rather than in a column of its own: most rows
+              have no button, and an empty column on every one of them to
+              serve the few that do is a column the eye has to skip. The
+              badge is the thing being answered — it says this listing was
+              never delivered — so the answer belongs against it.
+
+              Only where it would work. A disabled button on a sent row, or
+              on WhatsApp where 0074 says the press is a charge that the next
+              drain undoes, is a thing to hover and find out about; no button
+              is the same answer, given quietly. */}
+          {one.status === "skipped" && one.channel === "telegram" && (
+            <AsyncForm action="/api/admin/user" className="inline-form">
+              <input type="hidden" name="action" value="send_listing" />
+              <input type="hidden" name="user_id" value={userId} />
+              <input type="hidden" name="notification_id" value={one.id} />
+              <button type="submit" className="ghost" title="Back into the queue; it goes out on the next drain">
+                Send it anyway
+              </button>
+            </AsyncForm>
+          )}
         </td>
         <td className="num">
           {one.price_pcm === null ? "—" : "£" + comma(one.price_pcm)}

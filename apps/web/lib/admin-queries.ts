@@ -624,6 +624,9 @@ export async function person(userId: number): Promise<Person | null> {
 export type Delivered = {
   id: number;
   status: string;
+  // What it was sent on, so the row can offer "Send it anyway" where that
+  // button would work. Telegram only — see 0074.
+  channel: string;
   error: string | null;
   created_at: string;
   sent_at: string | null;
@@ -639,7 +642,7 @@ export async function deliveredTo(
   offset = 0,
 ): Promise<Delivered[]> {
   return query<Delivered>(
-    `SELECT n.id, n.status, n.error, n.created_at::text, n.sent_at::text,
+    `SELECT n.id, n.status, n.channel, n.error, n.created_at::text, n.sent_at::text,
             l.price_pcm, l.bedrooms, l.postcode_district AS district, l.url
        FROM notifications n
        LEFT JOIN listings l ON l.id = n.listing_id
@@ -1486,8 +1489,7 @@ export async function unparseablePoints(win: Win, minutes: number): Promise<Slic
 // spike every fifty minutes instead of when the rooms appeared.
 //
 // Nothing was backfilled before 0052, so a window reaching further back shows
-// zero because nobody was recording, not because nobody read anything — the
-// same caveat `sightingsSince` states on the panels above.
+// zero because nobody was recording, not because nobody read anything.
 export async function sightingPoints(
   reader: string,
   win: Win,
@@ -1697,25 +1699,6 @@ export async function sourceFeeds(): Promise<SourceFeed[]> {
   ).catch(() => []);
 }
 
-export type SourceSwitch = {
-  key: string;
-  display_name: string;
-  enabled: boolean;
-  announces: boolean;
-};
-
-// The two switches per source, because every number on the coverage panels
-// means something different depending on them. `enabled` is whether we read a
-// source; `announces` is whether what it finds may reach a subscriber. See
-// 0060 — and in particular why a muted feed makes the alert-level comparison
-// vacuous rather than green.
-export async function sourceSwitches(): Promise<SourceSwitch[]> {
-  return query<SourceSwitch>(
-    `SELECT key, display_name, enabled, announces
-       FROM sources ORDER BY key`,
-  ).catch(() => []);
-}
-
 export type Duplicates = {
   // Copies suppressed over the window, and how many listings arrived in total,
   // so the panel can state a share rather than a bare number nobody can size.
@@ -1860,213 +1843,6 @@ export async function readerTally(win: Win): Promise<ReaderTally[]> {
       ORDER BY reader`,
     [Math.round(win.mins), Math.round(win.endMins)],
   ).catch(() => []);
-}
-
-export type ReaderOverlap = {
-  portal: string;
-  total: number;
-  both: number;
-  feed_only: number;
-  scraper_only: number;
-  feed_only_covered: number;
-  scraper_first: number;
-  feed_first: number;
-  median_lead_secs: number | null;
-};
-
-// Feed against scraper, per portal, so the Telegram source can be retired on
-// evidence. See 0052 for why this cannot be read off `listings`.
-//
-// Grouped by external_id rather than by listing id: the feed and a portal's
-// own scraper upsert into one row, so the row cannot say which of them saw it
-// first, and `listing_sightings` is where that is recorded. See 0052.
-//
-// `feed_only_covered` is the number that actually matters. A listing only the
-// feed saw is uninteresting if it was in a district no subscriber has chosen —
-// the scrapers only read subscribed districts, so that is coverage working as
-// designed, not a miss. The ones in a *covered* district are real misses.
-export async function readerOverlap(win: Win): Promise<ReaderOverlap[]> {
-  return query<ReaderOverlap>(
-    `WITH covered AS (
-       SELECT DISTINCT upper(area) AS code
-         FROM subscriptions s
-         CROSS JOIN LATERAL jsonb_array_elements_text(
-             coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
-         ) AS area
-        WHERE s.active
-     ),
-     fam AS (
-       SELECT l.id,
-              l.external_id,
-              l.source_key AS portal,
-              upper(l.postcode_district) AS district
-         FROM listings l
-        WHERE l.first_seen_at >  now() - make_interval(mins => $1::int)
-          AND l.first_seen_at <= now() - make_interval(mins => $2::int)
-     ),
-     saw AS (
-       SELECT f.portal,
-              f.external_id,
-              bool_or(f.district IN (SELECT code FROM covered)) AS in_covered,
-              min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
-              min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
-         FROM fam f
-         LEFT JOIN listing_sightings g ON g.listing_id = f.id
-        GROUP BY f.portal, f.external_id
-     )
-     SELECT portal,
-            count(*)::int AS total,
-            count(*) FILTER (
-              WHERE feed_at IS NOT NULL AND scraper_at IS NOT NULL)::int AS both,
-            count(*) FILTER (
-              WHERE feed_at IS NOT NULL AND scraper_at IS NULL)::int AS feed_only,
-            count(*) FILTER (
-              WHERE feed_at IS NULL AND scraper_at IS NOT NULL)::int AS scraper_only,
-            count(*) FILTER (
-              WHERE feed_at IS NOT NULL AND scraper_at IS NULL
-                AND in_covered)::int AS feed_only_covered,
-            count(*) FILTER (
-              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
-                AND scraper_at < feed_at)::int AS scraper_first,
-            count(*) FILTER (
-              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
-                AND feed_at < scraper_at)::int AS feed_first,
-            -- Positive means the scraper was later. Only over the ones both
-            -- saw, because a lead time needs two timestamps.
-            round(
-              percentile_cont(0.5) WITHIN GROUP (
-                ORDER BY extract(epoch FROM scraper_at - feed_at)
-              )
-            )::int AS median_lead_secs
-       FROM saw
-      WHERE feed_at IS NOT NULL OR scraper_at IS NOT NULL
-      GROUP BY portal
-      ORDER BY portal`,
-    [Math.round(win.mins), Math.round(win.endMins)],
-  ).catch(() => []);
-}
-
-export type FeedReliance = {
-  alerts: number;
-  covered: number;
-  feed_only: number;
-  unrecorded: number;
-  later: number;
-  median_lag_secs: number | null;
-};
-
-// The same question as `readerOverlap`, asked about alerts instead of
-// listings: of what subscribers were actually sent, how much would still have
-// been sent with the Telegram feed switched off.
-//
-// Why both. `readerOverlap` counts listings, and a listing nobody was sent is
-// a miss that cost nothing — most of a district's stock matches nobody's
-// filter. An alert is the product. Scoping to `notifications` also makes the
-// "was it a district we read" test unnecessary: an alert exists because it
-// matched somebody's filter, so its district is subscribed by definition.
-//
-// What this cannot see: a scraper sighting means the listing was stored, not
-// that it would have been announced. A district whose watch had just started
-// stores without announcing — that is the whole of `source_sweeps` — and
-// whether that was the state at the time is not reconstructable afterwards.
-// So `covered` is an upper bound on what survives losing the feed, and
-// `feed_only` is an exact count of what does not.
-export async function feedReliance(win: Win): Promise<FeedReliance> {
-  const rows = await query<FeedReliance>(
-    `WITH alerted AS (
-       SELECT n.id, n.listing_id
-         FROM notifications n
-        WHERE n.kind = 'new_listing' AND n.status = 'sent'
-          AND n.sent_at >  now() - make_interval(mins => $1::int)
-          AND n.sent_at <= now() - make_interval(mins => $2::int)
-     ),
-     whosaw AS (
-       SELECT a.id,
-              min(g.first_at) FILTER (WHERE g.reader =  'tg_feed') AS feed_at,
-              min(g.first_at) FILTER (WHERE g.reader <> 'tg_feed') AS scraper_at
-         FROM alerted a
-         LEFT JOIN listing_sightings g ON g.listing_id = a.listing_id
-        GROUP BY a.id
-     )
-     SELECT count(*)::int AS alerts,
-            count(*) FILTER (WHERE scraper_at IS NOT NULL)::int AS covered,
-            count(*) FILTER (
-              WHERE scraper_at IS NULL AND feed_at IS NOT NULL)::int AS feed_only,
-            -- Neither reader recorded a sighting: an alert for a listing
-            -- stored before 0052 began recording. Not a miss, and not
-            -- evidence either — said out loud so nobody reads it as cover.
-            count(*) FILTER (
-              WHERE scraper_at IS NULL AND feed_at IS NULL)::int AS unrecorded,
-            count(*) FILTER (
-              WHERE scraper_at IS NOT NULL AND feed_at IS NOT NULL
-                AND scraper_at > feed_at)::int AS later,
-            round(
-              percentile_cont(0.5) WITHIN GROUP (
-                ORDER BY extract(epoch FROM scraper_at - feed_at)
-              )
-            )::int AS median_lag_secs
-       FROM whosaw`,
-    [Math.round(win.mins), Math.round(win.endMins)],
-  ).catch(() => []);
-
-  return rows[0] ?? {
-    alerts: 0, covered: 0, feed_only: 0, unrecorded: 0, later: 0,
-    median_lag_secs: null,
-  };
-}
-
-export type FeedOnly = {
-  listing_id: number;
-  source_key: string;
-  district: string | null;
-  url: string;
-  price_pcm: number | null;
-  first_seen_at: string;
-  alerts: number;
-};
-
-// The misses themselves, newest first. A count says the scrapers are not ready
-// yet; this says why — and the usual answer is one of a handful of causes
-// (a district read after the listing appeared, a page cap, a refusal) that are
-// only visible when you can open the listing that got away.
-export async function feedOnlyListings(win: Win, limit = 12): Promise<FeedOnly[]> {
-  return query<FeedOnly>(
-    `WITH covered AS (
-       SELECT DISTINCT upper(area) AS code
-         FROM subscriptions s
-         CROSS JOIN LATERAL jsonb_array_elements_text(
-             coalesce(s.criteria->'areas'->'postcode_districts', '[]'::jsonb)
-         ) AS area
-        WHERE s.active
-     )
-     SELECT l.id AS listing_id, l.source_key,
-            upper(l.postcode_district) AS district,
-            l.url, l.price_pcm, l.first_seen_at::text,
-            (SELECT count(*)::int FROM notifications n
-              WHERE n.listing_id = l.id AND n.status = 'sent') AS alerts
-       FROM listings l
-      WHERE l.first_seen_at >  now() - make_interval(mins => $1::int)
-        AND l.first_seen_at <= now() - make_interval(mins => $2::int)
-        AND upper(l.postcode_district) IN (SELECT code FROM covered)
-        AND EXISTS (SELECT 1 FROM listing_sightings g
-                     WHERE g.listing_id = l.id AND g.reader = 'tg_feed')
-        AND NOT EXISTS (SELECT 1 FROM listing_sightings g
-                         WHERE g.listing_id = l.id AND g.reader <> 'tg_feed')
-      ORDER BY l.first_seen_at DESC
-      LIMIT $3`,
-    [Math.round(win.mins), Math.round(win.endMins), limit],
-  ).catch(() => []);
-}
-
-// When the comparison above started having anything to say. Nothing was
-// backfilled, so a window reaching before this is reporting on a period when
-// only some of the readers were recording — worth saying on the page rather
-// than letting somebody read a misleading zero.
-export async function sightingsSince(): Promise<string | null> {
-  const rows = await query<{ first_at: string | null }>(
-    `SELECT min(first_at)::text AS first_at FROM listing_sightings`,
-  ).catch(() => []);
-  return rows[0]?.first_at ?? null;
 }
 
 export type OriginSlice = {
@@ -2448,8 +2224,8 @@ export type HostPoint = {
 // The tiles answer "was the box short of anything over this window" and cannot
 // answer "when", which is the question you actually have once the answer to
 // the first is yes. A peak of 1.9 on two processors is a different fault
-// depending on whether it is one spike at 03:00 — a sweep that collided with
-// the clearance timer — or a plateau from noon onwards.
+// depending on whether it is one spike at 03:00 — two sweeps that collided —
+// or a plateau from noon onwards.
 //
 // ── the worst of each bucket, not the mean ───────────────────────────────
 //
@@ -2506,57 +2282,4 @@ export async function hostPoints(win: Win, minutes: number): Promise<HostPoint[]
       ORDER BY span.bucket`,
     [Math.round(win.mins), Math.round(minutes), Math.round(win.endMins)],
   ).catch(() => []);
-}
-
-export type BrowserUse = {
-  runs: number;
-  /** Runs that came away with a token. The rest spent the memory for nothing. */
-  minted: number;
-  degraded: number;
-  failed: number;
-  /** Largest RSS any one run's browser reached, in bytes. */
-  peak_bytes: number | null;
-  avg_seconds: number | null;
-  total_seconds: number | null;
-  last_at: string | null;
-};
-
-// What the headless browser cost, and whether it bought anything.
-//
-// One row, because there is exactly one job that launches it. The two numbers
-// that decide whether this whole arrangement stays are `peak_bytes` against
-// the slice's `MemoryMax`, and `minted` against `runs` — a browser that burns
-// 500 MB and comes away without a token is the worst of both worlds, and in
-// the combined "the box is fine" view it is invisible.
-export async function browserUse(win: Win, job = "clearance"): Promise<BrowserUse> {
-  const rows = await query<BrowserUse>(
-    `SELECT count(*)::int AS runs,
-            count(*) FILTER (
-              WHERE jsonb_typeof(counters->'clearance_minted') = 'number'
-                AND (counters->>'clearance_minted')::int > 0
-            )::int AS minted,
-            count(*) FILTER (WHERE status = 'degraded')::int AS degraded,
-            count(*) FILTER (WHERE status = 'failed')::int   AS failed,
-            max((counters->>'browser_peak_bytes')::bigint)
-              FILTER (WHERE jsonb_typeof(counters->'browser_peak_bytes') = 'number')
-              AS peak_bytes,
-            avg((counters->>'browser_seconds')::float8)
-              FILTER (WHERE jsonb_typeof(counters->'browser_seconds') = 'number')
-              AS avg_seconds,
-            sum((counters->>'browser_seconds')::float8)
-              FILTER (WHERE jsonb_typeof(counters->'browser_seconds') = 'number')
-              AS total_seconds,
-            max(started_at)::text AS last_at
-       FROM job_runs
-      WHERE job = $3
-        AND started_at >  now() - make_interval(mins => $1::int)
-        AND started_at <= now() - make_interval(mins => $2::int)`,
-    [win.mins, win.endMins, job],
-  );
-  return (
-    rows[0] ?? {
-      runs: 0, minted: 0, degraded: 0, failed: 0,
-      peak_bytes: null, avg_seconds: null, total_seconds: null, last_at: null,
-    }
-  );
 }

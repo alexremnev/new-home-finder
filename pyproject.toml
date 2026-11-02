@@ -24,14 +24,6 @@ ingest = [
 scrape = [
     "curl_cffi>=0.7",
 ]
-# The headless browser, and only the machine that mints Cloudflare tokens
-# installs it. Kept out of `scrape` deliberately: the Windows desk runs the same
-# readers with the same curl transport and has no business pulling 450MB of
-# Chromium to do it. See worker/sources/clearance.py for what uses this and why
-# it is not the transport.
-browser = [
-    "playwright>=1.49",
-]
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",
@@ -65,16 +57,6 @@ python_version = "3.12"
 strict = true
 warn_unreachable = true
 exclude = "^tools/"
-
-# Playwright is in the `browser` extra, which only the server installs — so on
-# every machine that typechecks, its import is unresolvable. An inline ignore
-# would be the other half of the same problem: on the server the module *is*
-# there, and `strict` reports the ignore itself as unused. Declared here so
-# both machines agree.
-[[tool.mypy.overrides]]
-module = ["playwright.*"]
-ignore_missing_imports = true
-
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

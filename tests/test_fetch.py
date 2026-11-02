@@ -27,7 +27,6 @@ from worker.sources.fetch import (
     FALLBACK,
     FALLBACK_ATTEMPTS,
     JITTER,
-    KEPT_REFUSALS,
     PRIMARY,
     RETRY_AFTER_CAP,
     ROTATE,
@@ -892,18 +891,16 @@ CHALLENGED = (
 
 def test_a_cloudflare_challenge_is_told_apart_from_a_cloudflare_block() -> None:
     # The whole reason the headers are kept. These two are both 403 and they
-    # have opposite answers: a challenge is something a browser gets through,
-    # so it is the reading under which a headless Chrome is worth its traffic;
-    # a block is an address to stop using, and no browser helps with that.
+    # have opposite answers: a challenge is the edge asking for work we are not
+    # going to do, and it relents on its own; a block is an address to stop
+    # using. `Refused` quotes both into `job_events` so the two can be told
+    # apart from the run log.
     challenged = Served(403, CHALLENGED, proxy=None, session="zoopla")
     with pytest.raises(Refused) as raised:
         challenged.get(ZOOPLA)
 
     assert "cf-mitigated=challenge" in str(raised.value)
     assert "cf-ray=a4960ddd686b3692-LHR" in str(raised.value)
-    # And in the counters, where a week of them can be counted rather than
-    # read one log line at a time.
-    assert any("cf-mitigated=challenge" in one for one in challenged.refusals)
     challenged.close()
 
     blocked = Served(403, "HTTP/2 403\r\nserver: cloudflare\r\n", proxy=None)
@@ -915,16 +912,15 @@ def test_a_cloudflare_challenge_is_told_apart_from_a_cloudflare_block() -> None:
     blocked.close()
 
 
-def test_a_refusal_names_the_exit_address_it_came_from() -> None:
-    # Without this the counters say a 403 happened and nothing about where,
-    # which is the one fact that decides whether to rotate or to stop.
+def test_a_refusal_names_how_many_addresses_it_got_through() -> None:
+    # Without this the run log says a 403 happened and nothing about how hard
+    # it was tried, which is the fact that decides whether to rotate or stop.
     get = Served(403, CHALLENGED, proxy=STICKY, session="zoopla", attempts=3)
-    with pytest.raises(Refused):
+    with pytest.raises(Refused) as raised:
         get.get(ZOOPLA)
 
-    paid = [one for one in get.refusals if "exit=" in one]
-    assert paid, get.refusals
-    assert all("direct" not in one for one in paid)
+    assert "403" in str(raised.value)
+    assert "cf-mitigated=challenge" in str(raised.value)
     get.close()
 
 
@@ -935,17 +931,6 @@ def test_a_served_page_carries_no_headers_to_parse() -> None:
     assert get.get(ZOOPLA).headers == {}
     get.close()
 
-
-def test_the_refusal_log_is_capped_rather_than_unbounded() -> None:
-    # It ends up in a jsonb column, and twenty pages at five attempts each
-    # would put a hundred lines in one counter.
-    get = Served(403, CHALLENGED, proxy=None, session="zoopla")
-    for page in range(KEPT_REFUSALS + 5):
-        with pytest.raises(Refused):
-            get.get(f"{ZOOPLA}?pn={page}")
-
-    assert len(get.refusals) == KEPT_REFUSALS
-    get.close()
 
 
 # ── the backoff ────────────────────────────────────────────────────────────

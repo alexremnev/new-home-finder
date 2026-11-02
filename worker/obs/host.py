@@ -32,32 +32,12 @@ from __future__ import annotations
 
 import os
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-
-#: `resource` is Unix-only and simply absent on Windows, where the scraper
-#: gets run by hand during development. A missing module is not an error
-#: here for the same reason an unreadable /proc is not: `peak_child_bytes`
-#: returns None, and None already means "not measured" all the way up.
-try:
-    import resource
-except ModuleNotFoundError:  # pragma: no cover - Windows only
-    resource = None  # type: ignore[assignment]
 
 #: Where the kernel publishes it on Linux. A constant so the tests can point
 #: the readers at a fixture directory instead of mocking `open`.
 PROC = Path("/proc")
-
-#: `ru_maxrss` is in kilobytes on Linux and in bytes on macOS. Only the Linux
-#: figure is ever reported — the development Macs do not run the browser — but
-#: multiplying by 1024 on both would make a local run print gigabytes and
-#: somebody would believe it.
-#:
-#: Read off `sys.platform` rather than `os.uname()`, which does not exist on
-#: Windows: this is module-level, so raising here would take the import with
-#: it and no amount of guarding further down would help.
-_MAXRSS_UNIT = 1 if sys.platform == "darwin" else 1024
 
 
 @dataclass(frozen=True)
@@ -112,30 +92,6 @@ def snapshot(state: Path | None = None) -> Snapshot:
         **_memory(),
         **_disk(state),
     )
-
-
-def peak_child_bytes() -> int | None:
-    """Peak RSS of the largest child process this run has reaped, in bytes.
-
-    Which is how the browser is measured, and the reason no psutil is needed:
-    Playwright's Chromium is a child of this process, so once it is closed its
-    high-water mark is already recorded in `RUSAGE_CHILDREN` and can simply be
-    read back.
-
-    The figure is a **maximum, not a sum** — `ru_maxrss` for children is the
-    largest single child, not all of them added up. On the clearance job that
-    is the honest number anyway, because the browser is the only child and it
-    is the only thing whose size was ever in question. On a job with several
-    children it would understate them, which is why nothing else calls this.
-    """
-
-    if resource is None:
-        return None
-    try:
-        used = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-    except (OSError, ValueError):
-        return None
-    return int(used) * _MAXRSS_UNIT if used > 0 else None
 
 
 def _cpus() -> int | None:
@@ -199,4 +155,4 @@ def _disk(state: Path | None) -> dict[str, int | None]:
     return {"disk_total": int(usage.total), "disk_free": int(usage.free)}
 
 
-__all__ = ["PROC", "Snapshot", "peak_child_bytes", "snapshot"]
+__all__ = ["PROC", "Snapshot", "snapshot"]

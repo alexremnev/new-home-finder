@@ -15,6 +15,7 @@ const ACTIONS = new Set([
   "pause",
   "resume",
   "erase",
+  "send_listing",
 ]);
 
 function signedIn(request: Request): Promise<boolean> {
@@ -154,6 +155,63 @@ export async function POST(request: Request) {
           );
         }
         done = active ? "resumed" : "paused";
+      }
+
+      if (action === "send_listing") {
+        const notificationId = Number(form?.get("notification_id"));
+        if (!Number.isInteger(notificationId) || notificationId <= 0) {
+          throw new Error("which notification?");
+        }
+        const rows = await run(
+          // Everything this is allowed to touch is in the WHERE clause, and
+          // each line of it is a way the button could otherwise do harm:
+          //
+          //  * `n.user_id = $1` — the id comes from a form, so without it a
+          //    hand-made request could resend any listing to anybody, under
+          //    an audit row naming the wrong account.
+          //  * `channel = 'telegram'` — see 0074. On WhatsApp the press costs
+          //    money and `drop_stale_whatsapp` undoes it on the next drain.
+          //  * `status = 'skipped'` — a queued row is already on its way and
+          //    resetting its attempts would hide a delivery that is failing;
+          //    a sent one would go out twice.
+          //  * `u.status = 'active'` — block and pause both DELETE this
+          //    person's queued rows, and putting one back would be this page
+          //    contradicting itself.
+          //
+          // `created_at` moves to now() rather than keeping the instant the
+          // listing matched. Two tiles on the dashboard read that column and
+          // nothing else: `Oldest queued` ages it to ask whether delivery has
+          // stopped, and the median latency is `sent_at - created_at`. A row
+          // requeued with a week-old timestamp turns the first red until the
+          // next drain and drags the second by a week, for a message that is
+          // neither stuck nor slow. What was lost is one timestamp; what is
+          // kept is the admin_actions row below, which says when this was
+          // pressed and on which listing.
+          `UPDATE notifications n
+              SET status = 'queued', error = NULL, sent_at = NULL,
+                  attempts = 0, created_at = now()
+             FROM users u
+            WHERE n.id = $2
+              AND n.user_id = $1
+              AND u.id = n.user_id
+              AND u.status = 'active'
+              AND n.channel = 'telegram'
+              AND n.status = 'skipped'
+            RETURNING n.listing_id`,
+          [userId, notificationId],
+        );
+        if (rows.length === 0) {
+          // One message for four reasons, because the page is re-rendered
+          // underneath it: whichever of them applies, the row's own badge now
+          // says so.
+          throw new Error(
+            "nothing to send — already queued or sent, not Telegram, " +
+              "or delivery is paused for this account",
+          );
+        }
+        detail.notification_id = notificationId;
+        detail.listing_id = rows[0]?.listing_id;
+        done = "queued — it goes out on the next drain";
       }
 
       if (action === "erase") {
