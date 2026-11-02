@@ -175,7 +175,12 @@ export function describeCriteria(criteria: Criteria): string {
     lines.push(`Available: ${[after && `from ${after}`, before && `to ${before}`].filter(Boolean).join(" ")}`);
   }
   if (criteria.pets_allowed) lines.push("Must state: pets allowed");
-  if (criteria.send_duplicates) lines.push("Duplicates: sent");
+  // The one default this block states out loud, unlike `criteriaCard`, which
+  // says it only when it is on. A missing field and a field set to false mean
+  // the same thing to the matcher but not to whoever is reading this page:
+  // the question it gets opened with is "why did this person get two messages
+  // about one flat", and the absence of a line is not an answer to it.
+  lines.push(`Duplicates: ${criteria.send_duplicates ? "sent" : "hidden"}`);
   return lines.join("\n");
 }
 

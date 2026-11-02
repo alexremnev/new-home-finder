@@ -175,10 +175,16 @@ SEED_POOL = 400
 SEED_SKIPS = frozenset({"whatsapp"})
 
 
-# The three that lead the ops line. They decide whether a filter will ever
-# match anything, so they are written first and in this order every time — a
-# line read twenty at a time is only scannable if the fields keep their places.
-_FILTER_SHOWN = ("areas", "price_pcm", "bedrooms")
+# The fields `criteria_line` writes by hand rather than through
+# `_FILTER_VALUES`, named here so the "also …" fallback does not print them a
+# second time.
+#
+# The first three lead the line. They decide whether a filter will ever match
+# anything, so they are written first and in this order every time — a line
+# read twenty at a time is only scannable if the fields keep their places.
+# `send_duplicates` is by hand for the opposite reason: it is written last and
+# in both directions, which the value renderers cannot do.
+_FILTER_SHOWN = ("areas", "price_pcm", "bedrooms", "send_duplicates")
 
 # "part" on its own reads as half a word rather than as a furnishing.
 _FURNISHING = {"part": "part furnished"}
@@ -237,7 +243,6 @@ _FILTER_VALUES: dict[str, Callable[[Any], str | None]] = {
     "furnished": lambda value: _listed(value, _FURNISHING),
     "available_from": _dates,
     "pets_allowed": lambda value: "pets allowed" if value else None,
-    "send_duplicates": lambda value: "duplicates sent" if value else None,
 }
 
 def criteria_line(criteria: dict[str, Any]) -> str:
@@ -289,7 +294,23 @@ def criteria_line(criteria: dict[str, Any]) -> str:
     if rest:
         parts.append("also " + ", ".join(rest))
 
-    return " · ".join(parts) if parts else "no filter set — matches everything"
+    # Last, and said in both directions — the only filter here that is printed
+    # when it is off as well as when it is on.
+    #
+    # It is not rendered with the rest because the rest are skipped when unset,
+    # and unset is this one's commonest answer: the suppressing default. In the
+    # ops chat that silence was the whole problem. Two messages about one flat
+    # is the thing that gets reported, and a notice that says nothing cannot
+    # tell "the subscriber asked for both portals' links" from "we have a bug" —
+    # the state is only three words, and it is the three words this line is
+    # read for.
+    said = "duplicates sent" if criteria.get("send_duplicates") else "duplicates hidden"
+
+    # The empty filter keeps its own sentence rather than being reduced to the
+    # duplicates state: "matches everything" is the louder fact of the two, and
+    # a notice reading only "duplicates hidden" would hide it.
+    body = " · ".join(parts) if parts else "no filter set — matches everything"
+    return f"{body} · {said}"
 
 def arrival_line(row: Row) -> str:
     """Where this account came from, or "" when nothing is known — 0073.

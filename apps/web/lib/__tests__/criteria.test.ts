@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { InvalidForm, enforceLimits, parseForm } from "../criteria";
+import { InvalidForm, describeCriteria, enforceLimits, parseForm } from "../criteria";
 
 const ENABLED = ["E14", "SE16", "SE8"];
 
@@ -84,6 +84,14 @@ describe("duplicates", () => {
   it("ignores anything else, rather than reading it as true", () => {
     expect(parseForm({ send_duplicates: "off" }, ENABLED).send_duplicates).toBeUndefined();
     expect(parseForm({ send_duplicates: "false" }, ENABLED).send_duplicates).toBeUndefined();
+  });
+
+  // The admin's copy of a filter says which way the toggle was left, both ways
+  // round. Absent is the commonest answer, and a page that prints nothing for
+  // it cannot answer the question it is opened with — see `describeCriteria`.
+  it("is stated to the admin even when it is off", () => {
+    expect(describeCriteria({})).toContain("Duplicates: hidden");
+    expect(describeCriteria({ send_duplicates: true })).toContain("Duplicates: sent");
   });
 });
 

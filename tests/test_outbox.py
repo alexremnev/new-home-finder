@@ -433,7 +433,9 @@ def test_a_filter_is_named_by_the_three_things_that_decide_it() -> None:
         "landlord_direct_only": True,
     })
 
-    assert line == "SE16, SE1 · £0-2000 · 1-2 bed · also landlord_direct_only"
+    assert line == (
+        "SE16, SE1 · £0-2000 · 1-2 bed · also landlord_direct_only · duplicates hidden"
+    )
 
 def test_a_filter_is_written_as_its_values_and_not_as_its_column_names() -> None:
     # The whole of the change: "also property_types, furnished" told whoever
@@ -467,7 +469,9 @@ def test_a_filter_field_nobody_has_named_yet_is_still_shown() -> None:
     # bare key in the chat is the signal to come and name it.
     from worker.pipeline.outbox import criteria_line
 
-    assert criteria_line({"landlord_direct_only": True}) == "also landlord_direct_only"
+    assert criteria_line({"landlord_direct_only": True}) == (
+        "also landlord_direct_only · duplicates hidden"
+    )
 
 
 def test_the_notice_says_which_post_produced_the_subscriber() -> None:
@@ -500,7 +504,7 @@ def test_an_unattributed_signup_has_no_line_rather_than_a_blank_one() -> None:
 
     assert text.splitlines() == [
         "🎉 New subscriber #7 on telegram · trial",
-        "SE16",
+        "SE16 · duplicates hidden",
     ]
 
 
@@ -521,7 +525,7 @@ def test_an_empty_filter_says_so_rather_than_reading_as_a_bug() -> None:
 
     # It is a real state — the form allows it — and an empty line in the ops
     # chat would look like a broken message rather than a wide search.
-    assert criteria_line({}) == "no filter set — matches everything"
+    assert criteria_line({}) == "no filter set — matches everything · duplicates hidden"
 
 # No notice prints a time any more, so none of them takes one. The warning
 # before the end says "in a few minutes" and the two that follow an ending say
