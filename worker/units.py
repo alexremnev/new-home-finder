@@ -36,6 +36,20 @@ SMALLEST_SQFT = 50
 LARGEST_SQFT = 20_000
 
 
+def believable_sqft(size: int | None) -> int | None:
+    """The area, or None when it is not one a London rental could have.
+
+    Every way in goes through here, including the sources that are handed a
+    number already in feet and so never touch `sqft_from`. A page that states
+    its own square footage is still a page that can stand to be wrong, and the
+    `listings_floor_area_ck` constraint fails the whole run when it is.
+    """
+
+    if size is None:
+        return None
+    return size if SMALLEST_SQFT <= size <= LARGEST_SQFT else None
+
+
 def sqft_from(text: str | None) -> int | None:
     """Square feet, or None when the text does not state an area we believe."""
 
@@ -54,8 +68,7 @@ def sqft_from(text: str | None) -> int | None:
     metric = unit.startswith("m") or unit.startswith("sqm") or unit.startswith("squaremet")
     sqft = size * SQFT_PER_SQM if metric else size
 
-    rounded = int(round(sqft))
-    return rounded if SMALLEST_SQFT <= rounded <= LARGEST_SQFT else None
+    return believable_sqft(round(sqft))
 
 
 def sqm_from_sqft(sqft: int) -> int:
@@ -64,4 +77,10 @@ def sqm_from_sqft(sqft: int) -> int:
     return int(round(sqft / SQFT_PER_SQM))
 
 
-__all__ = ["LARGEST_SQFT", "SMALLEST_SQFT", "sqft_from", "sqm_from_sqft"]
+__all__ = [
+    "LARGEST_SQFT",
+    "SMALLEST_SQFT",
+    "believable_sqft",
+    "sqft_from",
+    "sqm_from_sqft",
+]

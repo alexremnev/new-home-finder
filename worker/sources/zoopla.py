@@ -89,6 +89,7 @@ from worker.obs.log import Stage
 from worker.sources import postcode
 from worker.sources.fetch import Fetcher
 from worker.sources.sweep import Catch, Harvest, Memory
+from worker.units import believable_sqft
 
 SOURCE_KEY = "zoopla"
 BASE = "https://www.zoopla.co.uk"
@@ -703,7 +704,7 @@ def as_listing(row: Any, district: str, *, from_address: bool = False) -> Listin
         # the absence of one is left unknown rather than called a landlord.
         is_landlord_direct=False if isinstance(row.get("branch"), dict) else None,
         photo_count=_count(row.get("numberOfImages")),
-        floor_area_sqft=area if area and 50 <= area <= 20_000 else None,
+        floor_area_sqft=believable_sqft(area),
         raw={
             "property_type": str(row.get("propertyType") or ""),
             "published_on": str(row.get("publishedOn") or ""),

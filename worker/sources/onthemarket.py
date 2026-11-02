@@ -185,7 +185,7 @@ from worker.contracts.listing import Furnished, Listing
 from worker.obs.log import Stage
 from worker.sources.fetch import Fetcher, Refused
 from worker.sources.sweep import Catch, Harvest, Memory
-from worker.units import sqft_from
+from worker.units import believable_sqft, sqft_from
 
 SOURCE_KEY = "onthemarket"
 BASE = "https://www.onthemarket.com"
@@ -835,7 +835,11 @@ def area_on(page: str) -> int | None:
     prop = _state(page).get("property")
     if not isinstance(prop, dict):
         return None
-    stated = _count(prop.get("minimumAreaSqFt"))
+    # Believed only within range. The field arrives in feet and so skips the
+    # conversion that would otherwise have bounded it, and the site does emit
+    # the odd 12 or 250000 — a studio measured in metres under a feet-named
+    # key, or a whole block. Out of range it falls through to the prose below.
+    stated = believable_sqft(_count(prop.get("minimumAreaSqFt")))
     if stated:
         return stated
     # The prose form, "401 sq ft / 37 sq m", read for its unit rather than

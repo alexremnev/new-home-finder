@@ -46,6 +46,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from worker.contracts.listing import Listing
 from worker.obs.log import Stage
 from worker.sources.fetch import Refused, Reply
 from worker.sources.onthemarket import (
@@ -399,6 +400,53 @@ def test_a_postcode_from_another_district_is_refused():
 def test_the_floor_area_is_already_in_square_feet():
     assert area_on(TERM) == 401
     assert area_on(DETAILS) is None
+
+
+@pytest.mark.parametrize("stated", [12, 49, 20_001, 250_000])
+def test_a_floor_area_the_site_got_wrong_is_refused(stated):
+    """`minimumAreaSqFt` is believed only within range.
+
+    It arrives in feet and so skips the conversion that bounds every other
+    way in. Stored unchecked it fails `listings_floor_area_ck` and takes the
+    whole run down with it, which is how run 138349 ended. Here the prose
+    field is removed too, so there is nothing to fall back to.
+    """
+
+    page = (
+        TERM.replace('"minimumAreaSqFt":401', f'"minimumAreaSqFt":{stated}')
+            .replace('"minimumArea":"401 sq ft / 37 sq m"', '"minimumArea":null')
+    )
+    assert area_on(page) is None
+
+
+def test_a_wrong_square_footage_falls_back_to_the_prose():
+    """The prose carries its own unit, so it is the better of the two."""
+
+    page = TERM.replace('"minimumAreaSqFt":401', '"minimumAreaSqFt":12')
+    assert area_on(page) == 401
+
+
+def test_a_page_whose_area_is_wrong_still_stores():
+    """The crash was a value that passed `model_copy` and failed the column.
+
+    `model_copy` does not validate, so `Field(ge=50, le=20_000)` never ran and
+    the only thing left to catch it was the database.
+    """
+
+    card = next(
+        one for one in catches_in(PAGE, today=TODAY).caught
+        if one.listing.external_id == "20666315"
+    )
+    page = (
+        TERM.replace('"minimumAreaSqFt":401', '"minimumAreaSqFt":250000')
+            .replace('"minimumArea":"401 sq ft / 37 sq m"', '"minimumArea":null')
+    )
+    filled = fill(card.listing, page, today=TODAY)
+    assert filled.floor_area_sqft is None
+    # What the column would have said, said here instead.
+    Listing.model_validate(filled.model_dump())
+    # The rest of the page is still read.
+    assert filled.deposit_pcm == 2740.40
 
 
 def test_whether_the_listing_is_on_the_other_portals_yet_is_kept():
