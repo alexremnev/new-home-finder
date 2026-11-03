@@ -1,11 +1,43 @@
+# The daily counters the admin reads, recomputed over a three-day window.
+#
+# ── why this is not every two minutes any more ───────────────────────────
+#
+# It was, and it was the most expensive thing in the database by a wide
+# margin. 720 runs a day, thirty aggregates a run, every one of them a
+# sequential scan because the predicates were casts rather than ranges — some
+# 21,600 full scans of `notifications`, `source_messages`, `listings` and
+# `wa_messages` a day. That is what emptied the Disk IO budget and what kept
+# the page cache at 200MB on a box with 460MB of RAM: the scans refilled
+# shared_buffers with the whole of every table, continuously, so nothing else
+# stayed cached and almost every other read went to disk.
+#
+# 0075 and the rewrite in `rollup.py` fixed the per-run cost. This fixes the
+# other half, and it is the half that needed no cleverness at all: `daily_stats`
+# and `district_days` are read by two admin panels and by nothing else. Nobody
+# has ever needed yesterday's signup count to be two minutes fresh, and a daily
+# counter cannot change more than once a day in the days behind today anyway.
+#
+# Fifteen minutes is 30x fewer runs and costs the admin a figure that is at
+# worst a quarter of an hour behind on the current day only. The panels that
+# are genuinely live — the queue, the last runs, the hourly buckets — read the
+# source tables directly and are untouched by this; see the note at
+# apps/web/lib/admin-queries.ts:1485 on why they do not come from here.
+#
+# ── what the interval still has to be shorter than ──────────────────────
+#
+# `DAYS` in rollup.py is 3, so the window covers a two-day outage: a missed run
+# leaves no hole and the next one repairs it. That property is what makes any
+# interval here safe, and it is why this is a plain interval rather than an
+# OnCalendar — nothing about these numbers cares what time of day it is.
+
 [Unit]
-Description=Run rollup every two minutes
+Description=Recompute the daily counters every fifteen minutes
 
 [Timer]
 Unit=london-home-finder@rollup.service
 OnBootSec=2min
-OnUnitInactiveSec=2min
-AccuracySec=15s
+OnUnitInactiveSec=15min
+AccuracySec=1min
 Persistent=true
 
 [Install]
