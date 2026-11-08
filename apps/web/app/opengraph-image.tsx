@@ -52,8 +52,8 @@ import sample from "@/lib/sample-alert.json";
  *     the reason this route must stay prerendered.
  */
 export const alt =
-  "Beat the London Rental Race. Get Instant Alerts. — a new London listing " +
-  "arriving as a WhatsApp message";
+  "Find London rentals instantly via Telegram & WhatsApp — a new London " +
+  "listing arriving as a WhatsApp message";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
@@ -149,9 +149,9 @@ export default function OpengraphImage() {
               letterSpacing: "-0.04em",
             }}
           >
-            <div style={{ color: "#fafaf9" }}>Beat the London</div>
-            <div style={{ color: "#fafaf9" }}>Rental Race.</div>
-            <div style={{ color: MINT, marginTop: 6 }}>Get Instant Alerts.</div>
+            <div style={{ color: "#fafaf9" }}>Find London rentals</div>
+            <div style={{ color: "#fafaf9" }}>instantly via</div>
+            <div style={{ color: MINT, marginTop: 6 }}>Telegram &amp; WhatsApp.</div>
           </div>
 
           {/* The portals, said in words, with the hero's live dot. */}

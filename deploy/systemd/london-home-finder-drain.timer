@@ -5,11 +5,25 @@ Description=Run drain every minute
 Unit=london-home-finder@drain.service
 # Every minute, not every two: drain only sends what is already queued, so the
 # wait between a row landing in the queue and going out is pure latency with
-# nothing bought by it. A run with an empty queue costs one interpreter start
-# and one `claim_queued` that returns nothing, so firing often is cheap, and an
-# overlap is safe — `_run_one` holds the `job:drain:*` advisory lock, so a run
-# that starts while the previous one is still sending exits as `skipped_locked`
-# rather than sending anything twice.
+# nothing bought by it. An overlap is safe — `_run_one` holds the `job:drain:*`
+# advisory lock, so a run that starts while the previous one is still sending
+# exits as `skipped_locked` rather than sending anything twice.
+#
+# ── what an empty run actually costs ─────────────────────────────────────
+#
+# This said "one interpreter start and one `claim_queued` that returns
+# nothing", and it was wrong for as long as it stood. `run_job` also ran the
+# window check-in, the plan notices, the digest and the WhatsApp cost alert
+# before it ever looked at the queue, each beginning with its own question to
+# the database: eight queries a tick rather than one, 11,520 a day, to find
+# work that appears at most daily.
+#
+# Those four are `notices` now, on a five-minute timer of their own. What is
+# left on this tick is the queue — `claim_queued` and `queued_count` — plus
+# `seed_new_subscriptions`, which stayed on purpose because a subscription
+# without its starter batch belongs to somebody who signed up seconds ago and
+# is watching the chat. Three indexed questions, which is what this comment
+# always claimed and now describes.
 OnBootSec=1min
 OnUnitInactiveSec=1min
 AccuracySec=5s

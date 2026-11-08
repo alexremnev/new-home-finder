@@ -2561,13 +2561,19 @@ form p.error {
 .hero .panel .lede { color: var(--ink-soft); }
 .hero .panel .cta { margin-top: 1.5rem; }
 
-/* The filter on the left, the phone on the right. One column until there is
-   room for both — a 320px phone beside a form is a phone squeezing the form. */
+/* The headline and the filter on the left, the phone on the right. One column
+   until there is room for both — a 320px phone beside a form is a phone
+   squeezing the form.
+
+   The headline is a cell of this grid rather than a block above it, which is
+   the whole reason the phone can start level with its first line: the right
+   column spans both rows, so the top of the phone is the top of the heading
+   and not the top of the card. Stacked, the rows fall back into reading
+   order — heading, form — and the phone is not drawn at all. */
 .hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 3rem;
-  margin-top: 3.5rem;
+  gap: 2.25rem;
   align-items: start;
 }
 
@@ -2576,8 +2582,19 @@ form p.error {
   .hero-inner { padding: 0 2rem; }
   .hero-grid {
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-    gap: 3.5rem;
+    column-gap: 3.5rem;
+    row-gap: 2.5rem;
   }
+  /* Named explicitly, because auto-placement would put the phone in the second
+     column of the first row and leave the card with an empty one beside it. */
+  .hero-grid > .hero-say { grid-column: 1; grid-row: 1; }
+  .hero-grid > .filter-card { grid-column: 1; grid-row: 2; }
+  .hero-grid > .hero-aside { grid-column: 2; grid-row: 1 / span 2; }
+  /* Smaller than the full-width version, and scaling with a smaller share of
+     the viewport, because from here the headline has a seven-twelfths column
+     and not the whole band: at the size it is set below it wrapped onto four
+     lines beside the phone. */
+  .hero-say h1 { font-size: clamp(2.25rem, 3.6vw, 3.5rem); }
   .hero-say .lede { font-size: 1.125rem; }
 }
 
@@ -2587,7 +2604,7 @@ form p.error {
    the form the thing to do rather than one panel among several. */
 .site form,
 .filter-card {
-  padding: 1.5rem;
+  padding: 1.25rem;
   border: none;
   border-radius: var(--radius-lg);
   background: var(--paper);
@@ -2599,7 +2616,7 @@ form p.error {
 
 @media (min-width: 40rem) {
   .site form,
-  .filter-card { padding: 2.5rem; }
+  .filter-card { padding: 1.75rem 2rem; }
 }
 
 .filter-head {
@@ -2607,13 +2624,13 @@ form p.error {
   align-items: baseline;
   justify-content: space-between;
   gap: 1rem;
-  padding-bottom: 1.5rem;
+  padding-bottom: 0.9rem;
   border-bottom: 1px solid var(--line);
 }
 
 .filter-head h2 {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.25rem;
 }
 
 .filter-head span {
@@ -2625,12 +2642,27 @@ form p.error {
 }
 
 /* Each field is a row with a rule under it, which is what holds a form this
-   long together without a box around every question. */
+   long together without a box around every question. The rule is doing the
+   separating, so the padding only has to keep two rows from touching — ten
+   fields at the 1.75rem it used to be was three and a half rems of nothing
+   between every pair of questions, and most of the card's height. */
 .filter-card > div,
 .filter-card > label,
 .filter-card > fieldset {
-  padding: 1.75rem 0;
+  padding: 0.95rem 0;
 }
+
+/* The gap under a question's own label, tightened on this card only: the admin
+   and sign-in forms are short enough that theirs is not costing anything. The
+   second selector is the date row's two sub-labels, which are spans with no
+   class of their own. */
+.filter-card .field-label,
+.filter-card label > span:first-child { margin-bottom: 0.4rem; }
+
+/* Both of these reserve a line of space above a control that does not need it
+   once the row around it is this tight. */
+.filter-card .range2,
+.filter-card .date-row { margin-top: 0; }
 
 /* ── two fields to a row ─────────────────────────────────────────────────── */
 
@@ -2644,7 +2676,7 @@ form p.error {
 .site .pair {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1.75rem;
+  gap: 1.1rem;
 }
 
 @media (min-width: 34rem) {
@@ -2660,7 +2692,7 @@ form p.error {
 
 /* ── where the alerts are going ──────────────────────────────────────────── */
 
-.send-to { padding-top: 1.5rem; }
+.send-to { padding-top: 1.25rem; }
 
 /* The two messengers, as buttons rather than radios: pressing one also redraws
    the phone beside the card, so it shows what it buys as well as choosing it.
@@ -2669,7 +2701,7 @@ form p.error {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 0.6rem;
-  margin-bottom: 1.25rem;
+  margin-bottom: 0.9rem;
 }
 
 .pick {

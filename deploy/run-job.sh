@@ -36,7 +36,7 @@ if [ "$#" -eq 0 ]; then
   echo "Usage: bash deploy/run-job.sh <job> [flags]" >&2
   echo "Jobs: ingest, rightmove, zoopla, zoopla_london," >&2
   echo "      spareroom, openrent, portals," >&2
-  echo "      drain, rollup, scrape" >&2
+  echo "      drain, notices, rollup, scrape" >&2
   exit 2
 fi
 

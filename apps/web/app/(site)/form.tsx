@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type { Criteria } from "@/lib/criteria";
 import { matchAreas, neighbourhoodAreas, type Area } from "@/lib/neighbourhoods";
@@ -30,6 +30,14 @@ import { TelegramMark, Tick, WhatsAppMark } from "./logos";
 import { PhonePreview } from "./phone";
 
 type Props = {
+  /**
+   * The hero's headline and lede, drawn as the first cell of the grid this
+   * component lays out. It is passed in rather than written here because the
+   * words belong to the page — but the grid belongs to the form, and the phone
+   * can only be raised to the level of the first line of the heading if the
+   * heading is one of the grid's own children.
+   */
+  say?: ReactNode;
   districts: string[];
   maxDistricts: number;
   furnished: string[];
@@ -111,6 +119,7 @@ const percent = (value: number, min: number, max: number) =>
   ((value - min) / (max - min)) * 100;
 
 export function SubscribeForm({
+  say = null,
   districts, maxDistricts, furnished, types, whatsappReady, offers,
   returning = null, names = {},
 }: Props) {
@@ -414,6 +423,8 @@ export function SubscribeForm({
 
   return (
     <div className="hero-grid">
+      {say}
+
       <form onSubmit={submit} className="filter-card">
         <div className="filter-head">
           <h2>Your alert</h2>

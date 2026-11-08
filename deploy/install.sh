@@ -118,7 +118,7 @@ rm -f /etc/systemd/system/london-home-finder-browser.slice
 rm -rf "$DIR/.playwright"
 
 systemctl daemon-reload
-for job in ingest rightmove zoopla_london onthemarket spareroom drain rollup report purge; do
+for job in ingest rightmove zoopla_london onthemarket spareroom drain notices rollup report purge; do
   systemctl enable --now "london-home-finder-$job.timer"
 done
 

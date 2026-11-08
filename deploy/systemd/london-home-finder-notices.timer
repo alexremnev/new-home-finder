@@ -1,0 +1,45 @@
+# The half of `drain` that is not delivery, on a tick that suits it.
+#
+# ── what moved here and why ──────────────────────────────────────────────
+#
+# `drain` fires every minute, and until this file it also ran the check-in
+# before a WhatsApp window shuts, the plan notices, the daily digest and the
+# WhatsApp cost alert — each of which begins by asking the database whether it
+# has anything to do. Five questions a minute, 7,200 a day, to find work that
+# by its own nature appears at most once a day per subscriber.
+#
+# None of them needs a minute. The digest is daily and keyed on (user_id, day).
+# A plan notice is once per period. The check-in guards a window twenty-four
+# hours wide. The cost alert is monitoring, and its whole purpose is to stop
+# announcing the same crossing twelve times an hour. Five minutes costs them
+# four minutes of latency each and saves 5,760 queries a day.
+#
+# `seed_new_subscriptions` deliberately did NOT move: see `run_job`.
+#
+# ── five minutes, not fifteen ────────────────────────────────────────────
+#
+# `rollup` went to fifteen because nothing reads it but two admin panels. This
+# one sends messages to people, so the interval is the delay a subscriber can
+# feel, and four minutes is already the most that is worth paying for the
+# saving. The curve is steep at the start and flat after: one minute to five
+# removes 80% of the queries, five to fifteen removes another 13%.
+#
+# ── overlap, and why it is safe ──────────────────────────────────────────
+#
+# `_run_one` takes the `job:notices:*` advisory lock, so a run starting while
+# the previous one is still sending exits as `skipped_locked` rather than
+# sending anything twice. The lock key is built from the job name, so this came
+# for free with the name.
+
+[Unit]
+Description=Check-ins, plan notices, the digest and the cost alert, five-minutely
+
+[Timer]
+Unit=london-home-finder@notices.service
+OnBootSec=3min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -182,6 +182,46 @@ export default async function Page({
     ],
   };
 
+  // What the hero says, lifted out of the markup because two of the three
+  // branches below need it: the one that has a form to show hands it to the
+  // form, and the one that has no districts to offer draws it above the note
+  // saying so.
+  const say = (
+    <div className="hero-say">
+      {returning ? (
+        <>
+          <h1>Change what you are looking for</h1>
+          <p className="lede">
+            Your current filter is below. Saving replaces it — until you do, it
+            carries on exactly as it is.
+          </p>
+        </>
+      ) : (
+        <>
+          {/* The live dot and the list of portals, which is also the one place
+              the marquee's names are said in words rather than as decoration —
+              the strip itself is hidden from a screen reader. */}
+          <p className="hero-badge">
+            <span className="hero-pulse" aria-hidden="true" />
+            {/* The sentence is its own element rather than a bare text node: as
+                an anonymous flex item it wrapped as a block, which on a phone
+                put the dot on a line of its own above six portal names. */}
+            <span>Watching {portalSentence()}</span>
+          </p>
+          <h1>
+            Find London rentals instantly via{" "}
+            <span className="hero-grad">Telegram &amp; WhatsApp.</span>
+          </h1>
+          <p className="lede">
+            Never miss a listing on {portalSentence("or")}. Set your criteria
+            and receive instant notifications directly in your preferred
+            messenger.
+          </p>
+        </>
+      )}
+    </div>
+  );
+
   return (
     <>
       <script
@@ -226,62 +266,31 @@ export default async function Page({
                 </a>
               )}
             </div>
-          ) : (
+          ) : codes.length === 0 ? (
             <>
-              <div className="hero-say">
-                {returning ? (
-                  <>
-                    <h1>Change what you are looking for</h1>
-                    <p className="lede">
-                      Your current filter is below. Saving replaces it — until
-                      you do, it carries on exactly as it is.
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    {/* The live dot and the list of portals, which is also the
-                        one place the marquee's names are said in words rather
-                        than as decoration — the strip itself is hidden from a
-                        screen reader. */}
-                    <p className="hero-badge">
-                      <span className="hero-pulse" aria-hidden="true" />
-                      {/* The sentence is its own element rather than a bare
-                          text node: as an anonymous flex item it wrapped as a
-                          block, which on a phone put the dot on a line of its
-                          own above six portal names. */}
-                      <span>Watching {portalSentence()}</span>
-                    </p>
-                    <h1>
-                      Beat the London Rental Race.{" "}
-                      <span className="hero-grad">Get Instant Alerts.</span>
-                    </h1>
-                    <p className="lede">
-                      Never miss a listing on {portalSentence("or")}. Set your
-                      criteria and receive instant notifications directly in
-                      your preferred messenger.
-                    </p>
-                  </>
-                )}
-              </div>
-
-              {codes.length === 0 ? (
-                <p className="panel">
-                  No districts are being covered right now, so there is nothing
-                  to subscribe to yet.
-                </p>
-              ) : (
-                <SubscribeForm
-                  districts={codes}
-                  maxDistricts={plan?.max_districts ?? 1}
-                  furnished={[...FURNISHED]}
-                  types={[...PROPERTY_TYPES]}
-                  whatsappReady={whatsappReady}
-                  offers={offers}
-                  returning={returning}
-                  names={names}
-                />
-              )}
+              {say}
+              <p className="panel">
+                No districts are being covered right now, so there is nothing
+                to subscribe to yet.
+              </p>
             </>
+          ) : (
+            /* The headline is handed to the form rather than drawn above it:
+               the form owns the hero's grid, and only inside that grid can the
+               phone on the right start level with the first line of the
+               heading instead of level with the top of the card. On one column
+               it still renders first, which is the order it reads in. */
+            <SubscribeForm
+              say={say}
+              districts={codes}
+              maxDistricts={plan?.max_districts ?? 1}
+              furnished={[...FURNISHED]}
+              types={[...PROPERTY_TYPES]}
+              whatsappReady={whatsappReady}
+              offers={offers}
+              returning={returning}
+              names={names}
+            />
           )}
         </div>
       </section>

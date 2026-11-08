@@ -24,7 +24,12 @@ Row = dict[str, Any]
 JOBS = (
     "ingest", "portals",
     *PORTAL_JOBS,
-    "drain", "rollup", "purge",
+    # `notices` is the half of `drain` that is not delivery — the check-in
+    # before a WhatsApp window shuts, the plan notices, the daily digest and
+    # the cost alert. Its own job and its own timer because it wants a
+    # five-minute tick and the queue wants a one-minute one; see the note in
+    # `run_job`.
+    "drain", "notices", "rollup", "purge",
 )
 
 def main(argv: list[str] | None = None) -> int:

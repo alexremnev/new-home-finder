@@ -127,16 +127,46 @@ def run_job(
         run_purge(conn, run, dry_run=cfg.dry_run)
         return "ok"
 
-    if job == "drain":
-
-        seed_new_subscriptions(conn, run, dry_run=cfg.dry_run)
-        # Before the digest and before delivery: this is what reopens a shut
-        # WhatsApp window, and everything held back goes out once it is open.
+    if job == "notices":
+        # The three things `drain` used to do before it looked at the queue,
+        # and none of them is a listing alert: two tell a subscriber something
+        # and one tells us.
+        #
+        # They were split out because `drain` ticks every minute and none of
+        # these needs to. Between them they asked five questions of the
+        # database on every one of those ticks — 7,200 a day — to find work
+        # that, by their own nature, appears at most daily. The queue is the
+        # only thing on that path where a minute of latency is worth buying;
+        # see the note in the drain timer.
+        #
+        # The order within the job is the order it was in `drain`, and it is
+        # load-bearing in one place: `watch_whatsapp_cost` runs last so that
+        # today's count includes the digest `notify_plan_changes` may just have
+        # sent. The rest is sequencing for its own sake.
+        #
+        # What is NOT preserved is "before delivery", which `ask_before_the_
+        # window_shuts` used to be. It does not need to be. Asking does not
+        # itself reopen a WhatsApp window — the subscriber replying does, which
+        # arrives as an inbound webhook minutes or hours later — and a message
+        # held for 'window shut' is skipped rather than claimed, so it waits
+        # without spending an attempt. The cost of the split is therefore up to
+        # four extra minutes before we prompt somebody, against a window that
+        # is twenty-four hours wide.
         ask_before_the_window_shuts(conn, run, dry_run=cfg.dry_run)
         notify_plan_changes(conn, run, dry_run=cfg.dry_run)
-        # After the digest, so today's count includes it, and before nothing:
-        # the caps themselves are enforced when the queue is claimed.
         watch_whatsapp_cost(conn, run, dry_run=cfg.dry_run)
+        return "ok"
+
+    if job == "drain":
+
+        # Stays on the minute tick with the queue, and alone among the four it
+        # is not here for want of somewhere better. A subscription with no
+        # starter batch belongs to somebody who has just this moment finished
+        # signing up and is watching the chat for the first thing it ever
+        # sends. Five minutes of nothing is the worst possible first
+        # impression, and the question costs one indexed lookup —
+        # `subscriptions_unseeded` is partial on exactly this.
+        seed_new_subscriptions(conn, run, dry_run=cfg.dry_run)
         return drain(conn, run, suppress=suppress_delivery, dry_run=cfg.dry_run)
 
     if job == "ingest":

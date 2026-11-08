@@ -626,12 +626,26 @@ def costly_whatsapp(conn: Conn) -> list[Row]:
                 -- `ever` went with the lifetime alert 0057 removed. A single
                 -- aggregate over the whole table, computed every minute, for
                 -- a column nothing read.
+                -- Today as a half-open range, not as a cast. Same reason
+                -- as 0075: `(sent_at AT TIME ZONE ...)::date = ...` is a
+                -- function of the column, so `wa_messages_recent` could not
+                -- answer it and this was a full scan and group-by of the
+                -- whole ledger — every minute, because `drain` runs every
+                -- minute and calls `watch_whatsapp_cost` before it looks at
+                -- the queue. The comment above about an aggregate over the
+                -- whole table computed every minute described the column
+                -- 0057 removed; this was the other half of the same
+                -- sentence, and it stayed.
+                --
+                -- London midnight, both ends, which is what the cast meant.
                 SELECT w.user_id,
                        count(*) AS today
                   FROM wa_messages w
                  WHERE w.user_id IS NOT NULL
-                   AND (w.sent_at AT TIME ZONE 'Europe/London')::date
-                     = (now() AT TIME ZONE 'Europe/London')::date
+                   AND w.sent_at >= ((now() AT TIME ZONE 'Europe/London')::date
+                                     AT TIME ZONE 'Europe/London')
+                   AND w.sent_at <  (((now() AT TIME ZONE 'Europe/London')::date + 1)
+                                     AT TIME ZONE 'Europe/London')
                  GROUP BY w.user_id
             ),
             owed AS (

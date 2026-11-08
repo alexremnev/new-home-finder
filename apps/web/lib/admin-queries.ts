@@ -843,7 +843,24 @@ export const SCHEDULED_JOBS: {
 }[] = [
   { job: "ingest", everyMins: 2 },
   { job: "drain", everyMins: 1 },
-  { job: "rollup", everyMins: 2 },
+  // Fifteen, not two. It was two, and 0075 is why it is not: the job was
+  // recomputing three days of daily counters every two minutes against
+  // predicates no index could answer, which was most of the database's read
+  // traffic. Nothing reads `daily_stats` but two panels on this page, so the
+  // interval went to fifteen and the per-run cost fell by roughly a thousand
+  // times besides. Left at two, this list would have called the job silent on
+  // any window shorter than its real period.
+  { job: "rollup", everyMins: 15 },
+  // The half of `drain` that is not delivery: the check-in before a WhatsApp
+  // window shuts, the plan notices, the digest, the cost alert. Split off
+  // because `drain` ticks every minute and these four asked five questions of
+  // the database on every one of those ticks to find work that appears at most
+  // daily.
+  //
+  // A grace, because a missed fire here is not news on its own — a digest five
+  // minutes late is the same digest. Half an hour of nothing is a timer that
+  // has stopped, which is.
+  { job: "notices", everyMins: 5, silentAfterMins: 30 },
   // These four share one grid, offset by a quarter of its interval each, so one
   // period covers all of them: six minutes through the working day, twelve in
   // the evenings and at weekends, hourly overnight. Twelve is the looser of the
