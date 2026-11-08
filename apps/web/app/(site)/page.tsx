@@ -210,12 +210,14 @@ export default async function Page({
           </p>
           <h1>
             Find London rentals instantly via{" "}
-            <span className="hero-grad">Telegram &amp; WhatsApp.</span>
+            {/* Non-breaking spaces, so the two messengers wrap as one unit: on
+                a phone the line broke after "Telegram &", which read as a
+                sentence that had run out of room rather than as a headline. */}
+            <span className="hero-grad">Telegram&nbsp;&amp;&nbsp;WhatsApp.</span>
           </h1>
           <p className="lede">
             Never miss a listing on {portalSentence("or")}. Set your criteria
-            and receive instant notifications directly in your preferred
-            messenger.
+            and receive instant notifications.
           </p>
         </>
       )}

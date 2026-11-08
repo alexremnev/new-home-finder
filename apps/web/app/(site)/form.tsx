@@ -427,8 +427,7 @@ export function SubscribeForm({
 
       <form onSubmit={submit} className="filter-card">
         <div className="filter-head">
-          <h2>Your alert</h2>
-          <span>Criteria</span>
+          <h2>Set up your search criteria</h2>
         </div>
       <fieldset aria-labelledby="search-by-label">
         <span id="search-by-label" className="field-label">

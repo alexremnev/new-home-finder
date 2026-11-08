@@ -2524,6 +2524,24 @@ form p.error {
   overflow-wrap: break-word;
 }
 
+/* On a phone the size is the viewport's and not a floor of 2.25rem, and the
+   reason is the headline's last three words: "Telegram & WhatsApp." is set as
+   one unbreakable unit, so at a fixed 36px it was wider than a 360px screen
+   and broke inside "WhatsApp". Sized against the width it has to fit in, it
+   stays one line down to 320px — and at the 26rem breakpoint below it meets
+   the 2.25rem floor within a pixel, so there is no step at the join. */
+@media (max-width: 26rem) {
+  .hero-say h1 { font-size: 8.3vw; }
+}
+
+/* And the card's own heading, for the same reason: it is one sentence and it
+   reads as one line. This holds it to one down to 340px — narrower than that
+   the card has 240px inside it and the sentence cannot be a line at any size
+   worth setting it at. */
+@media (max-width: 22rem) {
+  .filter-head h2 { font-size: 1.0625rem; }
+}
+
 /* The second sentence of the headline, in the two accent colours. Clipped to
    the text, so it is the letters that carry the gradient and not a box behind
    them. */
@@ -2619,11 +2637,10 @@ form p.error {
   .filter-card { padding: 1.75rem 2rem; }
 }
 
+/* One line saying what the card is, over the rule the fields hang from. It
+   used to be a title and a spaced-out "CRITERIA" at the other end of the row,
+   which was two lines of chrome for one sentence of meaning. */
 .filter-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 1rem;
   padding-bottom: 0.9rem;
   border-bottom: 1px solid var(--line);
 }
@@ -2631,14 +2648,7 @@ form p.error {
 .filter-head h2 {
   margin: 0;
   font-size: 1.25rem;
-}
-
-.filter-head span {
-  color: var(--ink-faint);
-  font-size: 0.75rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
+  letter-spacing: -0.012em;
 }
 
 /* Each field is a row with a rule under it, which is what holds a form this
